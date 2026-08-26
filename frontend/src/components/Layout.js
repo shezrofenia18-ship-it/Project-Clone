@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { useOffline } from "@/context/OfflineContext";
 import api from "@/lib/api";
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Truck, Scissors, Factory,
   Users as UsersIcon, Building2, Wallet, Target, FileBarChart, ScrollText,
-  UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick,
+  UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick, RefreshCw,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -83,7 +84,7 @@ export default function Layout({ children }) {
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
-  const [online, setOnline] = useState(true);
+  const { online, syncing, pending } = useOffline();
 
   useEffect(() => { setOpen(false); }, [location.pathname]);
 
@@ -92,10 +93,8 @@ export default function Layout({ children }) {
     const tick = async () => {
       try {
         const r = await api.get("/notifications");
-        if (alive) { setNotifs(r.data); setOnline(true); }
-      } catch (e) {
-        if (alive && !e.response) setOnline(false);
-      }
+        if (alive) setNotifs(r.data);
+      } catch (e) { /* connection handled by OfflineContext */ }
     };
     tick();
     const id = setInterval(tick, 12000);
@@ -133,14 +132,18 @@ export default function Layout({ children }) {
               </SheetContent>
             </Sheet>
             <div className="flex items-center gap-2" data-testid="connection-status">
-              {online ? (
+              {syncing ? (
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-chart-4">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> SINKRONISASI{pending > 0 ? ` (${pending})` : ""}
+                </span>
+              ) : online ? (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-success">
                   <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60" /><span className="relative inline-flex rounded-full h-2 w-2 bg-success" /></span>
-                  <Wifi className="w-3.5 h-3.5" /> ONLINE
+                  <Wifi className="w-3.5 h-3.5" /> ONLINE{pending > 0 ? ` · ${pending} antre` : ""}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
-                  <WifiOff className="w-3.5 h-3.5" /> OFFLINE
+                  <WifiOff className="w-3.5 h-3.5" /> OFFLINE{pending > 0 ? ` · ${pending} antre` : ""}
                 </span>
               )}
             </div>

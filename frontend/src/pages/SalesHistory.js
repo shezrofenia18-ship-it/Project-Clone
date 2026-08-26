@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
-import { Ban, Receipt } from "lucide-react";
+import { printReceipt, waShareReceipt } from "@/lib/receipt";
+import { Ban, Receipt, Printer, Share2 } from "lucide-react";
 
 export default function SalesHistory() {
   const { user } = useAuth();
@@ -67,6 +68,10 @@ export default function SalesHistory() {
                 <div className="flex justify-between text-muted-foreground"><span>Bayar ({PAYMENT_LABELS[detail.payment_method]})</span><span className="tabular">{formatRupiah(detail.paid)}</span></div>
                 {detail.receivable > 0 && <div className="flex justify-between text-warning"><span>Piutang</span><span className="tabular">{formatRupiah(detail.receivable)}</span></div>}
                 {["owner", "admin"].includes(user.role) && <div className="flex justify-between text-success"><span>Laba Kotor (margin {detail.margin_pct}%)</span><span className="tabular">{formatRupiah(detail.gross_profit)}</span></div>}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button variant="outline" data-testid="hist-print" onClick={() => printReceipt(detail)}><Printer className="w-4 h-4 mr-1" /> Cetak Struk</Button>
+                <Button variant="outline" data-testid="hist-wa" onClick={() => waShareReceipt(detail, "Berkah Ayam Mili")} className="text-success border-success/40 hover:bg-success/10"><Share2 className="w-4 h-4 mr-1" /> WhatsApp</Button>
               </div>
               {canCancel && detail.status !== "batal" && (
                 <Button data-testid="cancel-sale" variant="destructive" className="w-full" onClick={() => cancel(detail.id)}>

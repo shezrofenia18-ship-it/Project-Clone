@@ -13,6 +13,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
+import { useOffline } from "@/context/OfflineContext";
+import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
 import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine } from "lucide-react";
 
@@ -29,6 +32,9 @@ export default function POS() {
   const [method, setMethod] = useState("cash");
   const [paid, setPaid] = useState("");
   const [busy, setBusy] = useState(false);
+  const [receipt, setReceipt] = useState(null);
+  const { user } = useAuth();
+  const { enqueue } = useOffline();
 
   useEffect(() => {
     const id = setInterval(reload, 15000);
@@ -49,26 +55,51 @@ export default function POS() {
   const removeItem = (key) => setCart((c) => c.filter((i) => i.key !== key));
 
   const submitSale = async () => {
+    if (method === "piutang" && customerId === "umum") return toast.error("Transaksi piutang harus memilih pelanggan");
     setBusy(true);
-    const paidNum = method === "piutang" ? Number(paid || 0) : (paid ? Number(paid) : total);
+    const paidNum = Math.round(method === "piutang" ? Number(paid || 0) : (paid ? Number(paid) : total));
+    const txnId = `pos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const cust = (customers || []).find((c) => c.id === customerId);
+    const body = {
+      txn_id: txnId,
+      customer_id: customerId === "umum" ? null : customerId,
+      items: cart.map((i) => ({ product_id: i.product_id, unit: i.unit, qty: i.qty, price: i.price })),
+      payment_method: method,
+      paid: paidNum,
+    };
+    const localSale = {
+      id: txnId, txn_id: txnId, created_at: new Date().toISOString(),
+      cashier_name: user.name, customer_name: cust ? cust.name : "Umum",
+      items: cart.map((i) => ({ name: i.name, unit: i.unit, qty: i.qty, price: i.price, subtotal: i.qty * i.price })),
+      total, paid: paidNum, change: paidNum > total ? paidNum - total : 0,
+      receivable: method === "piutang" ? Math.max(0, total - paidNum) : 0, payment_method: method,
+    };
+    const finish = (sale, offline) => {
+      setReceipt({ sale, phone: cust?.phone, offline });
+      setCart([]); setCheckout(false); setPaid(""); setMethod("cash"); setCustomerId("umum");
+      setBusy(false);
+    };
     try {
-      const body = {
-        txn_id: `pos-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        customer_id: customerId === "umum" ? null : customerId,
-        items: cart.map((i) => ({ product_id: i.product_id, unit: i.unit, qty: i.qty, price: i.price })),
-        payment_method: method,
-        paid: paidNum,
-      };
+      if (!navigator.onLine) {
+        enqueue(body);
+        toast.warning("Mode offline — transaksi masuk antrean & disinkron otomatis");
+        return finish(localSale, true);
+      }
       const { data } = await api.post("/sales", body);
       toast.success(`Transaksi selesai · ${formatRupiah(data.total)}`, {
         description: data.change > 0 ? `Kembalian ${formatRupiah(data.change)}` : undefined,
       });
-      setCart([]); setCheckout(false); setPaid(""); setMethod("cash"); setCustomerId("umum");
+      finish(data, false);
       reload();
     } catch (e) {
-      toast.error(apiError(e));
-    } finally {
-      setBusy(false);
+      if (!e.response) {
+        enqueue(body);
+        toast.warning("Koneksi terputus — transaksi masuk antrean offline");
+        finish(localSale, true);
+      } else {
+        toast.error(apiError(e));
+        setBusy(false);
+      }
     }
   };
 
@@ -203,6 +234,8 @@ export default function POS() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {receipt && <Receipt sale={receipt.sale} phone={receipt.phone} offline={receipt.offline} onClose={() => setReceipt(null)} />}
     </div>
   );
 }

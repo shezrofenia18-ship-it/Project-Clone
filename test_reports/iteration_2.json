@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend-only testing of two new features: (1) POS Cetak Struk receipt dialog with print/WhatsApp/done actions, and (2) Mode Offline queue with automatic sync + duplicate prevention. Also verified regression on normal online POS flow and owner /riwayat detail dialog receipt buttons. All 4 scenarios PASSED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OfflineContext syncQueue drops queued sales on any 4xx server response (e.g. validation error). This is intentional to avoid infinite loops but the user only sees a generic 'gagal disinkronkan' toast — consider surfacing per-item reason so the cashier can retry manually.",
+    "POS.submitSale computes paidNum via floating-point (0.15*price yields values like 32199.999999... visible in the offline queue payload). Recommend rounding to nearest rupiah before sending to /sales."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "Kasir: kasir@berkahayam.com / kasir123; Owner: shezrofenia18@gmail.com / berkahayam1 (both worked via quick-login buttons).",
+  "seed_data_creation": "Created 2 test sales (one online Rp 65.800 for Ati Ampela 2,35 kg, one offline-queued Rp 32.200 for Ati Ampela 1,15 kg) which were persisted; both visible in /riwayat with unique txn_ids.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Verified: pos-product -> entry-qty -> entry-add -> pos-checkout -> pos-confirm -> receipt-preview flow. Offline mode via page.context.set_offline(True) triggers navigator.onLine=false path in submitSale; receipt shows 'Tersimpan offline' note; connection-status shows 'OFFLINE · N antre'. Going online back triggers doSync (6s interval + 'online' event); queue clears within ~6s and toast '1 transaksi offline tersinkronisasi' appears. Duplicate prevention verified: after sync, /api/sales contained no duplicate txn_id. Owner /riwayat detail dialog shows hist-print, hist-wa, cancel-sale as expected. Kasir user-menu logout dropdown selector had timing issues in automation (test 3 first attempt) — using localStorage.clear + reload is a more reliable logout for tests.",
+  "test_results": {
+    "test_1_online_pos_receipt": "PASS - receipt-preview shows store name, items, TOTAL Rp 65.800, receipt-print/wa/done buttons visible; done clears cart",
+    "test_2_offline_queue_sync": "PASS - offline sale enqueued in bam_offline_queue, receipt shows 'Tersimpan offline', OFFLINE pill with '1 antre', queue cleared and ONLINE within 12s after set_offline(False)",
+    "test_3_owner_history_buttons": "PASS - hist-print, hist-wa, cancel-sale all visible in detail dialog for owner",
+    "test_4_no_duplicates": "PASS - all sales in /api/sales have unique txn_id (0 duplicates found across 3 test-created sales)"
+  }
+}
