@@ -1,0 +1,12 @@
+{
+  "short_name": "Berkah Ayam",
+  "name": "Berkah Ayam Mili - POS & Manajemen",
+  "icons": [
+    { "src": "favicon.ico", "sizes": "64x64 32x32 24x24 16x16", "type": "image/x-icon" }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#D9381E",
+  "background_color": "#FAF9F6"
+}

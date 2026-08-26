@@ -1,0 +1,72 @@
+{
+  "theme": "light",
+  "archetype": "Organic & Earthy",
+  "typography": {
+    "headings": "Outfit",
+    "body": "Manrope",
+    "notes": "Do not use Inter for headings. Use tracking-tight for large headings. Use Manrope for tabular data and weights for better numeric legibility. Ensure responsive fluid scales clamp up to text-5xl max."
+  },
+  "colors": {
+    "background": "#FAF9F6",
+    "surface": "#FFFFFF",
+    "primary": "#D9381E",
+    "secondary": "#E27D60",
+    "success": "#4A7C59",
+    "warning": "#F4A261",
+    "danger": "#DC2626",
+    "text_main": "#1F2937",
+    "text_muted": "#6B7280",
+    "border": "#E5E7EB"
+  },
+  "layouts": {
+    "pos_tablet": "Mobile-first, touch-friendly. 2-column or 3-column bento grid for products on the left (70%), fixed cart summary on the right (30%). Use large touch targets (min h-14) for weight/qty keypad. Focus on fast transaction flow.",
+    "owner_dashboard": "High-density Grid Mode B (grid-cols-4). Strict hierarchy, compact spacing (gap-4 or gap-6). Flat cards with 1px border. Charts for HPP, Sales, and Yield (Rendemen). Provide real-time feed visualization.",
+    "laptop_admin": "Dense data tables, comprehensive forms for Stock and Slaughter (Pemotongan), wide layout for complex filtering and report exports.",
+    "navigation": "Sticky header with backdrop-blur-xl and bg-white/70 or solid background. HIDE desktop links on hamburger menu is FORBIDDEN. Visible links required."
+  },
+  "components_and_styling": {
+    "cards": "Flat background, 1px subtle border (border-border), no shadow by default. Hover adds slight lift (-translate-y-1) and shadow-lg.",
+    "buttons": "Pill-shaped or rounded-lg with clear hover states (darker hue + text-white). Touch targets on POS must be oversized.",
+    "forms": "Use Shadcn components. No native inputs. For weights, ensure a custom keypad or large numeric input is available on the POS.",
+    "dropdowns": "MUST have solid backgrounds. DO NOT use transparent backgrounds anywhere.",
+    "badges": "Use colored status badges (Success, Warning, Danger) for real-time stock/activity feed to allow quick visual scanning."
+  },
+  "general_ui_ux_guidelines": [
+    "Every interaction needs micro-animations (hover states, transitions). Never use 'transition: all', specify properties.",
+    "All interactive and key informational elements MUST include a data-testid attribute in kebab-case, role-based.",
+    "Format currency as 'Rp 35.000' and weight as '3,25 kg' exactly using custom formatters.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Provide clear feedback via Sonner toasts for all transactions and stock warnings.",
+    "Do not use centered alignment for main app container. Always align left for inputs, dense text, and tabular data."
+  ],
+  "image_urls": {
+    "ayam_broiler": {
+      "url": "https://images.unsplash.com/photo-1587593810167-a84920ea0781?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzV8MHwxfHNlYXJjaHwxfHxyYXclMjB3aG9sZSUyMGNoaWNrZW58ZW58MHx8fHwxNzg3NzUyMTQwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Raw whole chicken for Ayam Broiler product card"
+    },
+    "ayam_kampung": {
+      "url": "https://images.unsplash.com/photo-1672787153720-e85fe802fd9f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzV8MHwxfHNlYXJjaHwyfHxyYXclMjB3aG9sZSUyMGNoaWNrZW58ZW58MHx8fHwxNzg3NzUyMTQwfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Raw whole chicken with herbs for Ayam Kampung/Pejantan product card"
+    },
+    "ayam_fillet": {
+      "url": "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwxfHxyYXclMjBjaGlja2VuJTIwYnJlYXN0JTIwZmlsbGV0fGVufDB8fHx8MTc4Nzc1MjE0MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Chicken breast fillet product card"
+    },
+    "by_products": {
+      "url": "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwzfHxyYXclMjBjaGlja2VuJTIwZHJ1bXN0aWNrcyUyMHdpbmdzfGVufDB8fHx8MTc4Nzc1MjE0MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Drumsticks/wings for by-products (ceker, ati ampela, sayap)"
+    },
+    "dashboard_header": {
+      "url": "https://images.pexels.com/photos/35023463/pexels-photo-35023463.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Modern vibrant butcher shop for dashboard hero/banner"
+    }
+  },
+  "instructions_to_main_agent": {
+    "tech_stack": "React.js (use .js files ONLY, DO NOT use .tsx), Tailwind CSS, Shadcn UI primitives, Recharts for Owner Dashboards, Sonner for Toasts.",
+    "styling": "Use Generous Spacing for POS. Use Tight Spacing (gap-4/6) for Admin/Owner Dashboard. Implement the specific color variables in tailwind config.",
+    "logic": "Mock the POS and Dashboard views with a simple navigation/toggle mechanism to switch between 'Kasir POS', 'Owner Phone Dashboard', and 'Laptop Admin'. Implement rendemen calculation logic mockup (Live Weight vs Carcass Weight).",
+    "formatting": "Create utils/format.js with formatRupiah and formatWeight functions specifically for IDR and Indonesian locales (using comma for decimal, e.g., '3,25 kg').",
+    "testing": "Ensure EVERY button, input, and key div has a data-testid attribute.",
+    "icons": "Use lucide-react (default) or install @phosphor-icons/react for premium duotone icons in the POS grid."
+  }
+}

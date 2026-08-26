@@ -1,0 +1,83 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+    margin: 0;
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, .font-head {
+    font-family: 'Outfit', sans-serif;
+}
+
+.tabular {
+    font-variant-numeric: tabular-nums;
+}
+
+@layer base {
+    :root {
+        --background: 45 33% 97%;
+        --foreground: 215 28% 17%;
+        --card: 0 0% 100%;
+        --card-foreground: 215 28% 17%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 215 28% 17%;
+        --primary: 9 79% 48%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 16 68% 63%;
+        --secondary-foreground: 0 0% 100%;
+        --muted: 45 20% 94%;
+        --muted-foreground: 215 14% 45%;
+        --accent: 45 20% 92%;
+        --accent-foreground: 215 28% 17%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 0 0% 100%;
+        --success: 137 25% 39%;
+        --warning: 27 87% 67%;
+        --border: 220 13% 88%;
+        --input: 220 13% 88%;
+        --ring: 9 79% 48%;
+        --chart-1: 9 79% 48%;
+        --chart-2: 137 25% 39%;
+        --chart-3: 27 87% 60%;
+        --chart-4: 197 37% 40%;
+        --chart-5: 280 45% 55%;
+        --radius: 0.75rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* subtle grain / depth */
+.bam-hero {
+    background:
+        linear-gradient(180deg, rgba(217,56,30,0.92), rgba(180,40,20,0.96));
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+@keyframes bam-fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.bam-fade { animation: bam-fade-in 0.4s ease-out both; }
+
+.bam-card {
+    @apply bg-card border border-border rounded-xl transition-transform transition-shadow duration-200;
+}
+.bam-card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px -12px rgba(0,0,0,0.18);
+}

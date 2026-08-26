@@ -1,0 +1,8 @@
+.App {
+    min-height: 100vh;
+}
+
+@media print {
+    aside, header { display: none !important; }
+    main { padding: 0 !important; }
+}
