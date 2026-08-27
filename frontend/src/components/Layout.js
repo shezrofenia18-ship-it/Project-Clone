@@ -94,7 +94,10 @@ export default function Layout({ children }) {
       try {
         const r = await api.get("/notifications");
         if (alive) setNotifs(r.data);
-      } catch (e) { /* connection handled by OfflineContext */ }
+      } catch (e) {
+        if (e.response) console.error("Gagal memuat notifikasi:", e);
+        /* network errors are reflected by OfflineContext status */
+      }
     };
     tick();
     const id = setInterval(tick, 12000);

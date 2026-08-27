@@ -1,4 +1,5 @@
 import { formatRupiah, formatWeight, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
+import { toast } from "sonner";
 
 const STORE = "Berkah Ayam Mili";
 
@@ -74,11 +75,15 @@ export function printReceipt(sale, store = STORE) {
     ${sale.receivable > 0 ? `<div class="rw"><span>Piutang</span><span>${formatRupiah(sale.receivable)}</span></div>` : ""}
     <div class="hr"></div>
     <div class="c"><small>Terima kasih atas kunjungan Anda</small></div>
+    <script>window.onload=function(){window.focus();window.print();};<\/script>
   </body></html>`;
-  const w = window.open("", "_blank", "width=340,height=640");
-  if (!w) return;
-  w.document.write(html);
-  w.document.close();
-  w.focus();
-  setTimeout(() => { w.print(); }, 350);
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, "_blank", "width=340,height=640");
+  if (!w) {
+    URL.revokeObjectURL(url);
+    toast.error("Popup diblokir — izinkan popup untuk mencetak struk");
+    return;
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }

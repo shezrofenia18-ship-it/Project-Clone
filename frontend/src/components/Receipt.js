@@ -30,7 +30,7 @@ export default function Receipt({ sale, phone, offline, onClose }) {
           <div className="flex justify-between"><span>Pembeli</span><span>{sale.customer_name}</span></div>
           <div className="border-t border-dashed my-2" />
           {sale.items.map((it, i) => (
-            <div key={i} className="mb-1.5">
+            <div key={`${it.name}-${i}`} className="mb-1.5">
               <p>{it.name}</p>
               <div className="flex justify-between text-muted-foreground">
                 <span>{it.unit === "kg" ? formatWeight(it.qty, 3) : `${it.qty} ekor`} x {formatRupiah(it.price)}</span>

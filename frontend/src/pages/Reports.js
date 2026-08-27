@@ -68,7 +68,7 @@ export default function Reports() {
                   <ResponsiveContainer width="100%" height={240}>
                     <PieChart>
                       <Pie data={pl.expenses_by_category} dataKey="amount" nameKey="category" cx="50%" cy="50%" outerRadius={90}>
-                        {pl.expenses_by_category.map((_, i) => <Cell key={i} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
+                        {pl.expenses_by_category.map((entry, i) => <Cell key={entry.category} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
                       </Pie>
                       <Tooltip formatter={(v) => formatRupiah(v)} /><Legend />
                     </PieChart>

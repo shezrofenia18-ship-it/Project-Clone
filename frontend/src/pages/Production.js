@@ -34,7 +34,7 @@ export default function Production() {
               <div className="text-right"><p className="text-xs text-muted-foreground">Total Biaya</p><p className="font-bold tabular">{formatRupiah(p.total_cost)}</p></div>
             </div>
             <div className="flex flex-wrap gap-2 mt-3">
-              {p.outputs.map((o, i) => <span key={i} className="text-xs px-2.5 py-1 rounded-full bg-accent tabular">{o.name}: {formatWeight(o.weight)}</span>)}
+              {p.outputs.map((o, i) => <span key={`${o.product_id}-${i}`} className="text-xs px-2.5 py-1 rounded-full bg-accent tabular">{o.name}: {formatWeight(o.weight)}</span>)}
               <span className="text-xs px-2.5 py-1 rounded-full bg-warning/20 text-warning tabular">Susut: {formatWeight(p.susut_weight)}</span>
             </div>
           </Card>

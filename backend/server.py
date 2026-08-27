@@ -852,8 +852,8 @@ async def report_sales(start: Optional[str] = None, end: Optional[str] = None,
     for s in sales:
         by_method[s["payment_method"]] = by_method.get(s["payment_method"], 0) + s["total"]
         by_cashier[s["cashier_name"]] = by_cashier.get(s["cashier_name"], 0) + s["total"]
-    return {"sales": [clean(s) for s in sales[:500]], "count": len(sales),
-            "total": round(sum(s["total"] for s in sales), 2),
+    return {"sales": [clean(x) for x in sales[:500]], "count": len(sales),
+            "total": round(sum(x["total"] for x in sales), 2),
             "by_method": [{"method": k, "total": round(v, 2)} for k, v in by_method.items()],
             "by_cashier": [{"cashier": k, "total": round(v, 2)} for k, v in by_cashier.items()]}
 

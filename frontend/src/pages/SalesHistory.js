@@ -57,7 +57,7 @@ export default function SalesHistory() {
               <div className="text-xs text-muted-foreground">{formatDate(detail.date)} {formatTime(detail.created_at)} · {detail.cashier_name} · {detail.customer_name}</div>
               <div className="space-y-1.5">
                 {detail.items.map((it, i) => (
-                  <div key={i} className="flex justify-between text-sm">
+                  <div key={`${it.product_id || it.name}-${i}`} className="flex justify-between text-sm">
                     <span>{it.name} <span className="text-muted-foreground">({it.unit === "kg" ? formatWeight(it.qty, 3) : `${it.qty} ekor`} × {formatRupiah(it.price)})</span></span>
                     <span className="tabular font-medium">{formatRupiah(it.subtotal)}</span>
                   </div>

@@ -9,7 +9,7 @@ export function useFetch(path, deps = []) {
       const r = await api.get(path);
       setData(r.data);
     } catch (e) {
-      // handled globally
+      console.error(`useFetch(${path}) gagal:`, e);
     } finally {
       setLoading(false);
     }

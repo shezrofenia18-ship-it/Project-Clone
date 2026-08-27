@@ -119,7 +119,7 @@ export default function OwnerDashboard() {
               <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(v) => `${v / 1000000}jt`} />
               <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))" }} />
               <Bar dataKey="penjualan" name="Penjualan" radius={[6, 6, 0, 0]}>
-                {d.products_perf.map((_, i) => <Cell key={i} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
+                {d.products_perf.map((p, i) => <Cell key={p.category} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
