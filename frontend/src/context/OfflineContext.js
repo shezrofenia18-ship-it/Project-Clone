@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
+import { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import api from "@/lib/api";
 import { getQueue, enqueueSale, syncQueue } from "@/lib/offline";
 import { toast } from "sonner";
@@ -48,8 +48,13 @@ export function OfflineProvider({ children }) {
     return () => clearInterval(id);
   }, [doSync]);
 
+  const value = useMemo(
+    () => ({ online, syncing, pending, enqueue, syncNow: doSync, refresh }),
+    [online, syncing, pending, enqueue, doSync, refresh]
+  );
+
   return (
-    <Ctx.Provider value={{ online, syncing, pending, enqueue, syncNow: doSync, refresh }}>
+    <Ctx.Provider value={value}>
       {children}
     </Ctx.Provider>
   );

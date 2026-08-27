@@ -51,7 +51,7 @@ export default function Purchases() {
 
 function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
   const [supplier, setSupplier] = useState("");
-  const [items, setItems] = useState([{ product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }]);
+  const [items, setItems] = useState([{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }]);
   const [transport, setTransport] = useState(0);
   const [other, setOther] = useState(0);
   const [paid, setPaid] = useState(0);
@@ -91,7 +91,7 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
           <div className="space-y-2">
             <Label className="text-xs">Item Ayam</Label>
             {items.map((it, i) => (
-              <div key={i} className="grid grid-cols-12 gap-2 items-end">
+              <div key={it._k} className="grid grid-cols-12 gap-2 items-end">
                 <div className="col-span-4"><Select value={it.product_id} onValueChange={(v) => setItem(i, "product_id", v)}>
                   <SelectTrigger data-testid={`pur-item-${i}`}><SelectValue placeholder="Produk" /></SelectTrigger>
                   <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
@@ -102,7 +102,7 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
                 <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
+            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><Label className="text-xs">Transport</Label><Input type="number" value={transport} onChange={(e) => setTransport(e.target.value)} className="mt-1 tabular" /></div>

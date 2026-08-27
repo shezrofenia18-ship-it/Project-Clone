@@ -9,7 +9,7 @@ export function useFetch(path, deps = []) {
       const r = await api.get(path);
       setData(r.data);
     } catch (e) {
-      console.error(`useFetch(${path}) gagal:`, e);
+      if (process.env.NODE_ENV !== "production") console.error(`useFetch(${path}) gagal:`, e);
     } finally {
       setLoading(false);
     }

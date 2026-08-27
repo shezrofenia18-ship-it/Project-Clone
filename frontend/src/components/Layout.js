@@ -95,7 +95,7 @@ export default function Layout({ children }) {
         const r = await api.get("/notifications");
         if (alive) setNotifs(r.data);
       } catch (e) {
-        if (e.response) console.error("Gagal memuat notifikasi:", e);
+        if (e.response && process.env.NODE_ENV !== "production") console.error("Gagal memuat notifikasi:", e);
         /* network errors are reflected by OfflineContext status */
       }
     };

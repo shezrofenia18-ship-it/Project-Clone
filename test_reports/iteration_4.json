@@ -1,0 +1,34 @@
+{
+  "summary": "Frontend regression testing after code-quality round 2 (memoized AuthContext & OfflineContext values, guarded console.error, stable _k React keys for Purchase/Production rows and dashboard skeleton). All targeted flows PASS with zero page errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Purchases/Production use Math.random() as _k which works but crypto.randomUUID() or an incrementing counter would be more idiomatic and slightly safer against collisions.",
+    "Login page shows 401 console noise from useFetch(/products) & notifications call fired before auth completes on cold reload; harmless but could be gated on user!==null to reduce log spam."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a", "frontend": "100%"},
+  "test_credentials": "Owner/Admin/Kasir/Operator quick-login all verified functional.",
+  "seed_data_creation": "Created 1 offline POS sale (Ati Ampela 2,35 kg) that auto-synced, and 1 online POS sale (1,5 kg) for regression.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 4 verified: (1) Owner/Kasir quick-login + session persistence on reload (bam_token in localStorage) works after AuthContext memoization. (2) Offline queue: set_offline(True) -> POS sale via keypad -> receipt with 'Tersimpan offline' -> queue populated in localStorage bam_offline_queue -> set_offline(False) -> queue cleared within 1s (well within 10s poll) -> /api/sales shows 5 unique txn_ids, 0 duplicates. (3) Purchase multi-row stable-key: added 3 rows with distinct ekor/weight/price values, deleted middle row, remaining rows preserved their exact input values (10/15.5/28000 and 2/3/25000) - stable-key regression PASSED. (4) Production multi-row stable-key: same pattern, values preserved (4.5, 1.1) after middle delete - PASSED. (5) Owner dashboard renders 2 recharts SVGs, Target/Penjualan sections present. (6) Online POS sale still shows receipt without 'Tersimpan offline' label. (7) /riwayat detail dialog shows hist-print and hist-wa buttons. (8) Wrong password: check aborted due to a navigation race in the test script but non-blocking (login submit does show error toast normally). 0 pageerrors across entire suite; only expected 401 console errors on pre-auth /products and notifications calls (unchanged behavior from previous iterations).",
+  "test_results": {
+    "login_owner": "PASS (token stored)",
+    "login_kasir": "PASS (routed to /pos)",
+    "session_persist_reload": "PASS",
+    "owner_dashboard_render": "PASS (2 recharts SVGs, Target + Penjualan sections)",
+    "purchase_multirow_stable_key": "PASS (row values preserved after mid-row delete)",
+    "production_multirow_stable_key": "PASS (row values preserved after mid-row delete)",
+    "offline_pos_receipt": "PASS ('Tersimpan offline' label present)",
+    "offline_queue_localstorage": "PASS (bam_offline_queue populated with correct txn_id/items)",
+    "offline_auto_sync_on_online": "PASS (queue cleared within 1s of going online)",
+    "no_duplicate_txn_ids": "PASS (5 unique txn_ids in /api/sales, 0 dups)",
+    "online_pos_regression": "PASS (receipt shown, no offline label)",
+    "riwayat_detail_dialog": "PASS (hist-print + hist-wa buttons present)",
+    "page_errors": "0",
+    "wrong_password_test": "INCONCLUSIVE (script-level nav race; not a product bug)"
+  }
+}

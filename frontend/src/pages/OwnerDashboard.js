@@ -42,7 +42,7 @@ export default function OwnerDashboard() {
   if (!d) {
     return (
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-28 rounded-xl bg-muted animate-pulse" />)}
+        {Array.from({ length: 8 }).map((_, i) => <div key={`skel-${i}`} className="h-28 rounded-xl bg-muted animate-pulse" />)}
       </div>
     );
   }

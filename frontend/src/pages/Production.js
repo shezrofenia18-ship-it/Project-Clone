@@ -48,7 +48,7 @@ export default function Production() {
 
 function ProductionDialog({ source, outs, onClose, onSaved }) {
   const [f, setF] = useState({ source_product_id: "", input_weight: 0, labor_cost: 0, packaging_cost: 0, other_cost: 0, operator: "" });
-  const [outputs, setOutputs] = useState([{ product_id: "", weight: 0 }]);
+  const [outputs, setOutputs] = useState([{ _k: Math.random(), product_id: "", weight: 0 }]);
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setOut = (i, k, v) => setOutputs((a) => a.map((o, idx) => idx === i ? { ...o, [k]: v } : o));
@@ -87,7 +87,7 @@ function ProductionDialog({ source, outs, onClose, onSaved }) {
           <div className="space-y-2">
             <Label className="text-xs">Output</Label>
             {outputs.map((o, i) => (
-              <div key={i} className="grid grid-cols-12 gap-2 items-center">
+              <div key={o._k} className="grid grid-cols-12 gap-2 items-center">
                 <div className="col-span-7"><Select value={o.product_id} onValueChange={(v) => setOut(i, "product_id", v)}>
                   <SelectTrigger data-testid={`prod-out-${i}`}><SelectValue placeholder="Produk hasil" /></SelectTrigger>
                   <SelectContent className="bg-popover">{outs.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
@@ -96,7 +96,7 @@ function ProductionDialog({ source, outs, onClose, onSaved }) {
                 <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setOutputs((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setOutputs((a) => [...a, { product_id: "", weight: 0 }])}><Plus className="w-4 h-4 mr-1" /> Output</Button>
+            <Button variant="outline" size="sm" onClick={() => setOutputs((a) => [...a, { _k: Math.random(), product_id: "", weight: 0 }])}><Plus className="w-4 h-4 mr-1" /> Output</Button>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><Label className="text-xs">Tenaga Kerja</Label><Input type="number" value={f.labor_cost} onChange={(e) => set("labor_cost", e.target.value)} className="mt-1 tabular" /></div>
