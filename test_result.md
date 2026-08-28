@@ -101,3 +101,17 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "Hubungkan ke repository GitHub saya (Project1), cek commit terakhir, install dependencies, dan jalankan app di live preview Emergent."
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Sesi restore/run environment (bukan perubahan fitur).
+      - /app sudah terhubung ke origin https://github.com/shezrofenia18-ship-it/Project1.git, branch main.
+      - HEAD == origin/main == b46fb3d ("Auto-generated changes"). Tidak ada kode yang perlu di-pull; workspace sudah versi terbaru (9 commit, terakhir mencakup pembelian by total nominal, jual per pcs/kg, produk Paha Ayam, rename "Produksi Potong", fix cancel_sale stok pcs).
+      - Dependencies: pip install -r backend/requirements.txt (OK), yarn install frontend (OK).
+      - Services: mongodb RUNNING, backend RUNNING (0.0.0.0:8001, "Berkah Ayam Mili API started"), frontend RUNNING (webpack compiled successfully).
+      - Smoke test live preview: login owner (shezrofenia18@gmail.com) sukses -> /dashboard render penuh dengan data nyata (Omzet Rp 3.743.030, 14 transaksi, 65,51 kg, margin 19,06%, grafik 7 hari, performa produk, aktivitas). Tidak ada error.
+      - /app/memory/test_credentials.md dibuat ulang (sebelumnya tidak ada) berisi semua akun seed.
+      - Tidak ada testing agent yang dipanggil karena tidak ada perubahan kode fungsional.
