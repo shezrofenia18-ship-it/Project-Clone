@@ -17,13 +17,13 @@ import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet } from "lucide-react";
 
 const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "sampingan"];
 
 export default function POS() {
-  const { data: products, reload } = useFetch("/products");
-  const { data: customers } = useFetch("/customers");
+  const { data: products, reload } = useFetch("/products", [], "products");
+  const { data: customers } = useFetch("/customers", [], "customers");
   const [cat, setCat] = useState("all");
   const [cart, setCart] = useState([]);
   const [customerId, setCustomerId] = useState("umum");
@@ -33,6 +33,7 @@ export default function POS() {
   const [paid, setPaid] = useState("");
   const [busy, setBusy] = useState(false);
   const [receipt, setReceipt] = useState(null);
+  const [debtOpen, setDebtOpen] = useState(false);
   const { user } = useAuth();
   const { enqueue } = useOffline();
 
@@ -159,7 +160,7 @@ export default function POS() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold truncate">{i.name}</p>
                 <p className="text-xs text-muted-foreground tabular">
-                  {i.unit === "kg" ? formatWeight(i.qty, 3) : `${i.qty} ekor`} × {formatRupiah(i.price)}
+                  {i.unit === "kg" ? formatWeight(i.qty, 3) : i.unit === "pcs" ? `${i.qty} pcs` : `${i.qty} ekor`} × {formatRupiah(i.price)}
                 </p>
               </div>
               <p className="text-sm font-bold tabular">{formatRupiah(i.qty * i.price)}</p>
@@ -187,6 +188,10 @@ export default function POS() {
           <Button data-testid="pos-checkout" disabled={cart.length === 0} onClick={() => { setPaid(""); setCheckout(true); }}
             className="w-full h-12 rounded-lg font-bold text-base">
             Bayar
+          </Button>
+          <Button variant="outline" data-testid="pos-pay-debt" onClick={() => setDebtOpen(true)}
+            className="w-full h-10 rounded-lg font-semibold">
+            <Wallet className="w-4 h-4 mr-1.5" /> Bayar Piutang Pelanggan
           </Button>
         </div>
       </div>
@@ -236,7 +241,55 @@ export default function POS() {
       </Dialog>
 
       {receipt && <Receipt sale={receipt.sale} phone={receipt.phone} offline={receipt.offline} onClose={() => setReceipt(null)} />}
+      {debtOpen && <ReceivableDialog onClose={() => setDebtOpen(false)} />}
     </div>
+  );
+}
+
+function ReceivableDialog({ onClose }) {
+  const { data, reload } = useFetch("/receivables");
+  const outstanding = (data || []).filter((r) => r.status !== "lunas" && r.remaining > 0);
+  const [pay, setPay] = useState(null);
+  const [amt, setAmt] = useState("");
+  const submit = async () => {
+    if (!Number(amt)) return toast.error("Masukkan nominal pembayaran");
+    try {
+      await api.post(`/receivables/${pay.id}/pay`, { amount: Number(amt) });
+      toast.success("Pembayaran piutang tercatat");
+      setPay(null); setAmt(""); reload();
+    } catch (e) { toast.error(apiError(e)); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-popover max-w-md max-h-[85vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Bayar Piutang Pelanggan</DialogTitle>
+          <DialogDescription>Pilih pelanggan yang melunasi piutangnya.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2" data-testid="debt-list">
+          {outstanding.length === 0 && <p className="text-sm text-muted-foreground py-6 text-center">Tidak ada piutang berjalan.</p>}
+          {outstanding.map((r) => (
+            <div key={r.id} data-testid={`debt-${r.id}`} className="flex items-center gap-2 p-3 rounded-lg bg-accent/60">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold truncate">{r.customer_name}</p>
+                <p className="text-xs text-warning tabular">Sisa {formatRupiah(r.remaining)}</p>
+              </div>
+              <Button size="sm" data-testid={`debt-pay-${r.id}`} onClick={() => { setPay(r); setAmt(String(r.remaining)); }}>Bayar</Button>
+            </div>
+          ))}
+        </div>
+        {pay && (
+          <div className="border-t border-border pt-3 mt-1 space-y-2">
+            <Label className="text-xs">Nominal untuk {pay.customer_name} (sisa {formatRupiah(pay.remaining)})</Label>
+            <Input data-testid="debt-amount" type="number" value={amt} onChange={(e) => setAmt(e.target.value)} className="tabular" />
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" size="sm" onClick={() => setPay(null)}>Batal</Button>
+              <Button size="sm" data-testid="debt-confirm" onClick={submit}>Simpan Pembayaran</Button>
+            </div>
+          </div>
+        )}
+        <DialogFooter><Button variant="outline" onClick={onClose}>Tutup</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -297,6 +350,16 @@ function EntryDialog({ product, onClose, onAdd }) {
                 className="mt-1.5 h-12 text-lg tabular text-center" />
             </div>
           </div>
+
+          {(() => {
+            const modal = unit === "ekor" ? product.hpp_ekor : unit === "pcs" ? product.hpp_pcs : product.hpp_kg;
+            return modal > 0 ? (
+              <p data-testid="entry-modal" className="text-xs text-muted-foreground -mt-1">
+                Modal efektif/{unit}: <span className="font-semibold tabular">{formatRupiah(modal)}</span>
+                {Number(price) > 0 && <span className="text-success"> · Laba/{unit} {formatRupiah(Number(price) - modal)}</span>}
+              </p>
+            ) : null;
+          })()}
 
           {isWeight ? (
             <div className="grid grid-cols-4 gap-1.5">

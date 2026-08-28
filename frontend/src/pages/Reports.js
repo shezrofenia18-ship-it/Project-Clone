@@ -15,10 +15,20 @@ function todayISO() { return new Date().toISOString().slice(0, 10); }
 function daysAgoISO(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
 
 function csvExport(filename, rows) {
-  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
+  const sep = ";";
+  const csv = rows
+    .map((r) => r.map((c) => {
+      if (typeof c === "number") return String(c);
+      const s = String(c ?? "");
+      return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(sep))
+    .join("\r\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 export default function Reports() {
@@ -83,7 +93,7 @@ export default function Reports() {
           {sales && (
             <>
               <div className="flex justify-end mb-3">
-                <Button variant="outline" size="sm" data-testid="export-sales" onClick={() => csvExport("penjualan.csv", [["Tanggal", "Kasir", "Pelanggan", "Metode", "Total"], ...sales.sales.map((s) => [s.date, s.cashier_name, s.customer_name, s.payment_method, s.total])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
+                <Button variant="outline" size="sm" data-testid="export-sales" onClick={() => csvExport(`penjualan_${start}_${end}.csv`, [["Tanggal", "Kasir", "Pelanggan", "Metode", "Jumlah Item", "Total (Rp)", "HPP (Rp)", "Laba (Rp)"], ...sales.sales.map((s) => [formatDate(s.date), s.cashier_name, s.customer_name, PAYMENT_LABELS[s.payment_method] || s.payment_method, (s.items || []).length, Math.round(s.total), Math.round(s.total_hpp || 0), Math.round((s.total || 0) - (s.total_hpp || 0))])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
               </div>
               <div className="grid sm:grid-cols-3 gap-4 mb-4">
                 <Card className="p-4"><p className="text-xs text-muted-foreground">Total Transaksi</p><p className="font-head font-extrabold text-2xl">{sales.count}</p></Card>
@@ -104,7 +114,11 @@ export default function Reports() {
 
         <TabsContent value="stock">
           {stock && (
-            <Card className="overflow-x-auto">
+            <>
+              <div className="flex justify-end mb-3">
+                <Button variant="outline" size="sm" data-testid="export-stock" onClick={() => csvExport("nilai_stok.csv", [["Produk", "Kategori", "Ekor", "Kg", "HPP/kg (Rp)", "Nilai Stok (Rp)"], ...stock.items.map((s) => [s.name, s.category, s.stock_ekor, s.stock_kg, Math.round(s.hpp_kg || 0), Math.round(s.value || 0)])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
+              </div>
+              <Card className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground"><th className="px-4 py-3">Produk</th><th className="px-4 py-3 text-right">Ekor</th><th className="px-4 py-3 text-right">Kg</th><th className="px-4 py-3 text-right">HPP/kg</th><th className="px-4 py-3 text-right">Nilai Stok</th></tr></thead>
                 <tbody>{stock.items.map((s) => (
@@ -113,6 +127,7 @@ export default function Reports() {
                 <tfoot><tr className="border-t-2 border-border font-bold"><td className="px-4 py-3" colSpan={4}>Total Nilai Stok</td><td className="px-4 py-3 text-right tabular">{formatRupiah(stock.total_value)}</td></tr></tfoot>
               </table>
             </Card>
+            </>
           )}
         </TabsContent>
       </Tabs>

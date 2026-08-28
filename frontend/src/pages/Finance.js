@@ -21,35 +21,33 @@ export default function Finance() {
   const { user } = useAuth();
   const isKasir = user.role === "kasir";
   const [expOpen, setExpOpen] = useState(false);
-  const { data: expenses, reload: rExp } = useFetch(isKasir ? null : "/expenses");
+  const { data: expenses, reload: rExp } = useFetch("/expenses");
   const { data: incomes } = useFetch(isKasir ? null : "/incomes");
   const { data: receivables, reload: rRec } = useFetch("/receivables");
   const { data: payables, reload: rPay } = useFetch(isKasir ? null : "/payables");
 
   return (
     <div className="bam-fade">
-      <PageHeader title="Keuangan" subtitle="Pemasukan, pengeluaran, piutang & hutang" />
-      <Tabs defaultValue={isKasir ? "piutang" : "pengeluaran"}>
+      <PageHeader title="Keuangan" subtitle={isKasir ? "Catat pengeluaran operasional & piutang" : "Pemasukan, pengeluaran, piutang & hutang"} />
+      <Tabs defaultValue="pengeluaran">
         <TabsList className="flex-wrap h-auto">
-          {!isKasir && <TabsTrigger value="pengeluaran" data-testid="tab-pengeluaran">Pengeluaran</TabsTrigger>}
+          <TabsTrigger value="pengeluaran" data-testid="tab-pengeluaran">Pengeluaran</TabsTrigger>
           {!isKasir && <TabsTrigger value="pemasukan" data-testid="tab-pemasukan">Pemasukan</TabsTrigger>}
           <TabsTrigger value="piutang" data-testid="tab-piutang">Piutang</TabsTrigger>
           {!isKasir && <TabsTrigger value="hutang" data-testid="tab-hutang">Hutang</TabsTrigger>}
         </TabsList>
 
-        {!isKasir && (
-          <TabsContent value="pengeluaran">
-            <div className="flex justify-end mb-3"><Button data-testid="add-expense" onClick={() => setExpOpen(true)}><Plus className="w-4 h-4 mr-1" /> Tambah Pengeluaran</Button></div>
-            <Card className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground"><th className="px-4 py-3">Tanggal</th><th className="px-4 py-3">Kategori</th><th className="px-4 py-3">Keterangan</th><th className="px-4 py-3 text-right">Jumlah</th></tr></thead>
-                <tbody>{(expenses || []).map((e) => (
-                  <tr key={e.id} className="border-t border-border"><td className="px-4 py-2.5">{formatDate(e.date)}</td><td className="px-4 py-2.5"><Badge variant="secondary">{e.category}</Badge></td><td className="px-4 py-2.5 text-muted-foreground">{e.description}</td><td className="px-4 py-2.5 text-right tabular font-semibold text-destructive">{formatRupiah(e.amount)}</td></tr>
-                ))}</tbody>
-              </table>
-            </Card>
-          </TabsContent>
-        )}
+        <TabsContent value="pengeluaran">
+          <div className="flex justify-end mb-3"><Button data-testid="add-expense" onClick={() => setExpOpen(true)}><Plus className="w-4 h-4 mr-1" /> Tambah Pengeluaran</Button></div>
+          <Card className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground"><th className="px-4 py-3">Tanggal</th><th className="px-4 py-3">Kategori</th><th className="px-4 py-3">Keterangan</th><th className="px-4 py-3 text-right">Jumlah</th></tr></thead>
+              <tbody>{(expenses || []).map((e) => (
+                <tr key={e.id} className="border-t border-border"><td className="px-4 py-2.5">{formatDate(e.date)}</td><td className="px-4 py-2.5"><Badge variant="secondary">{e.category}</Badge></td><td className="px-4 py-2.5 text-muted-foreground">{e.description}</td><td className="px-4 py-2.5 text-right tabular font-semibold text-destructive">{formatRupiah(e.amount)}</td></tr>
+              ))}</tbody>
+            </table>
+          </Card>
+        </TabsContent>
 
         {!isKasir && (
           <TabsContent value="pemasukan">

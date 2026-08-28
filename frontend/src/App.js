@@ -33,7 +33,6 @@ function Loader() {
 
 function homeFor(role) {
   if (role === "kasir") return "/pos";
-  if (role === "operator") return "/produksi";
   return "/dashboard";
 }
 
@@ -53,7 +52,7 @@ function RoleHome() {
 const R_OWNER = ["owner"];
 const R_OWNER_ADMIN = ["owner", "admin"];
 const R_POS = ["owner", "admin", "kasir"];
-const R_OPS = ["owner", "admin", "operator"];
+const R_OPS = ["owner", "admin", "kasir"];
 
 function App() {
   const { user, loading } = useAuth();

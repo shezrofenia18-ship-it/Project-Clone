@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 6: Frontend-only regression of 10 batch features + operator removal. 10/11 features PASS. CRITICAL MISS: Purchases page has NO edit/delete row action buttons — feature (2) 'Owner bisa mengubah/menghapus pembelian' is NOT wired in UI even though backend PUT/DELETE endpoints exist and were verified by main agent. Everything else (dashboard pcs, POS entry-modal + pcs cart + pay-debt dialog, Produksi Potong prod-input flow, Operator role removal + kasir migration, kasir Finance/Pengeluaran, Product upload+delete, Reports export-stock CSV download) works end-to-end.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Purchases table (/pembelian)", "issue": "No edit or delete button per row for Owner. Feature (2) explicitly requires 'Owner bisa mengubah/menghapus pembelian'. Backend PUT /api/purchases/{id} + DELETE /api/purchases/{id} already work per main agent context, but Purchases.js only renders 6 cells (Tanggal, Supplier, Berat, Modal Efektif/kg, Total Modal, Status) with no action column. data-testid delete-purchase-<id> / edit-purchase-<id> are absent.", "selector": "[data-testid^=\"delete-purchase-\"]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "POS initial load", "issue": "2 console errors 'useFetch(null) gagal: AxiosError 404' fired on POS mount for both owner and kasir. Some hook is being called with a null URL and axios falls back to base URL which 404s. Cosmetic (no UI break) but pollutes console/logs.", "affected_selectors": []}
+    ],
+    "design_issues": [
+      {"screen": "Finance > Pengeluaran (kasir)", "issues": ["exp-cat dropdown still includes 'Pembelian Ayam' as an option for kasir. Per requirement kasir list already excludes it, but the create-form should also hide 'Pembelian Ayam' (or backend must reject with 403) to avoid confusion. Currently kasir can pick 'Pembelian Ayam' as expense category from the dropdown."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_6.json"],
+  "action_items": [
+    "Add edit + delete action column to Purchases.js table with data-testid=edit-purchase-<id> + delete-purchase-<id> wired to PUT/DELETE /api/purchases/{id}. Include a confirm dialog for delete (stok/modal harus dibalik oleh backend — verified working).",
+    "Fix useFetch(null) callers on POS page to skip axios call when URL is falsy (guard: if (!url) return; inside useFetch effect) to remove 2× 404 console spam.",
+    "Optional: hide 'Pembelian Ayam' from exp-cat dropdown when isKasir === true (Finance.js line 134) to match the list-exclusion behavior."
+  ],
+  "critical_code_review_comments": [
+    "Purchases.js (all 125 lines) — no delete/edit UI at all. Row map only prints readonly cells. Need to add an actions column and a delete confirm + edit dialog wiring to PUT/DELETE endpoints.",
+    "Finance.js exp-cat dropdown does not filter 'Pembelian Ayam' for kasir role even though the display filter list does. Minor UX inconsistency.",
+    "POS.js still triggers useFetch(null) — some hook consumer passes null URL. Guard inside useFetch would silence 2 404 error logs on every POS mount.",
+    "OwnerDashboard products_perf per-category sub-line correctly appends ' · N pcs' when p.pcs>0 (line 141) — verified in code, not visually reproducible today because current test seed has 0 pcs sales for the 4 main categories aggregated in dashboard. Owner should confirm on a day with pcs sales.",
+    "Paha Ayam price/hpp: pos entry shows 'Modal efektif/pcs Rp 5.400 · Laba/pcs Rp -1.400' (negative margin). Not a UI bug — data-driven — but owner should review Paha Ayam pcs price."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (not retested per main agent instruction)", "frontend": "~91% (10/11 features fully working)"},
+  "test_credentials": "Owner shezrofenia18@gmail.com/berkahayam1, Admin admin@berkahayam.com/admin123, Kasir kasir@berkahayam.com/kasir123, ex-Operator operator@berkahayam.com/operator123 (now kasir, name 'Operator Budi') — all verified via UI login.",
+  "seed_data_creation": "1 test expense created by kasir via UI (kategori first option ~'Pembelian Ayam', amount 5.000). Cart pcs item added and removed (no sale committed). No permanent seed changes.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Frontend routes: /dashboard /pos /riwayat /produk /stok /pembelian /produksi /pelanggan /supplier /keuangan /target /laporan /audit /pengguna /pengaturan. POS product tiles use data-testid pos-product-<id> (NOT pos-prod-*). Byproducts (Ati Ampela, Ceker Ayam, Kepala Ayam, Kulit Ayam, Paha Ayam, Tulang Ayam) show both unit-kg and unit-pcs. Entry-modal text confirmed: 'Modal efektif/kg: Rp X · Laba/kg Rp Y' and 'Modal efektif/pcs: Rp X · Laba/pcs Rp Y'. Debt dialog has 12 outstanding piutang entries (debt-pay-<id>). Kasir Finance tabs: pengeluaran + piutang only (no pemasukan/hutang). Kasir sidebar: POS Kasir, Riwayat, Stok, Pembelian, Produksi Potong, Pelanggan, Keuangan. Owner delete-product-<id> shows 11 products. Reports export-stock downloads 'nilai_stok.csv'. THE ONLY MISSING FEATURE FROM SPEC: purchase edit/delete UI buttons — main agent must add to Purchases.js.",
+  "rca_of_the_issue": "Feature (2) 'Owner bisa mengubah/menghapus pembelian' — backend fully implemented (create/update/delete_purchase, _reverse_purchase reverses stok+modal correctly per main agent verification 110->160->140->110), but frontend Purchases.js was never updated to render the action buttons. Reproduction: login as owner -> /pembelian -> table shows 1 row with only info cells, no Trash2/Pencil icons. Fix: (a) add <th>Aksi</th> to header, (b) inside row append <td> with Edit + Delete buttons carrying data-testid={`edit-purchase-${p.id}`}/{`delete-purchase-${p.id}`}, (c) on delete call api.delete(`/purchases/${id}`) then toast + reload, (d) reuse PurchaseDialog with an optional initial={p} prop for edit flow (PUT /api/purchases/{id})."
+}

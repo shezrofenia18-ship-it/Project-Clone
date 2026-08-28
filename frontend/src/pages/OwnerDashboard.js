@@ -137,6 +137,9 @@ export default function OwnerDashboard() {
                 <p className="text-xs font-semibold truncate">{CATEGORY_LABELS[p.category] || p.category}</p>
                 <p className="text-sm font-bold tabular">{formatRupiahShort(p.penjualan)}</p>
                 <p className="text-[11px] text-success">Margin {formatPct(p.margin)}</p>
+                <p className="text-[10px] text-muted-foreground tabular truncate">
+                  {p.weight ? formatWeight(p.weight, 0) : ""}{p.ekor ? ` · ${formatNumber(p.ekor)} ekor` : ""}{p.pcs ? ` · ${formatNumber(p.pcs)} pcs` : ""}
+                </p>
               </div>
             ))}
           </div>

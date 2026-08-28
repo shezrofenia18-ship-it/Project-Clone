@@ -135,7 +135,7 @@ async def create_user(body: CreateUserBody, user: dict = Depends(require_roles("
     email = body.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email sudah terdaftar")
-    if body.role not in ("owner", "admin", "kasir", "operator"):
+    if body.role not in ("owner", "admin", "kasir"):
         raise HTTPException(status_code=400, detail="Role tidak valid")
     doc = {
         "name": body.name,
@@ -188,7 +188,7 @@ async def seed_admin():
     demo = [
         ("Admin Toko", "admin@berkahayam.com", "admin123", "admin"),
         ("Kasir Andi", "kasir@berkahayam.com", "kasir123", "kasir"),
-        ("Operator Budi", "operator@berkahayam.com", "operator123", "operator"),
+        ("Kasir Budi", "operator@berkahayam.com", "operator123", "kasir"),
         ("Owner Berkah", "owner@berkahayam.com", "berkahayam1", "owner"),
     ]
     for name, email, pw, role in demo:
@@ -197,3 +197,6 @@ async def seed_admin():
                 "name": name, "email": email, "password_hash": hash_password(pw),
                 "role": role, "active": True, "created_at": now_jkt().isoformat(),
             })
+
+    # migrate any legacy operator accounts to kasir (role removed)
+    await db.users.update_many({"role": "operator"}, {"$set": {"role": "kasir"}})

@@ -7,10 +7,12 @@ load_dotenv(ROOT_DIR / ".env")
 
 import uuid
 import logging
+import requests
 from datetime import timedelta
 from typing import List, Optional, Any, Dict
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -26,6 +28,47 @@ from seed import seed_demo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("berkah")
+
+# ------------------------- object storage -------------------------
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "berkah-ayam-mili"
+MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+              "gif": "image/gif", "webp": "image/webp"}
+_storage_key = None
+
+
+def init_storage(force: bool = False):
+    global _storage_key
+    if _storage_key and not force:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                        headers={"X-Storage-Key": key, "Content-Type": content_type},
+                        data=data, timeout=120)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
+                            headers={"X-Storage-Key": key, "Content-Type": content_type},
+                            data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}",
+                        headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 app = FastAPI(title="Berkah Ayam Mili API")
 api = APIRouter(prefix="/api")
@@ -184,13 +227,13 @@ class SlaughterBody(BaseModel):
 
 class ProdOutput(BaseModel):
     product_id: str
-    weight: float
+    pcs: float
 
 
 class ProductionBody(BaseModel):
     source_product_id: str
     date: Optional[str] = None
-    input_weight: float
+    input_ekor: float
     outputs: List[ProdOutput]
     labor_cost: float = 0
     packaging_cost: float = 0
@@ -346,13 +389,12 @@ async def delete_supplier(sid: str, user: dict = Depends(require_roles("owner", 
 
 # ------------------------- Purchases -------------------------
 @api.get("/purchases")
-async def list_purchases(user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def list_purchases(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     p = await db.purchases.find().sort("created_at", -1).to_list(1000)
     return [clean(x) for x in p]
 
 
-@api.post("/purchases")
-async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles("owner", "admin"))):
+async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
     supplier = await db.suppliers.find_one({"id": body.supplier_id})
     if not supplier:
         raise HTTPException(404, "Supplier tidak ditemukan")
@@ -375,7 +417,6 @@ async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles
     total_modal = round(total_bird_value + body.transport_cost + body.other_cost, 2)
     eff_cost_kg = round(total_modal / total_weight_all, 2) if total_weight_all else 0
     eff_cost_ekor = round(total_modal / total_ekor_all, 2) if total_ekor_all else 0
-    pid = new_id()
     payable_amt = round(total_modal - body.paid, 2)
     doc = {
         "id": pid, "supplier_id": body.supplier_id, "supplier_name": supplier["name"],
@@ -412,21 +453,65 @@ async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles
         "id": new_id(), "date": doc["date"], "category": "Pembelian Ayam", "amount": total_modal,
         "description": f"Pembelian dari {supplier['name']}", "ref": pid,
         "created_by": user["name"], "created_at": iso_now()})
-    await add_activity("purchase", "Ayam Masuk", f"Pembelian dari {supplier['name']} - {round(total_weight_all,1)} kg", total_modal, user["name"])
-    await add_notification("purchase", "Pembelian Baru", f"{supplier['name']} - {round(total_weight_all,1)} kg", "info")
+    return doc, total_weight_all, total_modal
+
+
+async def _reverse_purchase(purchase: dict):
+    for it in purchase.get("items", []):
+        product = await db.products.find_one({"id": it["product_id"]})
+        if product:
+            await apply_stock(product, -it.get("ekor", 0), -it.get("total_weight", 0),
+                              "koreksi", "system", purchase["id"], allow_negative=True)
+    await db.expenses.delete_many({"ref": purchase["id"], "category": "Pembelian Ayam"})
+    await db.payables.delete_many({"purchase_id": purchase["id"]})
+    await db.suppliers.update_one({"id": purchase["supplier_id"]}, {"$inc": {
+        "total_purchase": -purchase.get("total_modal", 0), "payable": -purchase.get("payable", 0)}})
+
+
+@api.post("/purchases")
+async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles("owner", "admin"))):
+    pid = new_id()
+    doc, tw, total_modal = await _persist_purchase(body, user, pid)
+    await add_activity("purchase", "Ayam Masuk", f"Pembelian dari {doc['supplier_name']} - {round(tw,1)} kg", total_modal, user["name"])
+    await add_notification("purchase", "Pembelian Baru", f"{doc['supplier_name']} - {round(tw,1)} kg", "info")
     await log_audit(user, "create", "purchase", pid, None, {"total_modal": total_modal})
     return clean(doc)
 
 
+@api.put("/purchases/{pid}")
+async def update_purchase(pid: str, body: PurchaseBody, user: dict = Depends(require_roles("owner"))):
+    existing = await db.purchases.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Pembelian tidak ditemukan")
+    await _reverse_purchase(existing)
+    await db.purchases.delete_one({"id": pid})
+    doc, tw, total_modal = await _persist_purchase(body, user, pid)
+    await add_activity("purchase", "Pembelian Diubah", f"{doc['supplier_name']} - {round(tw,1)} kg", total_modal, user["name"])
+    await log_audit(user, "update", "purchase", pid, clean(existing), {"total_modal": total_modal})
+    return clean(doc)
+
+
+@api.delete("/purchases/{pid}")
+async def delete_purchase(pid: str, user: dict = Depends(require_roles("owner"))):
+    existing = await db.purchases.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Pembelian tidak ditemukan")
+    await _reverse_purchase(existing)
+    await db.purchases.delete_one({"id": pid})
+    await add_activity("cancel", "Pembelian Dihapus", f"{existing['supplier_name']} dihapus", existing.get("total_modal", 0), user["name"])
+    await log_audit(user, "delete", "purchase", pid, clean(existing), None)
+    return {"ok": True}
+
+
 # ------------------------- Slaughter -------------------------
 @api.get("/slaughters")
-async def list_slaughters(user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def list_slaughters(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     s = await db.slaughters.find().sort("created_at", -1).to_list(1000)
     return [clean(x) for x in s]
 
 
 @api.post("/slaughters")
-async def create_slaughter(body: SlaughterBody, user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def create_slaughter(body: SlaughterBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     product = await db.products.find_one({"id": body.product_id})
     if not product:
         raise HTTPException(404, "Produk tidak ditemukan")
@@ -457,44 +542,43 @@ async def create_slaughter(body: SlaughterBody, user: dict = Depends(require_rol
 
 # ------------------------- Production -------------------------
 @api.get("/productions")
-async def list_productions(user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def list_productions(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     p = await db.productions.find().sort("created_at", -1).to_list(1000)
     return [clean(x) for x in p]
 
 
 @api.post("/productions")
-async def create_production(body: ProductionBody, user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def create_production(body: ProductionBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     source = await db.products.find_one({"id": body.source_product_id})
     if not source:
         raise HTTPException(404, "Produk sumber tidak ditemukan")
-    total_output = sum(o.weight for o in body.outputs)
-    susut = round(body.input_weight - total_output, 3)
-    material_value = round(body.input_weight * float(source.get("hpp_kg", 0) or 0), 2)
+    total_output = sum(o.pcs for o in body.outputs)
+    material_value = round(body.input_ekor * float(source.get("hpp_ekor", 0) or 0), 2)
     total_cost = round(material_value + body.labor_cost + body.packaging_cost + body.other_cost, 2)
     pid = new_id()
     outputs_out = []
     for o in body.outputs:
         op = await db.products.find_one({"id": o.product_id})
-        outputs_out.append({"product_id": o.product_id, "name": op["name"] if op else "", "weight": o.weight})
+        outputs_out.append({"product_id": o.product_id, "name": op["name"] if op else "", "pcs": o.pcs})
     doc = {
         "id": pid, "source_product_id": body.source_product_id, "source_name": source["name"],
-        "date": body.date or today_str(), "input_weight": body.input_weight, "outputs": outputs_out,
-        "susut_weight": susut, "material_value": material_value, "labor_cost": body.labor_cost,
+        "date": body.date or today_str(), "input_ekor": body.input_ekor, "outputs": outputs_out,
+        "material_value": material_value, "labor_cost": body.labor_cost,
         "packaging_cost": body.packaging_cost, "other_cost": body.other_cost, "total_cost": total_cost,
         "operator": body.operator or user["name"], "notes": body.notes,
         "created_by": user["name"], "created_at": iso_now(),
     }
     await db.productions.insert_one(doc)
-    await apply_stock(source, 0, -body.input_weight, "produksi", user["name"], pid, allow_negative=True)
+    await apply_stock(source, -body.input_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
     main_out = body.outputs[0] if body.outputs else None
     for o in body.outputs:
         op = await db.products.find_one({"id": o.product_id})
         if not op:
             continue
-        await apply_stock(op, 0, o.weight, "produksi", user["name"], pid)
-        if main_out and o.product_id == main_out.product_id and o.weight:
-            await db.products.update_one({"id": o.product_id}, {"$set": {"hpp_kg": round(total_cost / o.weight, 2)}})
-    await add_activity("production", "Produksi Potong Selesai", f"{source['name']} -> {total_output} kg produk", 0, doc["operator"])
+        await apply_stock(op, 0, 0, "produksi", user["name"], pid, delta_pcs=o.pcs)
+        if main_out and o.product_id == main_out.product_id and o.pcs:
+            await db.products.update_one({"id": o.product_id}, {"$set": {"hpp_pcs": round(total_cost / o.pcs, 2)}})
+    await add_activity("production", "Produksi Potong Selesai", f"{source['name']} {body.input_ekor} ekor -> {total_output} pcs", 0, doc["operator"])
     await log_audit(user, "create", "production", pid, None, {"total_cost": total_cost})
     return clean(doc)
 
@@ -624,7 +708,7 @@ async def list_movements(product_id: Optional[str] = None, user: dict = Depends(
 
 
 @api.post("/stock-adjustments")
-async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles("owner", "admin", "operator"))):
+async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     product = await db.products.find_one({"id": body.product_id})
     if not product:
         raise HTTPException(404, "Produk tidak ditemukan")
@@ -637,13 +721,15 @@ async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles
 
 # ------------------------- Expenses & Incomes -------------------------
 @api.get("/expenses")
-async def list_expenses(user: dict = Depends(require_roles("owner", "admin"))):
+async def list_expenses(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     e = await db.expenses.find().sort("created_at", -1).to_list(2000)
+    if user["role"] == "kasir":
+        e = [x for x in e if x.get("category") not in ("Pembelian Ayam", "Pembayaran Hutang")]
     return [clean(x) for x in e]
 
 
 @api.post("/expenses")
-async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("owner", "admin"))):
+async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     doc = body.model_dump()
     doc.update({"id": new_id(), "date": body.date or today_str(), "created_by": user["name"], "created_at": iso_now()})
     await db.expenses.insert_one(doc)
@@ -795,18 +881,20 @@ async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
     for s in all_sales:
         for it in s["items"]:
             cat = it.get("category", "sampingan")
-            p = perf.setdefault(cat, {"penjualan": 0, "weight": 0, "ekor": 0, "hpp": 0})
+            p = perf.setdefault(cat, {"penjualan": 0, "weight": 0, "ekor": 0, "pcs": 0, "hpp": 0})
             p["penjualan"] += it["subtotal"]
             p["hpp"] += it["hpp_total"]
             if it["unit"] == "kg":
                 p["weight"] += it["qty"]
             elif it["unit"] == "ekor":
                 p["ekor"] += it["qty"]
+            elif it["unit"] == "pcs":
+                p["pcs"] += it["qty"]
     products_perf = []
     for cat, p in perf.items():
         laba_p = round(p["penjualan"] - p["hpp"], 2)
         products_perf.append({"category": cat, "penjualan": round(p["penjualan"], 2),
-                              "weight": round(p["weight"], 2), "ekor": p["ekor"], "laba": laba_p,
+                              "weight": round(p["weight"], 2), "ekor": p["ekor"], "pcs": p["pcs"], "laba": laba_p,
                               "margin": round(laba_p / p["penjualan"] * 100, 2) if p["penjualan"] else 0})
     products_perf.sort(key=lambda x: x["penjualan"], reverse=True)
 
@@ -890,6 +978,41 @@ async def report_stock(user: dict = Depends(get_current_user)):
     return {"items": out, "total_value": round(sum(x["value"] for x in out), 2)}
 
 
+# ------------------------- File upload / serving -------------------------
+@api.post("/upload")
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_roles("owner", "admin"))):
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
+    if ext not in MIME_TYPES:
+        raise HTTPException(400, "Format gambar tidak didukung (jpg, png, webp, gif)")
+    fid = new_id()
+    path = f"{APP_NAME}/products/{fid}.{ext}"
+    data = await file.read()
+    ct = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
+    try:
+        result = put_object(path, data, ct)
+    except Exception as e:
+        logger.error(f"Upload gagal: {e}")
+        raise HTTPException(502, "Gagal mengunggah gambar ke penyimpanan")
+    await db.files.insert_one({"id": fid, "storage_path": result["path"], "content_type": ct,
+                               "original_filename": file.filename, "size": result.get("size", len(data)),
+                               "is_deleted": False, "created_at": iso_now()})
+    return {"id": fid, "url": f"/api/files/{fid}"}
+
+
+@api.get("/files/{fid}")
+async def serve_file(fid: str):
+    rec = await db.files.find_one({"id": fid, "is_deleted": False})
+    if not rec:
+        raise HTTPException(404, "File tidak ditemukan")
+    try:
+        data, ct = get_object(rec["storage_path"])
+    except Exception as e:
+        logger.error(f"Ambil file gagal: {e}")
+        raise HTTPException(502, "Gagal memuat gambar")
+    return Response(content=data, media_type=rec.get("content_type", ct),
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
 # ------------------------- wiring -------------------------
 app.include_router(auth_router)
 app.include_router(api)
@@ -910,6 +1033,11 @@ async def startup():
     await db.sales.create_index("date")
     await seed_admin()
     await seed_demo(db)
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed: {e}")
     logger.info("Berkah Ayam Mili API started")
 
 

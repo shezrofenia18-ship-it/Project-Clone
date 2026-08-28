@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
 
-const ROLES = { owner: "Owner", admin: "Admin", kasir: "Kasir", operator: "Operator" };
+const ROLES = { owner: "Owner", admin: "Admin", kasir: "Kasir" };
 const ROLE_TONE = { owner: "bg-primary/10 text-primary", admin: "bg-chart-4/10 text-chart-4", kasir: "bg-success/15 text-success", operator: "bg-warning/20 text-warning" };
 
 export default function Users() {

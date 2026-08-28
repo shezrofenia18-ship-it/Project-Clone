@@ -196,7 +196,7 @@ async def seed_demo(db):
                        "user": "Admin Toko", "date": today, "created_at": _now().isoformat()})
     activities.append({"id": _id(), "type": "slaughter", "title": "Pemotongan Selesai",
                        "message": "Ayam Broiler rendemen 75%", "amount": 0,
-                       "user": "Operator Budi", "date": today, "created_at": _now().isoformat()})
+                       "user": "Kasir Budi", "date": today, "created_at": _now().isoformat()})
     if activities:
         await db.activities.insert_many(activities)
 
@@ -227,18 +227,18 @@ async def seed_demo(db):
         "date": (_now() - timedelta(days=1)).strftime("%Y-%m-%d"), "ekor_in": 100,
         "live_weight": 200, "carcass_weight": 150, "susut_weight": 50,
         "rendemen_pct": 75, "susut_pct": 25, "cost_pemotongan": 150000,
-        "operator": "Operator Budi", "notes": "Demo", "created_by": "Operator Budi",
+        "operator": "Kasir Budi", "notes": "Demo", "created_by": "Kasir Budi",
         "created_at": (_now() - timedelta(days=1)).isoformat(),
     })
     await db.productions.insert_one({
         "id": _id(), "source_product_id": prod_ids["Ayam Broiler"], "source_name": "Ayam Broiler",
-        "date": (_now() - timedelta(days=1)).strftime("%Y-%m-%d"), "input_weight": 50,
-        "outputs": [{"product_id": prod_ids["Ayam Fillet"], "name": "Ayam Fillet", "weight": 32},
-                    {"product_id": prod_ids["Tulang Ayam"], "name": "Tulang Ayam", "weight": 10},
-                    {"product_id": prod_ids["Kulit Ayam"], "name": "Kulit Ayam", "weight": 5}],
-        "susut_weight": 3, "material_value": 1400000, "labor_cost": 100000,
-        "packaging_cost": 50000, "other_cost": 50000, "total_cost": 1600000,
-        "operator": "Operator Budi", "notes": "Demo", "created_by": "Operator Budi",
+        "date": (_now() - timedelta(days=1)).strftime("%Y-%m-%d"), "input_ekor": 20,
+        "outputs": [{"product_id": prod_ids["Paha Ayam"], "name": "Paha Ayam", "pcs": 40},
+                    {"product_id": prod_ids["Ati Ampela"], "name": "Ati Ampela", "pcs": 20},
+                    {"product_id": prod_ids["Kulit Ayam"], "name": "Kulit Ayam", "pcs": 20}],
+        "material_value": 928000, "labor_cost": 100000,
+        "packaging_cost": 50000, "other_cost": 50000, "total_cost": 1128000,
+        "operator": "Kasir Budi", "notes": "Demo", "created_by": "Kasir Budi",
         "created_at": (_now() - timedelta(days=1)).isoformat(),
     })
 

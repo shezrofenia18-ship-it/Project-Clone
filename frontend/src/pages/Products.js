@@ -11,13 +11,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, formatPct, CATEGORY_LABELS } from "@/lib/format";
-import { Plus, Pencil } from "lucide-react";
+import { Plus, Pencil, Trash2, Image as ImageIcon } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 
 const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, hpp_pcs: 0, price_kg: 0, price_ekor: 0, price_pcs: 0, stock_kg: 0, stock_ekor: 0, stock_pcs: 0, min_stock_kg: 0, min_stock_ekor: 0, min_stock_pcs: 0, image_url: "", is_byproduct: false, active: true };
 
 export default function Products() {
   const { data, reload } = useFetch("/products");
+  const { user } = useAuth();
+  const isOwner = user.role === "owner";
   const [edit, setEdit] = useState(null);
+
+  const del = async (p) => {
+    if (!window.confirm(`Nonaktifkan produk "${p.name}"? Produk tidak akan muncul di POS.`)) return;
+    try { await api.delete(`/products/${p.id}`); toast.success("Produk dinonaktifkan"); reload(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
 
   return (
     <div className="bam-fade">
@@ -50,6 +59,7 @@ export default function Products() {
                     <td className="px-4 py-3 text-right tabular text-success">{formatPct(margin)}</td>
                     <td className="px-4 py-3 text-right">
                       <Button data-testid={`edit-product-${p.id}`} variant="ghost" size="sm" onClick={() => setEdit(p)}><Pencil className="w-4 h-4" /></Button>
+                      {isOwner && <Button data-testid={`delete-product-${p.id}`} variant="ghost" size="sm" onClick={() => del(p)}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
                     </td>
                   </tr>
                 );
@@ -66,8 +76,22 @@ export default function Products() {
 function ProductDialog({ init, onClose, onSaved }) {
   const [f, setF] = useState({ ...EMPTY, ...init });
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const num = (k) => (e) => set(k, Number(e.target.value));
+
+  const onUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const { data } = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      set("image_url", `${process.env.REACT_APP_BACKEND_URL}${data.url}`);
+      toast.success("Gambar terunggah");
+    } catch (e2) { toast.error(apiError(e2)); } finally { setUploading(false); }
+  };
 
   const save = async () => {
     if (!f.name) return toast.error("Nama produk wajib diisi");
@@ -121,7 +145,19 @@ function ProductDialog({ init, onClose, onSaved }) {
           <div><Label className="text-xs">Stok Awal (ekor)</Label><Input type="number" value={f.stock_ekor} onChange={num("stock_ekor")} className="mt-1 tabular" disabled={!!init.id} /></div>
           <div><Label className="text-xs">Stok Awal (pcs)</Label><Input type="number" value={f.stock_pcs} onChange={num("stock_pcs")} className="mt-1 tabular" disabled={!!init.id} /></div>
           <div><Label className="text-xs">Min Stok (kg)</Label><Input type="number" value={f.min_stock_kg} onChange={num("min_stock_kg")} className="mt-1 tabular" /></div>
-          <div className="col-span-2"><Label className="text-xs">URL Gambar</Label><Input value={f.image_url} onChange={(e) => set("image_url", e.target.value)} className="mt-1" /></div>
+          <div className="col-span-2">
+            <Label className="text-xs">Gambar Produk</Label>
+            <div className="flex items-center gap-3 mt-1.5">
+              {f.image_url
+                ? <img src={f.image_url} alt="preview" className="w-16 h-16 rounded-lg object-cover border border-border" />
+                : <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center text-muted-foreground"><ImageIcon className="w-6 h-6" /></div>}
+              <div className="flex-1">
+                <input data-testid="prod-image-file" type="file" accept="image/*" onChange={onUpload} className="text-xs" />
+                {uploading && <p className="text-xs text-muted-foreground mt-1">Mengunggah...</p>}
+              </div>
+            </div>
+            <Input placeholder="atau tempel URL gambar" value={f.image_url} onChange={(e) => set("image_url", e.target.value)} className="mt-2" />
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Batal</Button>

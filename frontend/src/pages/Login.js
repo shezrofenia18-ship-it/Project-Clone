@@ -11,7 +11,6 @@ const DEMO = [
   { role: "Owner", email: "shezrofenia18@gmail.com", pass: "berkahayam1" },
   { role: "Admin", email: "admin@berkahayam.com", pass: "admin123" },
   { role: "Kasir", email: "kasir@berkahayam.com", pass: "kasir123" },
-  { role: "Operator", email: "operator@berkahayam.com", pass: "operator123" },
 ];
 
 export default function Login() {

@@ -18,6 +18,16 @@ export function enqueueSale(body) {
   return q.length;
 }
 
+// Catalog cache so POS can open & sell even when offline from the very first load.
+export function cacheCatalog(key, data) {
+  try { localStorage.setItem(`bam_cache_${key}`, JSON.stringify(data)); } catch { /* quota */ }
+}
+
+export function readCatalog(key) {
+  try { const v = localStorage.getItem(`bam_cache_${key}`); return v ? JSON.parse(v) : null; }
+  catch { return null; }
+}
+
 // Sync all queued sales. Network errors keep the item; server responses (2xx via
 // idempotency, or 4xx genuine errors) remove it so we never loop forever.
 export async function syncQueue(api) {
