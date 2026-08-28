@@ -40,10 +40,19 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Dashboard products_perf belum agregasi volume unit pcs (penjualan/hpp/laba tetap benar; hanya counter volume kg/ekor).
 - create_purchase: item ekor=0 & berat>0 → hpp_ekor 0 diam-diam (guard div-by-zero ada).
 
+## Implemented (2026-08 — FASE 1: Mode Offline POS)
+- Antrean penjualan offline tahan tutup-aplikasi (localStorage `bam_offline_queue`), auto-sync tiap 6s + saat event `online`.
+- Tanggal/jam asli transaksi offline dipertahankan: frontend kirim `date` (tanggal lokal) + `offline_at`; backend simpan `created_at = offline_at`, `offline = true`, `synced_at`. Activity khusus "Penjualan Offline Tersinkron".
+- Transaksi yang DITOLAK server tidak lagi dibuang diam-diam: ditandai `failed` + alasan, bisa Coba Lagi / Hapus.
+- UI baru: badge topbar "N antre / N ditolak" (klik → dialog `PendingSales` dengan tombol "Sinkron Sekarang"), banner offline di POS.
+- 2 BUG BESAR diperbaiki: (a) service worker tidak pernah cache app-shell → reload offline blank; fix mekanisme WARM_CACHE (index.js → SW postMessage) + navHandler fallback bertingkat, CACHE bam-v3, cacheFirst → stale-while-revalidate. (b) AuthContext menghapus token pada network error → kasir dipaksa logout saat offline; fix cache profil `bam_user`, sesi hanya dihapus bila server menolak (401).
+- Teruji: backend 40/40 PASS (termasuk idempotency txn_id: stok/income/piutang tidak dobel). Frontend PASS: reload offline tetap jalan, sesi bertahan, antrean bertahan lintas reload, auto-sync, status "ditolak" tampil.
+
 ## Backlog / Remaining
-- P1: PWA offline queue + sync (IndexedDB) — user setuju menyusul.
-- P1: WebSocket realtime (saat ini polling).
-- P2: Multi-cabang (stores), harga khusus per pelanggan di POS otomatis, integrasi timbangan digital, export PDF/Excel native, edit/hapus pembelian.
+- P1: WebSocket realtime (saat ini polling) — FASE 2, disetujui user.
+- P1: Harga khusus pelanggan per produk otomatis di POS — FASE 3, disetujui user (field `special_prices` sudah ada di backend, belum ada UI & belum dipakai POS).
+- P1: Export PDF laporan (Laba Rugi, Penjualan, Nilai Stok) — FASE 4, disetujui user.
+- P2: Multi-cabang (stores), integrasi timbangan digital, export Excel native.
 
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

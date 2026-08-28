@@ -6,7 +6,7 @@ import api from "@/lib/api";
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Truck, Factory,
   Users as UsersIcon, Building2, Wallet, Target, FileBarChart, ScrollText,
-  UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick, RefreshCw,
+  UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick, RefreshCw, CloudOff,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatTime } from "@/lib/format";
+import PendingSales from "@/components/PendingSales";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "admin"] },
@@ -83,7 +84,8 @@ export default function Layout({ children }) {
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState([]);
-  const { online, syncing, pending } = useOffline();
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const { online, syncing, pending, failed } = useOffline();
 
   useEffect(() => { setOpen(false); }, [location.pathname]);
 
@@ -141,12 +143,30 @@ export default function Layout({ children }) {
               ) : online ? (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-success">
                   <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60" /><span className="relative inline-flex rounded-full h-2 w-2 bg-success" /></span>
-                  <Wifi className="w-3.5 h-3.5" /> ONLINE{pending > 0 ? ` · ${pending} antre` : ""}
+                  <Wifi className="w-3.5 h-3.5" /> ONLINE
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
-                  <WifiOff className="w-3.5 h-3.5" /> OFFLINE{pending > 0 ? ` · ${pending} antre` : ""}
+                  <WifiOff className="w-3.5 h-3.5" /> OFFLINE
                 </span>
+              )}
+
+              {(pending > 0 || failed > 0) && (
+                <button
+                  data-testid="pending-badge"
+                  onClick={() => setPendingOpen(true)}
+                  title="Lihat transaksi yang menunggu sinkron"
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+                    failed > 0
+                      ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20"
+                      : "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
+                  }`}
+                >
+                  <CloudOff className="w-3.5 h-3.5" />
+                  {pending > 0 ? `${pending} antre` : ""}
+                  {pending > 0 && failed > 0 ? " · " : ""}
+                  {failed > 0 ? `${failed} ditolak` : ""}
+                </button>
               )}
             </div>
           </div>
@@ -206,6 +226,8 @@ export default function Layout({ children }) {
 
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
+
+      {pendingOpen && <PendingSales onClose={() => setPendingOpen(false)} />}
     </div>
   );
 }

@@ -17,9 +17,18 @@ import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff } from "lucide-react";
+import PendingSales from "@/components/PendingSales";
 
 const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "sampingan"];
+
+// Local calendar date (YYYY-MM-DD) so a sale queued offline is still booked on the
+// day it actually happened, not on the day it finally syncs.
+const localDate = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 
 export default function POS() {
   const { data: products, reload } = useFetch("/products", [], "products");
@@ -34,8 +43,9 @@ export default function POS() {
   const [busy, setBusy] = useState(false);
   const [receipt, setReceipt] = useState(null);
   const [debtOpen, setDebtOpen] = useState(false);
+  const [pendingOpen, setPendingOpen] = useState(false);
   const { user } = useAuth();
-  const { enqueue } = useOffline();
+  const { enqueue, online, pending } = useOffline();
 
   useEffect(() => {
     const id = setInterval(reload, 15000);
@@ -80,9 +90,19 @@ export default function POS() {
       setCart([]); setCheckout(false); setPaid(""); setMethod("cash"); setCustomerId("umum");
       setBusy(false);
     };
+    // Snapshot for the pending-queue list (body only carries product ids).
+    const summary = {
+      customer_name: cust ? cust.name : "Umum",
+      total,
+      item_count: cart.length,
+      payment_method: method,
+    };
+    const queueOffline = () => {
+      enqueue({ ...body, date: localDate(), offline_at: new Date().toISOString() }, summary);
+    };
     try {
       if (!navigator.onLine) {
-        enqueue(body);
+        queueOffline();
         toast.warning("Mode offline — transaksi masuk antrean & disinkron otomatis");
         return finish(localSale, true);
       }
@@ -94,7 +114,7 @@ export default function POS() {
       reload();
     } catch (e) {
       if (!e.response) {
-        enqueue(body);
+        queueOffline();
         toast.warning("Koneksi terputus — transaksi masuk antrean offline");
         finish(localSale, true);
       } else {
@@ -108,6 +128,29 @@ export default function POS() {
     <div className="bam-fade -m-4 lg:-m-6 h-[calc(100vh-4rem)] flex flex-col lg:flex-row">
       {/* products */}
       <div className="flex-1 flex flex-col min-h-0 p-4 lg:p-6">
+        {(!online || pending > 0) && (
+          <div
+            data-testid="pos-offline-banner"
+            className={`mb-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border ${
+              !online
+                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                : "border-warning/40 bg-warning/10 text-warning"
+            }`}
+          >
+            <CloudOff className="w-4 h-4 shrink-0" />
+            <span className="min-w-0">
+              {!online
+                ? "Internet mati — Anda tetap bisa melayani pembeli. Transaksi tersimpan di perangkat & dikirim otomatis saat online."
+                : `${pending} transaksi offline menunggu dikirim ke server.`}
+            </span>
+            <Button
+              size="sm" variant="outline" className="h-7 text-xs ml-auto shrink-0"
+              data-testid="pos-open-pending" onClick={() => setPendingOpen(true)}
+            >
+              Lihat Antrean
+            </Button>
+          </div>
+        )}
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-3">
           {CATS.map((c) => (
             <button key={c} data-testid={`pos-cat-${c}`} onClick={() => setCat(c)}
@@ -242,6 +285,7 @@ export default function POS() {
 
       {receipt && <Receipt sale={receipt.sale} phone={receipt.phone} offline={receipt.offline} onClose={() => setReceipt(null)} />}
       {debtOpen && <ReceivableDialog onClose={() => setDebtOpen(false)} />}
+      {pendingOpen && <PendingSales onClose={() => setPendingOpen(false)} />}
     </div>
   );
 }

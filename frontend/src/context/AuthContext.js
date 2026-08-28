@@ -1,7 +1,21 @@
-import { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import api, { apiError } from "@/lib/api";
 
 const AuthContext = createContext(null);
+const USER_KEY = "bam_user";
+
+const readCachedUser = () => {
+  try {
+    const v = localStorage.getItem(USER_KEY);
+    return v ? JSON.parse(v) : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeCachedUser = (u) => {
+  try { localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch { /* quota */ }
+};
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null); // null=checking, false=not authed
@@ -14,10 +28,20 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return;
     }
+    const cached = readCachedUser();
     api.get("/auth/me")
-      .then((r) => setUser(r.data))
-      .catch(() => {
+      .then((r) => { setUser(r.data); writeCachedUser(r.data); })
+      .catch((e) => {
+        // A network error means we are offline, NOT that the session is invalid.
+        // Logging the cashier out here would make offline selling impossible,
+        // so we keep working from the cached profile. Only a real server
+        // rejection (401/403) clears the session.
+        if (!e.response && cached) {
+          setUser(cached);
+          return;
+        }
         localStorage.removeItem("bam_token");
+        localStorage.removeItem(USER_KEY);
         setUser(false);
       })
       .finally(() => setLoading(false));
@@ -27,6 +51,7 @@ export function AuthProvider({ children }) {
     try {
       const { data } = await api.post("/auth/login", { email, password });
       localStorage.setItem("bam_token", data.token);
+      writeCachedUser(data.user);
       setUser(data.user);
       return { ok: true, user: data.user };
     } catch (e) {
@@ -36,6 +61,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(() => {
     localStorage.removeItem("bam_token");
+    localStorage.removeItem(USER_KEY);
     setUser(false);
     window.location.href = "/login";
   }, []);

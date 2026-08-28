@@ -23,6 +23,9 @@ api.interceptors.response.use(
 );
 
 export function apiError(e) {
+  if (!e.response) {
+    return "Tidak ada koneksi ke server. Periksa internet Anda lalu coba lagi.";
+  }
   const detail = e.response?.data?.detail;
   if (detail == null) return e.message || "Terjadi kesalahan";
   if (typeof detail === "string") return detail;

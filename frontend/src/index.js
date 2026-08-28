@@ -24,7 +24,35 @@ root.render(
 );
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => { /* SW optional */ });
+  window.addEventListener("load", async () => {
+    try {
+      await navigator.serviceWorker.register("/sw.js");
+    } catch {
+      return; // SW optional
+    }
+
+    // Tell the worker exactly which files this page loaded so it can cache them.
+    // Without this the first (uncontrolled) visit caches nothing and a reload
+    // while offline lands on a blank page.
+    const warm = () => {
+      const ctrl = navigator.serviceWorker.controller;
+      if (!ctrl) return;
+      const origin = window.location.origin;
+      const urls = performance
+        .getEntriesByType("resource")
+        .map((e) => e.name)
+        .filter(
+          (u) =>
+            u.startsWith(origin) &&
+            !u.includes("/api/") &&
+            !u.includes("hot-update") &&
+            !u.includes("sockjs") &&
+            !u.includes("/ws")
+        );
+      ctrl.postMessage({ type: "WARM_CACHE", urls: [`${origin}/`, ...new Set(urls)] });
+    };
+
+    if (navigator.serviceWorker.controller) warm();
+    else navigator.serviceWorker.addEventListener("controllerchange", warm);
   });
 }

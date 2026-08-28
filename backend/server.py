@@ -252,6 +252,7 @@ class SaleItem(BaseModel):
 class SaleBody(BaseModel):
     txn_id: Optional[str] = None
     date: Optional[str] = None
+    offline_at: Optional[str] = None
     customer_id: Optional[str] = None
     items: List[SaleItem]
     discount: float = 0
@@ -652,7 +653,9 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
         "payment_method": body.payment_method, "payment_status": "lunas" if receivable <= 0 else "piutang",
         "total_hpp": round(total_hpp, 2), "gross_profit": gross_profit, "margin_pct": margin,
         "total_weight": round(total_weight, 3), "total_ekor": total_ekor,
-        "status": "selesai", "created_at": iso_now(),
+        "status": "selesai", "created_at": body.offline_at or iso_now(),
+        "offline": bool(body.offline_at),
+        "synced_at": iso_now() if body.offline_at else None,
     }
     for it in body.items:
         product = products_cache[it.product_id]
@@ -669,7 +672,13 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
             await db.receivables.insert_one({"id": new_id(), "customer_id": customer["id"], "customer_name": customer["name"],
                                              "sale_id": sid, "amount": total, "paid": paid, "remaining": receivable,
                                              "due_date": None, "status": "belum_lunas", "date": doc["date"], "created_at": iso_now()})
-    await add_activity("sale", "Penjualan Baru", f"{user['name']} menjual {len(items_out)} item", total, user["name"])
+    if body.offline_at:
+        await add_activity("sale", "Penjualan Offline Tersinkron",
+                           f"{user['name']} menjual {len(items_out)} item (dibuat saat offline)", total, user["name"])
+        await add_notification("offline_sync", "Transaksi Offline Tersinkron",
+                               f"Rp {int(total):,} oleh {user['name']}", "info")
+    else:
+        await add_activity("sale", "Penjualan Baru", f"{user['name']} menjual {len(items_out)} item", total, user["name"])
     if total >= 1000000:
         await add_notification("big_sale", "Transaksi Besar", f"{user['name']} - Rp {int(total):,}", "success")
     await log_audit(user, "create", "sale", sid, None, {"total": total})
