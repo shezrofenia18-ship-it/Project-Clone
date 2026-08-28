@@ -33,7 +33,7 @@ function Loader() {
 
 function homeFor(role) {
   if (role === "kasir") return "/pos";
-  if (role === "operator") return "/pemotongan";
+  if (role === "operator") return "/produksi";
   return "/dashboard";
 }
 
@@ -45,6 +45,16 @@ function Protected({ children, roles }) {
   return <Layout>{children}</Layout>;
 }
 
+function RoleHome() {
+  const { user } = useAuth();
+  return <Navigate to={homeFor(user.role)} replace />;
+}
+
+const R_OWNER = ["owner"];
+const R_OWNER_ADMIN = ["owner", "admin"];
+const R_POS = ["owner", "admin", "kasir"];
+const R_OPS = ["owner", "admin", "operator"];
+
 function App() {
   const { user, loading } = useAuth();
   return (
@@ -55,32 +65,27 @@ function App() {
             (!loading && user && user !== false) ? <Navigate to={homeFor(user.role)} replace /> : <Login />
           } />
           <Route path="/" element={<Protected><RoleHome /></Protected>} />
-          <Route path="/dashboard" element={<Protected roles={["owner", "admin"]}><OwnerDashboard /></Protected>} />
-          <Route path="/pos" element={<Protected roles={["owner", "admin", "kasir"]}><POS /></Protected>} />
-          <Route path="/riwayat" element={<Protected roles={["owner", "admin", "kasir"]}><SalesHistory /></Protected>} />
-          <Route path="/produk" element={<Protected roles={["owner", "admin"]}><Products /></Protected>} />
-          <Route path="/stok" element={<Protected roles={["owner", "admin", "operator"]}><Stock /></Protected>} />
-          <Route path="/pembelian" element={<Protected roles={["owner", "admin", "operator"]}><Purchases /></Protected>} />
-          <Route path="/pemotongan" element={<Protected roles={["owner", "admin", "operator"]}><Slaughter /></Protected>} />
-          <Route path="/produksi" element={<Protected roles={["owner", "admin", "operator"]}><Production /></Protected>} />
-          <Route path="/pelanggan" element={<Protected roles={["owner", "admin", "kasir"]}><Customers /></Protected>} />
-          <Route path="/supplier" element={<Protected roles={["owner", "admin"]}><Suppliers /></Protected>} />
-          <Route path="/keuangan" element={<Protected roles={["owner", "admin", "kasir"]}><Finance /></Protected>} />
-          <Route path="/target" element={<Protected roles={["owner", "admin"]}><Targets /></Protected>} />
-          <Route path="/laporan" element={<Protected roles={["owner", "admin"]}><Reports /></Protected>} />
-          <Route path="/audit" element={<Protected roles={["owner", "admin"]}><AuditLog /></Protected>} />
-          <Route path="/pengguna" element={<Protected roles={["owner"]}><Users /></Protected>} />
-          <Route path="/pengaturan" element={<Protected roles={["owner"]}><Settings /></Protected>} />
+          <Route path="/dashboard" element={<Protected roles={R_OWNER_ADMIN}><OwnerDashboard /></Protected>} />
+          <Route path="/pos" element={<Protected roles={R_POS}><POS /></Protected>} />
+          <Route path="/riwayat" element={<Protected roles={R_POS}><SalesHistory /></Protected>} />
+          <Route path="/produk" element={<Protected roles={R_OWNER_ADMIN}><Products /></Protected>} />
+          <Route path="/stok" element={<Protected roles={R_OPS}><Stock /></Protected>} />
+          <Route path="/pembelian" element={<Protected roles={R_OPS}><Purchases /></Protected>} />
+          <Route path="/pemotongan" element={<Protected roles={R_OPS}><Slaughter /></Protected>} />
+          <Route path="/produksi" element={<Protected roles={R_OPS}><Production /></Protected>} />
+          <Route path="/pelanggan" element={<Protected roles={R_POS}><Customers /></Protected>} />
+          <Route path="/supplier" element={<Protected roles={R_OWNER_ADMIN}><Suppliers /></Protected>} />
+          <Route path="/keuangan" element={<Protected roles={R_POS}><Finance /></Protected>} />
+          <Route path="/target" element={<Protected roles={R_OWNER_ADMIN}><Targets /></Protected>} />
+          <Route path="/laporan" element={<Protected roles={R_OWNER_ADMIN}><Reports /></Protected>} />
+          <Route path="/audit" element={<Protected roles={R_OWNER_ADMIN}><AuditLog /></Protected>} />
+          <Route path="/pengguna" element={<Protected roles={R_OWNER}><Users /></Protected>} />
+          <Route path="/pengaturan" element={<Protected roles={R_OWNER}><Settings /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </div>
   );
-}
-
-function RoleHome() {
-  const { user } = useAuth();
-  return <Navigate to={homeFor(user.role)} replace />;
 }
 
 export default App;

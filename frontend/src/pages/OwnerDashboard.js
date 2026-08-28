@@ -36,6 +36,14 @@ function Stat({ icon: Icon, label, value, sub, tone = "primary", testid }) {
   );
 }
 
+const TICK_SM = { fontSize: 11 };
+const TICK_MD = { fontSize: 12 };
+const TOOLTIP_STYLE = { borderRadius: 12, border: "1px solid hsl(var(--border))" };
+const AREA_MARGIN = { left: -10, right: 8 };
+const BAR_MARGIN = { left: -10 };
+const BAR_RADIUS = [6, 6, 0, 0];
+const jtFmt = (v) => `${v / 1000000}jt`;
+
 export default function OwnerDashboard() {
   const { data: d } = usePoll("/dashboard", 8000);
 
@@ -90,7 +98,7 @@ export default function OwnerDashboard() {
         <Card className="p-5 lg:col-span-2" data-testid="sales-chart">
           <h3 className="font-head font-bold mb-4">Grafik Penjualan 7 Hari</h3>
           <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={d.chart} margin={{ left: -10, right: 8 }}>
+            <AreaChart data={d.chart} margin={AREA_MARGIN}>
               <defs>
                 <linearGradient id="gOmzet" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
@@ -98,9 +106,9 @@ export default function OwnerDashboard() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-              <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(v) => `${v / 1000000}jt`} />
-              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))" }} />
+              <XAxis dataKey="label" tick={TICK_MD} stroke="hsl(var(--muted-foreground))" />
+              <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
+              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
               <Area type="monotone" dataKey="omzet" name="Omzet" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#gOmzet)" />
               <Area type="monotone" dataKey="laba" name="Laba" stroke="hsl(var(--success))" strokeWidth={2} fillOpacity={0} />
             </AreaChart>
@@ -113,12 +121,12 @@ export default function OwnerDashboard() {
         <Card className="p-5 lg:col-span-2" data-testid="product-perf">
           <h3 className="font-head font-bold mb-4">Performa Produk</h3>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={d.products_perf.map((p) => ({ ...p, label: CATEGORY_LABELS[p.category] || p.category }))} margin={{ left: -10 }}>
+            <BarChart data={d.products_perf.map((p) => ({ ...p, label: CATEGORY_LABELS[p.category] || p.category }))} margin={BAR_MARGIN}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-              <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(v) => `${v / 1000000}jt`} />
-              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={{ borderRadius: 12, border: "1px solid hsl(var(--border))" }} />
-              <Bar dataKey="penjualan" name="Penjualan" radius={[6, 6, 0, 0]}>
+              <XAxis dataKey="label" tick={TICK_SM} stroke="hsl(var(--muted-foreground))" />
+              <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
+              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
+              <Bar dataKey="penjualan" name="Penjualan" radius={BAR_RADIUS}>
                 {d.products_perf.map((p, i) => <Cell key={p.category} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
               </Bar>
             </BarChart>

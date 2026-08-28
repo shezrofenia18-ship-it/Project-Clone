@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
 import api from "@/lib/api";
 import {
-  LayoutDashboard, ShoppingCart, Package, Boxes, Truck, Scissors, Factory,
+  LayoutDashboard, ShoppingCart, Package, Boxes, Truck, Factory,
   Users as UsersIcon, Building2, Wallet, Target, FileBarChart, ScrollText,
   UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick, RefreshCw,
 } from "lucide-react";
@@ -23,7 +23,6 @@ const NAV = [
   { to: "/produk", label: "Produk & Harga", icon: Package, roles: ["owner", "admin"] },
   { to: "/stok", label: "Stok", icon: Boxes, roles: ["owner", "admin", "operator"] },
   { to: "/pembelian", label: "Pembelian", icon: Truck, roles: ["owner", "admin", "operator"] },
-  { to: "/pemotongan", label: "Pemotongan", icon: Scissors, roles: ["owner", "admin", "operator"] },
   { to: "/produksi", label: "Produksi Fillet", icon: Factory, roles: ["owner", "admin", "operator"] },
   { to: "/pelanggan", label: "Pelanggan", icon: UsersIcon, roles: ["owner", "admin", "kasir"] },
   { to: "/supplier", label: "Supplier", icon: Building2, roles: ["owner", "admin"] },
