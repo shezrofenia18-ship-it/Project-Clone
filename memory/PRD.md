@@ -28,6 +28,18 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Laporan (laba rugi, penjualan, stok) + export CSV + cetak. Audit log. Pengguna. Pengaturan (stok negatif, nama toko). Notifikasi.
 - Demo data realistis & terhubung. Testing: backend 25/25 pass, frontend core flows pass.
 
+## Implemented (2026-06 update)
+- Pembelian by TOTAL nominal supplier → estimasi harga beli/kg (total÷berat), modal efektif/kg, modal efektif/ekor (hpp_ekor). Owner tak input harga/kg manual.
+- Produk sampingan dapat dijual per pcs ATAU per kg (units ["kg","pcs"], price_pcs/hpp_pcs). POS EntryDialog toggle unit pcs.
+- Tambah produk sampingan "Paha Ayam".
+- Rename "Produksi Fillet" → "Produksi Potong" (nav + halaman).
+- Fix: cancel_sale kini mengembalikan stok pcs (delta_pcs). POS.js hook priceFor distabilkan via useCallback.
+- Testing agent iterasi 5: backend 27/27 pass, frontend 5/5 pass. pcs sale+cancel diverifikasi via API.
+
+## Known minor gaps (dari review iter 5, belum dikerjakan)
+- Dashboard products_perf belum agregasi volume unit pcs (penjualan/hpp/laba tetap benar; hanya counter volume kg/ekor).
+- create_purchase: item ekor=0 & berat>0 → hpp_ekor 0 diam-diam (guard div-by-zero ada).
+
 ## Backlog / Remaining
 - P1: PWA offline queue + sync (IndexedDB) — user setuju menyusul.
 - P1: WebSocket realtime (saat ini polling).

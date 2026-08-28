@@ -36,6 +36,8 @@ PRODUCTS = [
      "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
     ("Tulang Ayam", "sampingan", ["kg"], 0, 5000, 10000, 0, 3.0, 0, 1, True,
      "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
+    ("Paha Ayam", "sampingan", ["kg"], 0, 22000, 32000, 0, 10.0, 0, 3, True,
+     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
 ]
 
 CUSTOMERS = [
@@ -60,14 +62,24 @@ async def seed_demo(db):
     # products
     prod_by_cat = {}
     prod_ids = {}
+    PCS_PRICE = {"Ceker Ayam": 2000, "Kepala Ayam": 3000, "Ati Ampela": 4000, "Kulit Ayam": 3000, "Tulang Ayam": 2000, "Paha Ayam": 8000}
+    PCS_STOCK = {"Ceker Ayam": 120, "Kepala Ayam": 80, "Ati Ampela": 60, "Kulit Ayam": 40, "Tulang Ayam": 30, "Paha Ayam": 90}
     for (name, cat, units, buy, hpp, pkg, pekor, skg, sekor, minkg, byp, img) in PRODUCTS:
         pid = _id()
+        u = list(units)
+        price_pcs = 0
+        stock_pcs = 0
+        if byp:
+            u = ["kg", "pcs"]
+            price_pcs = PCS_PRICE.get(name, 0)
+            stock_pcs = PCS_STOCK.get(name, 0)
         doc = {
-            "id": pid, "name": name, "category": cat, "units": units,
+            "id": pid, "name": name, "category": cat, "units": u,
             "buy_price_kg": buy, "hpp_kg": hpp, "hpp_ekor": 0,
-            "price_kg": pkg, "price_ekor": pekor,
-            "stock_kg": skg, "stock_ekor": sekor,
-            "min_stock_kg": minkg, "min_stock_ekor": 0,
+            "hpp_pcs": round(hpp * 0.3) if byp else 0,
+            "price_kg": pkg, "price_ekor": pekor, "price_pcs": price_pcs,
+            "stock_kg": skg, "stock_ekor": sekor, "stock_pcs": stock_pcs,
+            "min_stock_kg": minkg, "min_stock_ekor": 0, "min_stock_pcs": 0,
             "image_url": img, "is_byproduct": byp, "active": True,
             "created_at": _now().isoformat(),
         }

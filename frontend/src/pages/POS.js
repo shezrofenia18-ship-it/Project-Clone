@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import api, { apiError } from "@/lib/api";
 import { useFetch } from "@/lib/hooks";
 import { Card } from "@/components/ui/card";
@@ -128,10 +128,10 @@ export default function POS() {
                 <div className="p-3">
                   <p className="font-semibold text-sm leading-tight truncate">{p.name}</p>
                   <p className="text-primary font-bold text-sm mt-1 tabular">
-                    {p.units.includes("kg") ? `${formatRupiah(p.price_kg)}/kg` : `${formatRupiah(p.price_ekor)}/ekor`}
+                    {p.units.includes("kg") ? `${formatRupiah(p.price_kg)}/kg` : p.units.includes("ekor") ? `${formatRupiah(p.price_ekor)}/ekor` : `${formatRupiah(p.price_pcs)}/pcs`}
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5 tabular">
-                    Stok {formatWeight(p.stock_kg)}{p.stock_ekor ? ` · ${formatNumber(p.stock_ekor)} ekor` : ""}
+                    Stok{p.units.includes("kg") ? ` ${formatWeight(p.stock_kg)}` : ""}{p.stock_ekor ? ` · ${formatNumber(p.stock_ekor)} ekor` : ""}{p.stock_pcs ? ` · ${formatNumber(p.stock_pcs)} pcs` : ""}
                   </p>
                 </div>
               </button>
@@ -241,14 +241,19 @@ export default function POS() {
 }
 
 function EntryDialog({ product, onClose, onAdd }) {
-  const hasKg = product.units.includes("kg");
-  const hasEkor = product.units.includes("ekor");
-  const [unit, setUnit] = useState(hasKg ? "kg" : "ekor");
+  const units = product.units && product.units.length ? product.units : ["kg"];
+  const priceFor = useCallback(
+    (u) => (u === "kg" ? product.price_kg : u === "ekor" ? product.price_ekor : product.price_pcs),
+    [product]
+  );
+  const [unit, setUnit] = useState(units[0]);
   const [qty, setQty] = useState("");
-  const [price, setPrice] = useState(hasKg ? product.price_kg : product.price_ekor);
+  const [price, setPrice] = useState(priceFor(units[0]));
 
-  useEffect(() => { setPrice(unit === "kg" ? product.price_kg : product.price_ekor); }, [unit, product]);
+  useEffect(() => { setPrice(priceFor(unit)); }, [unit, priceFor]);
 
+  const isWeight = unit === "kg";
+  const unitLabel = unit === "kg" ? "Berat (kg)" : unit === "ekor" ? "Jumlah (ekor)" : "Jumlah (pcs)";
   const qtyNum = Number(String(qty).replace(",", ".")) || 0;
   const subtotal = qtyNum * (Number(price) || 0);
 
@@ -270,15 +275,19 @@ function EntryDialog({ product, onClose, onAdd }) {
           <DialogDescription>Masukkan berat atau jumlah dan harga.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          {hasKg && hasEkor && (
-            <div className="grid grid-cols-2 gap-2">
-              <button data-testid="unit-kg" onClick={() => setUnit("kg")} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border font-semibold ${unit === "kg" ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}><Scale className="w-4 h-4" /> Per Kg</button>
-              <button data-testid="unit-ekor" onClick={() => setUnit("ekor")} className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border font-semibold ${unit === "ekor" ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}><Hash className="w-4 h-4" /> Per Ekor</button>
+          {units.length > 1 && (
+            <div className={`grid gap-2 ${units.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+              {units.map((u) => (
+                <button key={u} data-testid={`unit-${u}`} onClick={() => setUnit(u)}
+                  className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border font-semibold ${unit === u ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>
+                  {u === "kg" ? <Scale className="w-4 h-4" /> : <Hash className="w-4 h-4" />} {u === "kg" ? "Per Kg" : u === "ekor" ? "Per Ekor" : "Per Pcs"}
+                </button>
+              ))}
             </div>
           )}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs flex items-center gap-1"><ScanLine className="w-3 h-3" /> {unit === "kg" ? "Berat (kg)" : "Jumlah (ekor)"}</Label>
+              <Label className="text-xs flex items-center gap-1"><ScanLine className="w-3 h-3" /> {unitLabel}</Label>
               <Input data-testid="entry-qty" value={qty} onChange={(e) => setQty(e.target.value.replace(/[^0-9.,]/g, ""))}
                 placeholder="0" className="mt-1.5 h-12 text-xl font-bold tabular text-center" inputMode="decimal" />
             </div>
@@ -289,7 +298,7 @@ function EntryDialog({ product, onClose, onAdd }) {
             </div>
           </div>
 
-          {unit === "kg" && (
+          {isWeight ? (
             <div className="grid grid-cols-4 gap-1.5">
               {["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "del"].map((k) => (
                 <button key={k} data-testid={`keypad-${k}`} onClick={() => press(k === "," ? "." : k)}
@@ -298,8 +307,7 @@ function EntryDialog({ product, onClose, onAdd }) {
                 </button>
               ))}
             </div>
-          )}
-          {unit === "ekor" && (
+          ) : (
             <div className="flex items-center justify-center gap-4">
               <Button variant="outline" size="icon" onClick={() => setQty((q) => String(Math.max(0, (Number(q) || 0) - 1)))}><Minus className="w-4 h-4" /></Button>
               <span className="font-head font-extrabold text-3xl tabular w-16 text-center">{qtyNum || 0}</span>

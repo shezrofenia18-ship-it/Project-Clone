@@ -23,7 +23,7 @@ const NAV = [
   { to: "/produk", label: "Produk & Harga", icon: Package, roles: ["owner", "admin"] },
   { to: "/stok", label: "Stok", icon: Boxes, roles: ["owner", "admin", "operator"] },
   { to: "/pembelian", label: "Pembelian", icon: Truck, roles: ["owner", "admin", "operator"] },
-  { to: "/produksi", label: "Produksi Fillet", icon: Factory, roles: ["owner", "admin", "operator"] },
+  { to: "/produksi", label: "Produksi Potong", icon: Factory, roles: ["owner", "admin", "operator"] },
   { to: "/pelanggan", label: "Pelanggan", icon: UsersIcon, roles: ["owner", "admin", "kasir"] },
   { to: "/supplier", label: "Supplier", icon: Building2, roles: ["owner", "admin"] },
   { to: "/keuangan", label: "Keuangan", icon: Wallet, roles: ["owner", "admin", "kasir"] },

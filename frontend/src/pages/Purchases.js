@@ -51,14 +51,15 @@ export default function Purchases() {
 
 function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
   const [supplier, setSupplier] = useState("");
-  const [items, setItems] = useState([{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }]);
+  const [items, setItems] = useState([{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }]);
   const [transport, setTransport] = useState(0);
   const [other, setOther] = useState(0);
   const [paid, setPaid] = useState(0);
   const [busy, setBusy] = useState(false);
 
   const setItem = (i, k, v) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [k]: v } : it));
-  const birdValue = items.reduce((s, it) => s + Number(it.total_weight) * Number(it.buy_price_kg), 0);
+  const birdValue = items.reduce((s, it) => s + Number(it.total_price), 0);
+  const totalEkor = items.reduce((s, it) => s + Number(it.ekor), 0);
   const totalModal = birdValue + Number(transport) + Number(other);
   const totalWeight = items.reduce((s, it) => s + Number(it.total_weight), 0);
 
@@ -70,7 +71,7 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
     try {
       await api.post("/purchases", {
         supplier_id: supplier,
-        items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), buy_price_kg: Number(it.buy_price_kg) })),
+        items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price) })),
         transport_cost: Number(transport), other_cost: Number(other), paid: Number(paid),
       });
       toast.success("Pembelian tersimpan, stok bertambah"); onSaved();
@@ -98,11 +99,11 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
                 </Select></div>
                 <div className="col-span-2"><Input placeholder="Ekor" type="number" value={it.ekor} onChange={(e) => setItem(i, "ekor", e.target.value)} className="tabular" /></div>
                 <div className="col-span-3"><Input placeholder="Berat kg" type="number" value={it.total_weight} onChange={(e) => setItem(i, "total_weight", e.target.value)} className="tabular" /></div>
-                <div className="col-span-2"><Input placeholder="Rp/kg" type="number" value={it.buy_price_kg} onChange={(e) => setItem(i, "buy_price_kg", e.target.value)} className="tabular" /></div>
+                <div className="col-span-2"><Input placeholder="Total Rp" type="number" value={it.total_price} onChange={(e) => setItem(i, "total_price", e.target.value)} className="tabular" /></div>
                 <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, buy_price_kg: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
+            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><Label className="text-xs">Transport</Label><Input type="number" value={transport} onChange={(e) => setTransport(e.target.value)} className="mt-1 tabular" /></div>
@@ -110,9 +111,10 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
             <div><Label className="text-xs">Dibayar</Label><Input data-testid="pur-paid" type="number" value={paid} onChange={(e) => setPaid(e.target.value)} className="mt-1 tabular" /></div>
           </div>
           <div className="rounded-lg bg-accent p-3 text-sm space-y-1">
-            <div className="flex justify-between"><span>Nilai Ayam</span><span className="tabular">{formatRupiah(birdValue)}</span></div>
+            <div className="flex justify-between"><span>Nilai Ayam (total dibayar)</span><span className="tabular">{formatRupiah(birdValue)}</span></div>
             <div className="flex justify-between font-bold"><span>Total Modal</span><span className="tabular">{formatRupiah(totalModal)}</span></div>
-            <div className="flex justify-between text-muted-foreground"><span>Modal Efektif/kg</span><span className="tabular">{formatRupiah(totalWeight ? totalModal / totalWeight : 0)}</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>Perkiraan Harga/kg (otomatis)</span><span className="tabular">{formatRupiah(totalWeight ? totalModal / totalWeight : 0)}</span></div>
+            <div className="flex justify-between text-muted-foreground"><span>Modal Efektif/ekor</span><span className="tabular">{formatRupiah(totalEkor ? totalModal / totalEkor : 0)}</span></div>
           </div>
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-purchase" disabled={busy} onClick={save}>{busy ? "Menyimpan..." : "Simpan"}</Button></DialogFooter>

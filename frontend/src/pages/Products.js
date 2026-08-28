@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, formatPct, CATEGORY_LABELS } from "@/lib/format";
 import { Plus, Pencil } from "lucide-react";
 
-const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, price_kg: 0, price_ekor: 0, stock_kg: 0, stock_ekor: 0, min_stock_kg: 0, min_stock_ekor: 0, image_url: "", is_byproduct: false, active: true };
+const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, hpp_pcs: 0, price_kg: 0, price_ekor: 0, price_pcs: 0, stock_kg: 0, stock_ekor: 0, stock_pcs: 0, min_stock_kg: 0, min_stock_ekor: 0, min_stock_pcs: 0, image_url: "", is_byproduct: false, active: true };
 
 export default function Products() {
   const { data, reload } = useFetch("/products");
@@ -105,7 +105,7 @@ function ProductDialog({ init, onClose, onSaved }) {
           </div>
           <div><Label className="text-xs">Satuan</Label>
             <div className="flex gap-2 mt-1.5">
-              {["kg", "ekor"].map((u) => (
+              {["kg", "ekor", "pcs"].map((u) => (
                 <button key={u} type="button" onClick={() => toggleUnit(u)}
                   className={`px-3 py-1.5 rounded-lg text-sm border ${f.units.includes(u) ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>{u}</button>
               ))}
@@ -115,8 +115,11 @@ function ProductDialog({ init, onClose, onSaved }) {
           <div><Label className="text-xs">HPP/kg</Label><Input type="number" value={f.hpp_kg} onChange={num("hpp_kg")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">Harga Jual/kg</Label><Input data-testid="prod-price-kg" type="number" value={f.price_kg} onChange={num("price_kg")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">Harga Jual/ekor</Label><Input type="number" value={f.price_ekor} onChange={num("price_ekor")} className="mt-1 tabular" /></div>
+          <div><Label className="text-xs">Harga Jual/pcs</Label><Input type="number" value={f.price_pcs} onChange={num("price_pcs")} className="mt-1 tabular" /></div>
+          <div><Label className="text-xs">HPP/pcs</Label><Input type="number" value={f.hpp_pcs} onChange={num("hpp_pcs")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">Stok Awal (kg)</Label><Input type="number" value={f.stock_kg} onChange={num("stock_kg")} className="mt-1 tabular" disabled={!!init.id} /></div>
           <div><Label className="text-xs">Stok Awal (ekor)</Label><Input type="number" value={f.stock_ekor} onChange={num("stock_ekor")} className="mt-1 tabular" disabled={!!init.id} /></div>
+          <div><Label className="text-xs">Stok Awal (pcs)</Label><Input type="number" value={f.stock_pcs} onChange={num("stock_pcs")} className="mt-1 tabular" disabled={!!init.id} /></div>
           <div><Label className="text-xs">Min Stok (kg)</Label><Input type="number" value={f.min_stock_kg} onChange={num("min_stock_kg")} className="mt-1 tabular" /></div>
           <div className="col-span-2"><Label className="text-xs">URL Gambar</Label><Input value={f.image_url} onChange={(e) => set("image_url", e.target.value)} className="mt-1" /></div>
         </div>

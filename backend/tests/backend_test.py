@@ -200,17 +200,54 @@ class TestOperations:
         stock_before = float(prod["stock_kg"])
         body = {
             "supplier_id": sups[0]["id"],
-            "items": [{"product_id": prod["id"], "ekor": 10, "total_weight": 15.0, "buy_price_kg": 30000}],
-            "transport_cost": 20000, "other_cost": 0, "paid": 450000,
+            "items": [{"product_id": prod["id"], "ekor": 10, "total_weight": 15.0, "total_price": 450000}],
+            "transport_cost": 20000, "other_cost": 0, "paid": 470000,
         }
         r = requests.post(f"{API}/purchases", headers=_hdr(tokens["admin"]), json=body)
         assert r.status_code == 200, r.text
         j = r.json()
         assert j["effective_cost_kg"] > 0
+        assert j["effective_cost_ekor"] > 0
+        assert j["total_modal"] == 470000
+        # estimated buy price/kg from total 450000/15 = 30000
+        assert j["items"][0]["buy_price_kg"] == 30000
         # verify stock increased
         r2 = requests.get(f"{API}/products", headers=_hdr(tokens["admin"]))
         after = next(p for p in r2.json() if p["id"] == prod["id"])
         assert abs(float(after["stock_kg"]) - (stock_before + 15.0)) < 0.01
+
+    def test_paha_ayam_product_exists(self, products):
+        paha = next((p for p in products if p["name"] == "Paha Ayam"), None)
+        assert paha is not None, "Paha Ayam product missing"
+        assert "pcs" in (paha.get("units") or [])
+        assert "kg" in (paha.get("units") or [])
+        assert paha["price_pcs"] > 0
+        assert paha["price_kg"] > 0
+
+    def test_sale_pcs_unit_decrements_pcs_stock(self, tokens):
+        # re-fetch fresh product state (session-cached products list may be stale)
+        r0 = requests.get(f"{API}/products", headers=_hdr(tokens["owner"]))
+        fresh = r0.json()
+        pcs_prod = next((p for p in fresh if "pcs" in (p.get("units") or [])
+                         and float(p.get("stock_pcs", 0)) > 3 and float(p.get("price_pcs", 0)) > 0), None)
+        assert pcs_prod, "no pcs product with stock"
+        stock_kg_before = float(pcs_prod.get("stock_kg", 0))
+        stock_pcs_before = float(pcs_prod.get("stock_pcs", 0))
+        body = {
+            "txn_id": str(uuid.uuid4()),
+            "items": [{"product_id": pcs_prod["id"], "unit": "pcs", "qty": 2,
+                       "price": pcs_prod["price_pcs"]}],
+            "payment_method": "cash",
+        }
+        r = requests.post(f"{API}/sales", headers=_hdr(tokens["kasir"]), json=body)
+        assert r.status_code == 200, r.text
+        sale = r.json()
+        assert sale["items"][0]["unit"] == "pcs"
+        r2 = requests.get(f"{API}/products", headers=_hdr(tokens["kasir"]))
+        after = next(p for p in r2.json() if p["id"] == pcs_prod["id"])
+        assert abs(float(after["stock_pcs"]) - (stock_pcs_before - 2)) < 0.01
+        # kg stock untouched
+        assert abs(float(after["stock_kg"]) - stock_kg_before) < 0.01
 
     def test_create_slaughter(self, tokens, products):
         prod = next((p for p in products if float(p.get("stock_kg", 0)) > 2), products[0])

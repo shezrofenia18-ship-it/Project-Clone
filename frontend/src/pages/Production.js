@@ -21,7 +21,7 @@ export default function Production() {
 
   return (
     <div className="bam-fade">
-      <PageHeader title="Produksi Fillet" subtitle="Olah karkas menjadi fillet & produk sampingan"
+      <PageHeader title="Produksi Potong" subtitle="Olah karkas menjadi fillet & produk sampingan"
         actions={<Button data-testid="add-production" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" /> Produksi Baru</Button>} />
       <div className="grid gap-3">
         {(data || []).map((p) => (
@@ -73,7 +73,7 @@ function ProductionDialog({ source, outs, onClose, onSaved }) {
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="bg-popover max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Produksi Fillet</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Produksi Potong</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div><Label className="text-xs">Sumber (karkas)</Label>

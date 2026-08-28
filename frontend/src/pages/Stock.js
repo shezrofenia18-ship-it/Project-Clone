@@ -45,6 +45,7 @@ export default function Stock() {
                   <div className="flex items-end gap-4 mt-3">
                     <div><p className="text-[11px] text-muted-foreground">Berat</p><p className={`font-head font-extrabold text-xl tabular ${low ? "text-warning" : ""}`}>{formatWeight(p.stock_kg)}</p></div>
                     {p.units.includes("ekor") && <div><p className="text-[11px] text-muted-foreground">Ekor</p><p className="font-head font-extrabold text-xl tabular">{formatNumber(p.stock_ekor)}</p></div>}
+                    {p.units.includes("pcs") && <div><p className="text-[11px] text-muted-foreground">Pcs</p><p className="font-head font-extrabold text-xl tabular">{formatNumber(p.stock_pcs)}</p></div>}
                   </div>
                   <p className="text-xs text-muted-foreground mt-2 tabular">Nilai: {formatRupiah((p.stock_kg || 0) * (p.hpp_kg || 0))}</p>
                   {low && <Badge className="mt-2 bg-warning text-warning-foreground">Stok menipis</Badge>}
