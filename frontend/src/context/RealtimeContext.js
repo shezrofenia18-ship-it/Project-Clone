@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { devWarn } from "@/lib/log";
 
 /**
  * Realtime (WebSocket) untuk Berkah Ayam Mili.
@@ -68,7 +69,8 @@ export function RealtimeProvider({ children }) {
       const token = localStorage.getItem("bam_token");
       if (!token) return;
       let ws;
-      try { ws = new WebSocket(wsUrl(token)); } catch { schedule(); return; }
+      try { ws = new WebSocket(wsUrl(token)); }
+      catch (e) { devWarn("realtime.connect gagal, akan dicoba lagi", e); schedule(); return; }
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -78,8 +80,11 @@ export function RealtimeProvider({ children }) {
       };
       ws.onmessage = (ev) => {
         let msg;
-        try { msg = JSON.parse(ev.data); } catch { return; }
-        if (msg.type === "ping") { try { ws.send("ping"); } catch { /* socket sudah tutup */ } return; }
+        try { msg = JSON.parse(ev.data); } catch (e) { devWarn("realtime.onmessage bukan JSON", e); return; }
+        if (msg.type === "ping") {
+          try { ws.send("ping"); } catch (e) { devWarn("realtime.pong gagal (socket sudah tutup)", e); }
+          return;
+        }
         if (msg.type !== "invalidate") return;
         (msg.topics || []).forEach((t) => buffer.current.add(t));
         if (flushTimer.current) clearTimeout(flushTimer.current);
@@ -109,7 +114,7 @@ export function RealtimeProvider({ children }) {
       if (flushTimer.current) clearTimeout(flushTimer.current);
       const ws = wsRef.current;
       wsRef.current = null;
-      if (ws) { try { ws.close(); } catch { /* abaikan */ } }
+      if (ws) { try { ws.close(); } catch (e) { devWarn("realtime.close", e); } }
       setConnected(false);
     };
   }, [uid, flush]);

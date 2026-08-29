@@ -1,5 +1,7 @@
 // Offline transaction queue backed by localStorage. Server txn_id (unique index)
 // guarantees idempotency, so re-sending a queued sale never duplicates it.
+import { devWarn } from "@/lib/log";
+
 const KEY = "bam_offline_queue";
 const SYNC_KEY = "bam_last_sync";
 
@@ -7,13 +9,15 @@ function read(k, fallback) {
   try {
     const v = localStorage.getItem(k);
     return v ? JSON.parse(v) : fallback;
-  } catch {
+  } catch (e) {
+    devWarn(`offline.read(${k})`, e);
     return fallback;
   }
 }
 
 function write(k, v) {
-  try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ }
+  try { localStorage.setItem(k, JSON.stringify(v)); }
+  catch (e) { devWarn(`offline.write(${k}) - kemungkinan kuota localStorage penuh`, e); }
 }
 
 // Normalises legacy items (older builds stored only { body, queued_at }).
@@ -77,12 +81,13 @@ export const countFailed = (q) => q.filter((i) => i.status === "failed").length;
 
 // Catalog cache so POS can open & sell even when offline from the very first load.
 export function cacheCatalog(key, data) {
-  try { localStorage.setItem(`bam_cache_${key}`, JSON.stringify(data)); } catch { /* quota */ }
+  try { localStorage.setItem(`bam_cache_${key}`, JSON.stringify(data)); }
+  catch (e) { devWarn(`offline.cacheCatalog(${key}) - kemungkinan kuota localStorage penuh`, e); }
 }
 
 export function readCatalog(key) {
   try { const v = localStorage.getItem(`bam_cache_${key}`); return v ? JSON.parse(v) : null; }
-  catch { return null; }
+  catch (e) { devWarn(`offline.readCatalog(${key})`, e); return null; }
 }
 
 // Sync every pending item. A network error stops the run and keeps the item

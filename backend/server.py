@@ -446,6 +446,28 @@ async def list_products(user: dict = Depends(get_current_user)):
     return [clean(p) for p in prods]
 
 
+def _weight_guidance_item(p: dict) -> dict:
+    """Satu baris panduan berat/ekor untuk sebuah produk (dipisah agar mudah diuji)."""
+    used, source, dflt = resolve_avg_weight(p)
+    hpp_kg = float(p.get("hpp_kg", 0) or 0)
+    hpp_ekor = round(hpp_kg * used, 2) if used > 0 else float(p.get("hpp_ekor", 0) or 0)
+    price_ekor = float(p.get("price_ekor", 0) or 0)
+    profit = round(price_ekor - hpp_ekor, 2) if price_ekor > 0 else 0.0
+    return {
+        "id": p.get("id"), "name": p.get("name"),
+        "avg_weight_used": used, "avg_weight_source": source,
+        "avg_weight_default": dflt,
+        "avg_weight_override": float(p.get("avg_weight_override", 0) or 0),
+        "avg_weight_auto": float(p.get("avg_weight_ekor", 0) or 0),
+        "is_estimate": source == "perkiraan",
+        "hpp_kg": hpp_kg, "hpp_ekor": hpp_ekor, "price_ekor": price_ekor,
+        "profit_ekor": profit,
+        "margin_ekor": round(profit / price_ekor * 100, 2) if price_ekor > 0 else 0.0,
+        # laba per ekor sangat tipis / minus -> perlu ditinjau owner
+        "thin_margin": bool(price_ekor > 0 and (profit / price_ekor) < 0.05),
+    }
+
+
 @api.get("/products/weight-guidance")
 async def products_weight_guidance(user: dict = Depends(require_roles("owner", "admin"))):
     """Panduan berat/ekor: produk mana yang masih memakai perkiraan bawaan sistem.
@@ -454,28 +476,7 @@ async def products_weight_guidance(user: dict = Depends(require_roles("owner", "
     Selama belum dikonfirmasi, sistem TETAP memakai berat perkiraan (hpp_ekor != 0).
     """
     prods = await db.products.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
-    items = []
-    for p in prods:
-        if not sells_per_ekor(p):
-            continue
-        used, source, dflt = resolve_avg_weight(p)
-        hpp_kg = float(p.get("hpp_kg", 0) or 0)
-        hpp_ekor = round(hpp_kg * used, 2) if used > 0 else float(p.get("hpp_ekor", 0) or 0)
-        price_ekor = float(p.get("price_ekor", 0) or 0)
-        profit = round(price_ekor - hpp_ekor, 2) if price_ekor > 0 else 0.0
-        items.append({
-            "id": p.get("id"), "name": p.get("name"),
-            "avg_weight_used": used, "avg_weight_source": source,
-            "avg_weight_default": dflt,
-            "avg_weight_override": float(p.get("avg_weight_override", 0) or 0),
-            "avg_weight_auto": float(p.get("avg_weight_ekor", 0) or 0),
-            "is_estimate": source == "perkiraan",
-            "hpp_kg": hpp_kg, "hpp_ekor": hpp_ekor, "price_ekor": price_ekor,
-            "profit_ekor": profit,
-            "margin_ekor": round(profit / price_ekor * 100, 2) if price_ekor > 0 else 0.0,
-            # laba per ekor sangat tipis / minus -> perlu ditinjau owner
-            "thin_margin": bool(price_ekor > 0 and (profit / price_ekor) < 0.05),
-        })
+    items = [_weight_guidance_item(p) for p in prods if sells_per_ekor(p)]
     return {
         "total": len(items),
         "need_confirm": sum(1 for i in items if i["is_estimate"]),
@@ -1720,11 +1721,11 @@ async def serve_file(fid: str):
         raise HTTPException(404, "File tidak ditemukan")
     try:
         data, ct = get_object(rec["storage_path"])
+        return Response(content=data, media_type=rec.get("content_type", ct),
+                        headers={"Cache-Control": "public, max-age=86400"})
     except Exception as e:
         logger.error(f"Ambil file gagal: {e}")
         raise HTTPException(502, "Gagal memuat gambar")
-    return Response(content=data, media_type=rec.get("content_type", ct),
-                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 # ------------------------- wiring -------------------------

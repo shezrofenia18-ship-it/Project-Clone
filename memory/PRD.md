@@ -95,5 +95,14 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Teruji: testing agent backend **14/14 PASS** (berat perkiraan 6/6, WhatsApp 7/7, regresi 11/11).
 - Bersih-bersih data uji: 2 pembelian uji dihapus (stok & akumulator pulih), harga Ayam Kampung dikembalikan ke nilai demo (beli 45.000 · HPP 52.000 · jual 62.000).
 
+## Code review hardening (2026-08-29)
+- `pdf_reports.tgl/tgl_singkat`: tangkap `(TypeError, ValueError)` + validasi bulan → PDF tak bisa crash karena tanggal aneh.
+- `server.serve_file`: `Response` dibangun di dalam `try` (tidak ada variabel tak terdefinisi bila storage gagal); id tak dikenal tetap 404.
+- `realtime._decode`: inisialisasi `payload` eksplisit + guard `not payload`.
+- `products_weight_guidance` dipecah → helper `_weight_guidance_item(p)` (kompleksitas turun, perilaku identik).
+- Frontend: `src/lib/log.js` (`devWarn`, hanya aktif di dev) dipakai di catch yang sebelumnya membisu — `offline.js` (read/write/cacheCatalog/readCatalog), `RealtimeContext` (connect/onmessage/pong/close), `AuthContext` (cache user).
+- SENGAJA TIDAK diubah (dengan alasan): token di localStorage (wajib agar sesi kasir bertahan saat OFFLINE & reload PWA — ganti ke httpOnly cookie = rework auth, perlu izin user); penambahan dependency hook secara buta (WebSocket/FLUSH_MS/api/e/r = false positive, berisiko reconnect & polling berulang); `random` di `seed.py` (data demo, bukan nilai keamanan); refactor kompleksitas `daily_closing_pdf`/`seed_demo`/`Layout` (kosmetik, tanpa nilai untuk user); jumlah argumen `record_movement`/`apply_stock` (menyentuh banyak call site, risiko > manfaat).
+- Teruji: backend regresi **7/7 PASS** (weight-guidance identik, 4 endpoint PDF valid %PDF-, files 404, WS token invalid ditolak, regresi inti 11/11), frontend **7/7 PASS** (sesi bertahan, LIVE aktif, RBAC kasir, 0 error konsol, 0 warning `[bam]`).
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

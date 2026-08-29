@@ -95,11 +95,12 @@ async def emit(topics: Iterable[str] | str, payload: Optional[Dict[str, Any]] = 
 def _decode(token: Optional[str]) -> Optional[Dict[str, Any]]:
     if not token:
         return None
+    payload: Optional[Dict[str, Any]] = None
     try:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
     except Exception:
         return None
-    if not payload.get("sub") or payload.get("type") != "access":
+    if not payload or not payload.get("sub") or payload.get("type") != "access":
         return None
     return {
         "id": payload.get("sub"),

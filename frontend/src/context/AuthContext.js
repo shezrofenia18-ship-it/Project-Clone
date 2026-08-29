@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import api, { apiError } from "@/lib/api";
+import { devWarn } from "@/lib/log";
 
 const AuthContext = createContext(null);
 const USER_KEY = "bam_user";
@@ -8,13 +9,15 @@ const readCachedUser = () => {
   try {
     const v = localStorage.getItem(USER_KEY);
     return v ? JSON.parse(v) : null;
-  } catch {
+  } catch (e) {
+    devWarn("auth.readCachedUser", e);
     return null;
   }
 };
 
 const writeCachedUser = (u) => {
-  try { localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch { /* quota */ }
+  try { localStorage.setItem(USER_KEY, JSON.stringify(u)); }
+  catch (e) { devWarn("auth.writeCachedUser - kemungkinan kuota localStorage penuh", e); }
 };
 
 export function AuthProvider({ children }) {

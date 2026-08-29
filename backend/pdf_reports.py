@@ -63,12 +63,14 @@ def pct(n) -> str:
 
 
 def tgl(iso: str) -> str:
-    """'2026-08-28' -> '28 Agustus 2026'."""
+    """'2026-08-28' -> '28 Agustus 2026'. Nilai aneh dikembalikan apa adanya."""
     if not iso:
         return "-"
     try:
         d = datetime.fromisoformat(str(iso)[:10])
-    except ValueError:
+    except (TypeError, ValueError):
+        return str(iso)
+    if not 1 <= d.month <= 12:
         return str(iso)
     return f"{d.day} {BULAN[d.month - 1]} {d.year}"
 
@@ -78,7 +80,7 @@ def tgl_singkat(iso: str) -> str:
         return "-"
     try:
         d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
-    except ValueError:
+    except (TypeError, ValueError):
         return str(iso)[:10]
     return d.strftime("%d/%m/%Y")
 
