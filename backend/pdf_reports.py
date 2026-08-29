@@ -42,6 +42,7 @@ S_SIGN = ParagraphStyle("sg", fontName="Helvetica", fontSize=8.5, leading=12, te
 
 # ------------------------- formatting helpers -------------------------
 def rp(n) -> str:
+    v = 0
     try:
         v = int(round(float(n or 0)))
     except (TypeError, ValueError):
@@ -50,6 +51,7 @@ def rp(n) -> str:
 
 
 def num(n, digits=0) -> str:
+    v = 0.0
     try:
         v = float(n or 0)
     except (TypeError, ValueError):
@@ -66,11 +68,12 @@ def tgl(iso: str) -> str:
     """'2026-08-28' -> '28 Agustus 2026'. Nilai aneh dikembalikan apa adanya."""
     if not iso:
         return "-"
+    d = None
     try:
         d = datetime.fromisoformat(str(iso)[:10])
     except (TypeError, ValueError):
-        return str(iso)
-    if not 1 <= d.month <= 12:
+        d = None
+    if d is None or not 1 <= d.month <= 12:
         return str(iso)
     return f"{d.day} {BULAN[d.month - 1]} {d.year}"
 
@@ -78,9 +81,12 @@ def tgl(iso: str) -> str:
 def tgl_singkat(iso: str) -> str:
     if not iso:
         return "-"
+    d = None
     try:
         d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
     except (TypeError, ValueError):
+        d = None
+    if d is None:
         return str(iso)[:10]
     return d.strftime("%d/%m/%Y")
 

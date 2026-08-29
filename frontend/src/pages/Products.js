@@ -22,6 +22,26 @@ const usedWeight = (p) => Number(p.avg_weight_override) > 0
   ? Number(p.avg_weight_override)
   : Number(p.avg_weight_used || p.avg_weight_ekor || 0);
 
+// Prioritas berat dalam dialog produk (tanpa ternary bersarang, mudah dibaca).
+function pickWeight(override, auto, dflt) {
+  if (override > 0) return override;
+  if (auto > 0) return auto;
+  return dflt;
+}
+
+// Keterangan sumber berat per ekor pada dialog produk.
+function weightNote(f, autoAvg, dfltAvg) {
+  if (autoAvg > 0) {
+    return `Otomatis dari ayam yang pernah masuk stok: ${formatNumber(autoAvg, 3)} kg/ekor `
+      + `(${formatNumber(f.cum_ekor_in)} ekor · ${formatWeight(f.cum_weight_in)}).`;
+  }
+  if (dfltAvg > 0) {
+    return "Belum ada data pembelian per ekor. Selama dibiarkan 0, sistem tetap memakai berat perkiraan "
+      + `bawaan ${formatNumber(dfltAvg, 2)} kg/ekor agar HPP & laba per ekor tidak nol.`;
+  }
+  return "Belum ada data pembelian per ekor untuk produk ini — isi manual agar HPP per ekor akurat.";
+}
+
 // Panduan: produk yang berat/ekornya masih memakai perkiraan bawaan sistem.
 // Sistem TETAP menghitung HPP/ekor dari perkiraan ini walau owner tidak mengisi,
 // jadi angka laba tidak pernah salah 100% seperti sebelumnya.
@@ -222,9 +242,7 @@ function ProductDialog({ init, onClose, onSaved }) {
   const num = (k) => (e) => set(k, Number(e.target.value));
   const autoAvg = Number(f.avg_weight_ekor || 0);
   const dfltAvg = Number(f.avg_weight_default || 0);
-  const effAvg = Number(f.avg_weight_override) > 0
-    ? Number(f.avg_weight_override)
-    : (autoAvg > 0 ? autoAvg : dfltAvg);
+  const effAvg = pickWeight(Number(f.avg_weight_override || 0), autoAvg, dfltAvg);
   const usingEstimate = Number(f.avg_weight_override) <= 0 && autoAvg <= 0 && dfltAvg > 0;
 
   const onUpload = async (e) => {
@@ -300,11 +318,7 @@ function ProductDialog({ init, onClose, onSaved }) {
               value={f.avg_weight_override || 0} onChange={num("avg_weight_override")}
               placeholder="0 = otomatis" className="mt-1.5 tabular" />
             <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
-              {autoAvg > 0
-                ? `Otomatis dari ayam yang pernah masuk stok: ${formatNumber(autoAvg, 3)} kg/ekor (${formatNumber(f.cum_ekor_in)} ekor · ${formatWeight(f.cum_weight_in)}).`
-                : (dfltAvg > 0
-                  ? `Belum ada data pembelian per ekor. Selama dibiarkan 0, sistem tetap memakai berat perkiraan bawaan ${formatNumber(dfltAvg, 2)} kg/ekor agar HPP & laba per ekor tidak nol.`
-                  : "Belum ada data pembelian per ekor untuk produk ini — isi manual agar HPP per ekor akurat.")}
+              {weightNote(f, autoAvg, dfltAvg)}
               {" "}Isi 0 untuk memakai perhitungan otomatis/perkiraan.
             </p>
             <p className="text-xs mt-2">

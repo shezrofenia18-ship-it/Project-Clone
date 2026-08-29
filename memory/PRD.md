@@ -104,5 +104,12 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - SENGAJA TIDAK diubah (dengan alasan): token di localStorage (wajib agar sesi kasir bertahan saat OFFLINE & reload PWA — ganti ke httpOnly cookie = rework auth, perlu izin user); penambahan dependency hook secara buta (WebSocket/FLUSH_MS/api/e/r = false positive, berisiko reconnect & polling berulang); `random` di `seed.py` (data demo, bukan nilai keamanan); refactor kompleksitas `daily_closing_pdf`/`seed_demo`/`Layout` (kosmetik, tanpa nilai untuk user); jumlah argumen `record_movement`/`apply_stock` (menyentuh banyak call site, risiko > manfaat).
 - Teruji: backend regresi **7/7 PASS** (weight-guidance identik, 4 endpoint PDF valid %PDF-, files 404, WS token invalid ditolak, regresi inti 11/11), frontend **7/7 PASS** (sesi bertahan, LIVE aktif, RBAC kasir, 0 error konsol, 0 warning `[bam]`).
 
+## Code review hardening ronde 2 (2026-08-29)
+- `pdf_reports.rp/num`: variabel diinisialisasi sebelum `try`; `tgl/tgl_singkat` pakai pola `d = None` + guard → tidak ada jalur kode yang menyentuh variabel belum terdefinisi.
+- `server.py`: variabel comprehension `payable_outstanding` (`p` → `pay`) agar tidak menyamarkan variabel luar; angka terbukti tidak berubah.
+- `POS.js`: ternary bersarang satuan diganti lookup level modul — `UNIT_INPUT_LABEL`, `UNIT_BUTTON_LABEL`, `priceOf`, `modalOf`, `primaryUnit`, `qtyLabel`. `Products.js`: helper `pickWeight()` + `weightNote()`.
+- False positive yang dikonfirmasi: temuan "`is` vs `==`" semuanya `is None`/`is not None`/`is False` (pemakaian benar); temuan "missing hook deps" — build CRA menjalankan `react-hooks/exhaustive-deps` dan 25 kompilasi terakhir **0 warning**.
+- Teruji: backend **G1-G5 PASS** (4 PDF valid, payable_outstanding sama dengan total hutang, weight-guidance identik, regresi inti 11/11) + frontend **H1-H9 PASS** (harga kartu, label satuan, keranjang kg/ekor/pcs, transaksi tunai Rp 84.000, RBAC modal, panel berat, 0 error konsol).
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

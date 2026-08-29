@@ -18,6 +18,16 @@ import { useOffline } from "@/context/OfflineContext";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
 import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff } from "lucide-react";
+
+// Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
+// ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
+const UNIT_INPUT_LABEL = { kg: "Berat (kg)", ekor: "Jumlah (ekor)", pcs: "Jumlah (pcs)" };
+const UNIT_BUTTON_LABEL = { kg: "Per Kg", ekor: "Per Ekor", pcs: "Per Pcs" };
+const priceOf = (p, u) => Number(({ kg: p.price_kg, ekor: p.price_ekor, pcs: p.price_pcs })[u] || 0);
+const modalOf = (p, u) => Number(({ kg: p.hpp_kg, ekor: p.hpp_ekor, pcs: p.hpp_pcs })[u] || 0);
+// Satuan utama yang dipakai untuk menampilkan harga di kartu produk.
+const primaryUnit = (p) => ["kg", "ekor", "pcs"].find((u) => (p.units || []).includes(u)) || "kg";
+const qtyLabel = (unit, qty) => (unit === "kg" ? formatWeight(qty, 3) : `${qty} ${unit}`);
 import PendingSales from "@/components/PendingSales";
 
 const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "potongan", "sampingan"];
@@ -175,7 +185,7 @@ export default function POS() {
                 <div className="p-3">
                   <p className="font-semibold text-sm leading-tight truncate">{p.name}</p>
                   <p className="text-primary font-bold text-sm mt-1 tabular">
-                    {p.units.includes("kg") ? `${formatRupiah(p.price_kg)}/kg` : p.units.includes("ekor") ? `${formatRupiah(p.price_ekor)}/ekor` : `${formatRupiah(p.price_pcs)}/pcs`}
+                    {`${formatRupiah(priceOf(p, primaryUnit(p)))}/${primaryUnit(p)}`}
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5 tabular">
                     Stok{p.units.includes("kg") ? ` ${formatWeight(p.stock_kg)}` : ""}{p.stock_ekor ? ` · ${formatNumber(p.stock_ekor)} ekor` : ""}{p.stock_pcs ? ` · ${formatNumber(p.stock_pcs)} pcs` : ""}
@@ -206,7 +216,7 @@ export default function POS() {
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold truncate">{i.name}</p>
                 <p className="text-xs text-muted-foreground tabular">
-                  {i.unit === "kg" ? formatWeight(i.qty, 3) : i.unit === "pcs" ? `${i.qty} pcs` : `${i.qty} ekor`} × {formatRupiah(i.price)}
+                  {qtyLabel(i.unit, i.qty)} × {formatRupiah(i.price)}
                 </p>
               </div>
               <p className="text-sm font-bold tabular">{formatRupiah(i.qty * i.price)}</p>
@@ -345,10 +355,7 @@ function EntryDialog({ product, onClose, onAdd }) {
   // Kasir tidak boleh melihat modal/HPP & laba (hanya owner & admin).
   const canSeeCost = user.role === "owner" || user.role === "admin";
   const units = product.units && product.units.length ? product.units : ["kg"];
-  const priceFor = useCallback(
-    (u) => (u === "kg" ? product.price_kg : u === "ekor" ? product.price_ekor : product.price_pcs),
-    [product]
-  );
+  const priceFor = useCallback((u) => priceOf(product, u), [product]);
   const [unit, setUnit] = useState(units[0]);
   const [qty, setQty] = useState("");
   const [price, setPrice] = useState(priceFor(units[0]));
@@ -356,7 +363,7 @@ function EntryDialog({ product, onClose, onAdd }) {
   useEffect(() => { setPrice(priceFor(unit)); }, [unit, priceFor]);
 
   const isWeight = unit === "kg";
-  const unitLabel = unit === "kg" ? "Berat (kg)" : unit === "ekor" ? "Jumlah (ekor)" : "Jumlah (pcs)";
+  const unitLabel = UNIT_INPUT_LABEL[unit] || UNIT_INPUT_LABEL.kg;
   const qtyNum = Number(String(qty).replace(",", ".")) || 0;
   const subtotal = qtyNum * (Number(price) || 0);
 
@@ -383,7 +390,7 @@ function EntryDialog({ product, onClose, onAdd }) {
               {units.map((u) => (
                 <button key={u} data-testid={`unit-${u}`} onClick={() => setUnit(u)}
                   className={`flex items-center justify-center gap-2 py-2.5 rounded-lg border font-semibold ${unit === u ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>
-                  {u === "kg" ? <Scale className="w-4 h-4" /> : <Hash className="w-4 h-4" />} {u === "kg" ? "Per Kg" : u === "ekor" ? "Per Ekor" : "Per Pcs"}
+                  {u === "kg" ? <Scale className="w-4 h-4" /> : <Hash className="w-4 h-4" />} {UNIT_BUTTON_LABEL[u] || u}
                 </button>
               ))}
             </div>
@@ -403,7 +410,7 @@ function EntryDialog({ product, onClose, onAdd }) {
 
           {(() => {
             if (!canSeeCost) return null;
-            const modal = unit === "ekor" ? product.hpp_ekor : unit === "pcs" ? product.hpp_pcs : product.hpp_kg;
+            const modal = modalOf(product, unit);
             const estimate = unit === "ekor" && product.avg_weight_source === "perkiraan";
             return modal > 0 ? (
               <p data-testid="entry-modal" className="text-xs text-muted-foreground -mt-1">

@@ -1415,7 +1415,7 @@ async def _closing_snapshot(d: str) -> dict:
                      "hutang_baru": round(hutang_baru, 2)},
         "stock_items": stock_items, "stock_value": round(stock_value, 2),
         "receivable_outstanding": round(sum(float(r.get("remaining", 0) or 0) for r in receivables_open), 2),
-        "payable_outstanding": round(sum(float(p.get("remaining", 0) or 0) for p in payables_open), 2),
+        "payable_outstanding": round(sum(float(pay.get("remaining", 0) or 0) for pay in payables_open), 2),
         "target_omzet": t_omzet,
         "target_achievement": round(omzet / t_omzet * 100, 2) if t_omzet else 0,
     }
