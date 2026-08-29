@@ -45,7 +45,7 @@ const BAR_RADIUS = [6, 6, 0, 0];
 const jtFmt = (v) => `${v / 1000000}jt`;
 
 export default function OwnerDashboard() {
-  const { data: d } = usePoll("/dashboard", 8000);
+  const { data: d } = usePoll("/dashboard", 8000, ["dashboard"]);
 
   if (!d) {
     return (

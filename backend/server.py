@@ -11,7 +11,7 @@ import requests
 from datetime import timedelta
 from typing import List, Optional, Any, Dict
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, WebSocket
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -26,6 +26,7 @@ from auth import (
     now_jkt,
 )
 from seed import seed_demo, ensure_potong_parts
+from realtime import manager as rt_manager, emit as rt_emit, ws_handler
 import pdf_reports
 
 logging.basicConfig(level=logging.INFO)
@@ -107,6 +108,8 @@ async def add_activity(atype: str, title: str, message: str, amount: float = 0, 
         "id": new_id(), "type": atype, "title": title, "message": message,
         "amount": amount, "user": user, "date": today_str(), "created_at": iso_now(),
     })
+    # Setiap aktivitas bisnis (jual/beli/potong/bayar) mengubah angka dashboard.
+    await rt_emit(["dashboard", "activities"], {"title": title})
 
 
 async def add_notification(ntype: str, title: str, message: str, level: str = "info"):
@@ -114,6 +117,7 @@ async def add_notification(ntype: str, title: str, message: str, level: str = "i
         "id": new_id(), "type": ntype, "title": title, "message": message,
         "level": level, "read": False, "created_at": iso_now(),
     })
+    await rt_emit(["notifications"], {"title": title, "level": level})
 
 
 async def log_audit(user: dict, action: str, entity: str, entity_id: str, before=None, after=None):
@@ -157,7 +161,77 @@ async def apply_stock(product, delta_ekor, delta_kg, mtype, user, ref, allow_neg
     if min_kg > 0 and after_kg <= min_kg and delta_kg < 0:
         await add_activity("stock_low", "Stok Menipis", f"Stok {product['name']} tersisa {after_kg} kg", 0, user)
         await add_notification("stock_low", "Stok Menipis", f"Stok {product['name']} tersisa {after_kg} kg", "warning")
+    # POS & halaman stok langsung ikut berubah tanpa menunggu polling.
+    await rt_emit(["stock", "products"], {"product_id": product["id"]})
     return product
+
+
+# ------------------- HPP per ekor berbasis berat perkiraan -------------------
+# Toko menjual ayam PER EKOR dengan harga tertentu, sedangkan pembelian selalu
+# ditimbang. Jadi HPP/ekor dihitung: HPP/kg x berat perkiraan per ekor.
+# Berat perkiraan diambil dari rata-rata seluruh ayam yang pernah MASUK STOK
+# (akumulator cum_weight_in / cum_ekor_in), atau dari override manual owner.
+def effective_avg_weight(product: dict) -> float:
+    ov = float(product.get("avg_weight_override", 0) or 0)
+    if ov > 0:
+        return round(ov, 3)
+    return round(float(product.get("avg_weight_ekor", 0) or 0), 3)
+
+
+async def recompute_avg_weight(product_id: str, add_ekor: float = 0.0, add_weight: float = 0.0,
+                               set_hpp_kg: Optional[float] = None) -> dict:
+    """Perbarui akumulator ayam masuk lalu hitung ulang berat rata-rata & HPP/ekor.
+
+    add_ekor/add_weight boleh negatif (mis. saat pembelian dikoreksi/dihapus).
+    """
+    p = await db.products.find_one({"id": product_id})
+    if not p:
+        return {}
+    cum_ekor = max(round(float(p.get("cum_ekor_in", 0) or 0) + add_ekor, 3), 0.0)
+    cum_weight = max(round(float(p.get("cum_weight_in", 0) or 0) + add_weight, 3), 0.0)
+    auto_avg = round(cum_weight / cum_ekor, 3) if cum_ekor > 0 else 0.0
+    hpp_kg = float(p.get("hpp_kg", 0) or 0) if set_hpp_kg is None else float(set_hpp_kg)
+    override = float(p.get("avg_weight_override", 0) or 0)
+    avg_used = round(override, 3) if override > 0 else auto_avg
+    updates = {
+        "cum_ekor_in": cum_ekor,
+        "cum_weight_in": cum_weight,
+        "avg_weight_ekor": auto_avg,
+        "avg_weight_used": avg_used,
+        "avg_weight_source": "manual" if override > 0 else "auto",
+        "hpp_kg": round(hpp_kg, 2),
+        # Kalau belum ada data berat sama sekali, jangan hapus HPP/ekor yang
+        # sudah diisi manual oleh owner.
+        "hpp_ekor": round(hpp_kg * avg_used, 2) if avg_used > 0 else round(float(p.get("hpp_ekor", 0) or 0), 2),
+    }
+    await db.products.update_one({"id": product_id}, {"$set": updates})
+    return {**p, **updates}
+
+
+async def migrate_avg_weights():
+    """Sekali jalan: bangun akumulator berat/ekor dari seluruh riwayat pembelian."""
+    # Bagian ini aman dijalankan berulang: memastikan semua produk punya field berat.
+    for field, default in (("avg_weight_override", 0), ("avg_weight_ekor", 0),
+                           ("avg_weight_used", 0), ("avg_weight_source", "auto"),
+                           ("cum_ekor_in", 0), ("cum_weight_in", 0)):
+        await db.products.update_many({field: {"$exists": False}}, {"$set": {field: default}})
+    if await get_setting("avg_weight_migrated_v1", False):
+        return
+    agg: Dict[str, List[float]] = {}
+    purchases = await db.purchases.find({}).to_list(100000)
+    for pur in purchases:
+        for it in pur.get("items", []) or []:
+            a = agg.setdefault(it.get("product_id"), [0.0, 0.0])
+            a[0] += float(it.get("ekor", 0) or 0)
+            a[1] += float(it.get("total_weight", 0) or 0)
+    await db.products.update_many({}, {"$set": {"cum_ekor_in": 0, "cum_weight_in": 0}})
+    for pid, (e, w) in agg.items():
+        if not pid:
+            continue
+        await recompute_avg_weight(pid, add_ekor=e, add_weight=w)
+    await db.settings.update_one({"key": "avg_weight_migrated_v1"},
+                                 {"$set": {"value": True}}, upsert=True)
+    logger.info("Migrasi berat rata-rata/ekor selesai untuk %s produk", len(agg))
 
 
 # ------------------------- models -------------------------
@@ -181,6 +255,9 @@ class ProductBody(BaseModel):
     image_url: str = ""
     is_byproduct: bool = False
     active: bool = True
+    # Berat perkiraan per ekor yang di-set manual owner. None = jangan diubah,
+    # 0 = kembali ke perhitungan otomatis dari rata-rata pembelian.
+    avg_weight_override: Optional[float] = None
 
 
 class CustomerBody(BaseModel):
@@ -306,9 +383,15 @@ async def create_product(body: ProductBody, user: dict = Depends(require_roles("
     doc = body.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = iso_now()
+    doc["avg_weight_override"] = float(doc.get("avg_weight_override") or 0)
+    doc.setdefault("cum_ekor_in", 0)
+    doc.setdefault("cum_weight_in", 0)
+    doc.setdefault("avg_weight_ekor", 0)
     await db.products.insert_one(doc)
+    await recompute_avg_weight(doc["id"])
     await log_audit(user, "create", "product", doc["id"], None, {"name": doc["name"]})
-    return clean(doc)
+    await rt_emit(["products", "stock", "dashboard"])
+    return clean(await db.products.find_one({"id": doc["id"]}))
 
 
 @api.put("/products/{pid}")
@@ -316,16 +399,41 @@ async def update_product(pid: str, body: ProductBody, user: dict = Depends(requi
     existing = await db.products.find_one({"id": pid})
     if not existing:
         raise HTTPException(404, "Produk tidak ditemukan")
-    updates = body.model_dump()
+    updates = body.model_dump(exclude_none=True)
     for f in ["buy_price_kg", "hpp_kg", "price_kg", "price_ekor"]:
-        if existing.get(f) != updates.get(f):
+        if f in updates and existing.get(f) != updates.get(f):
             await db.price_history.insert_one({
                 "id": new_id(), "product_id": pid, "product_name": existing["name"], "field": f,
                 "old_value": existing.get(f, 0), "new_value": updates.get(f, 0),
                 "date": today_str(), "created_at": iso_now(), "user": user["name"],
             })
     await db.products.update_one({"id": pid}, {"$set": updates})
+    # HPP/ekor selalu diturunkan dari HPP/kg x berat perkiraan supaya konsisten.
+    await recompute_avg_weight(pid)
     await log_audit(user, "update", "product", pid, clean(existing), updates)
+    await rt_emit(["products", "stock", "dashboard"])
+    return clean(await db.products.find_one({"id": pid}))
+
+
+class AvgWeightBody(BaseModel):
+    # 0 (atau kosong) = kembali ke otomatis
+    avg_weight_override: float = 0
+
+
+@api.post("/products/{pid}/avg-weight")
+async def set_product_avg_weight(pid: str, body: AvgWeightBody,
+                                 user: dict = Depends(require_roles("owner", "admin"))):
+    """Set / reset berat perkiraan per ekor. Kirim 0 untuk kembali otomatis."""
+    existing = await db.products.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    ov = max(float(body.avg_weight_override or 0), 0.0)
+    await db.products.update_one({"id": pid}, {"$set": {"avg_weight_override": round(ov, 3)}})
+    updated = await recompute_avg_weight(pid)
+    await log_audit(user, "update", "product_avg_weight", pid,
+                    {"avg_weight_override": existing.get("avg_weight_override", 0)},
+                    {"avg_weight_override": ov, "hpp_ekor": updated.get("hpp_ekor")})
+    await rt_emit(["products", "dashboard"])
     return clean(await db.products.find_one({"id": pid}))
 
 
@@ -439,10 +547,11 @@ async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
         await apply_stock(product, it.ekor, it.total_weight, "pembelian", user["name"], pid)
         share = round(total_modal * (it.total_price / total_bird_value), 2) if total_bird_value else it.total_price
         item_hpp_kg = round(share / it.total_weight, 2) if it.total_weight else eff_cost_kg
-        item_hpp_ekor = round(share / it.ekor, 2) if it.ekor else 0
         item_buy_kg = round(it.total_price / it.total_weight, 2) if it.total_weight else 0
-        await db.products.update_one({"id": it.product_id}, {"$set": {
-            "buy_price_kg": item_buy_kg, "hpp_kg": item_hpp_kg, "hpp_ekor": item_hpp_ekor}})
+        await db.products.update_one({"id": it.product_id}, {"$set": {"buy_price_kg": item_buy_kg}})
+        # Berat/ekor diakumulasi dari semua ayam masuk → HPP/ekor otomatis.
+        await recompute_avg_weight(it.product_id, add_ekor=it.ekor,
+                                   add_weight=it.total_weight, set_hpp_kg=item_hpp_kg)
         last_prices[product["category"]] = item_buy_kg
     await db.suppliers.update_one({"id": body.supplier_id}, {
         "$set": {"last_prices": last_prices},
@@ -465,6 +574,9 @@ async def _reverse_purchase(purchase: dict):
         if product:
             await apply_stock(product, -it.get("ekor", 0), -it.get("total_weight", 0),
                               "koreksi", "system", purchase["id"], allow_negative=True)
+            # Tarik kembali kontribusinya ke rata-rata berat/ekor.
+            await recompute_avg_weight(it["product_id"], add_ekor=-float(it.get("ekor", 0) or 0),
+                                       add_weight=-float(it.get("total_weight", 0) or 0))
     await db.expenses.delete_many({"ref": purchase["id"], "category": "Pembelian Ayam"})
     await db.payables.delete_many({"purchase_id": purchase["id"]})
     await db.suppliers.update_one({"id": purchase["supplier_id"]}, {"$inc": {
@@ -684,6 +796,7 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
     if total >= 1000000:
         await add_notification("big_sale", "Transaksi Besar", f"{user['name']} - Rp {int(total):,}", "success")
     await log_audit(user, "create", "sale", sid, None, {"total": total})
+    await rt_emit(["sales", "dashboard", "stock", "receivables"], {"total": total, "id": sid})
     return clean(doc)
 
 
@@ -707,6 +820,7 @@ async def cancel_sale(sid: str, user: dict = Depends(require_roles("owner", "adm
     await add_activity("cancel", "Transaksi Dibatalkan", f"Transaksi {sid[:8]} dibatalkan", sale["total"], user["name"])
     await add_notification("cancel", "Transaksi Dibatalkan", f"Rp {int(sale['total']):,} oleh {user['name']}", "danger")
     await log_audit(user, "cancel", "sale", sid, {"status": "selesai"}, {"status": "batal"})
+    await rt_emit(["sales", "dashboard", "stock", "receivables"], {"id": sid})
     return {"ok": True}
 
 
@@ -745,6 +859,7 @@ async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("
     doc.update({"id": new_id(), "date": body.date or today_str(), "created_by": user["name"], "created_at": iso_now()})
     await db.expenses.insert_one(doc)
     await log_audit(user, "create", "expense", doc["id"], None, {"amount": body.amount})
+    await rt_emit(["expenses", "dashboard"])
     return clean(doc)
 
 
@@ -812,6 +927,7 @@ async def set_target(body: TargetBody, user: dict = Depends(require_roles("owner
     doc = body.model_dump()
     doc["date"] = d
     await db.targets.update_one({"date": d}, {"$set": doc}, upsert=True)
+    await rt_emit(["dashboard", "targets"])
     return clean(await db.targets.find_one({"date": d}))
 
 
@@ -831,6 +947,7 @@ async def list_notifications(user: dict = Depends(get_current_user)):
 @api.post("/notifications/read-all")
 async def read_all_notifications(user: dict = Depends(get_current_user)):
     await db.notifications.update_many({"read": False}, {"$set": {"read": True}})
+    await rt_emit(["notifications"])
     return {"ok": True}
 
 
@@ -1050,6 +1167,235 @@ async def report_stock_pdf(user: dict = Depends(require_roles("owner", "admin"))
     return _pdf_response(pdf, f"nilai-stok_{today_str()}.pdf")
 
 
+# ------------------------- Tutup Buku Harian -------------------------
+# Beban yang BUKAN biaya usaha (sudah masuk modal/HPP) — sama seperti laporan laba rugi.
+OPEX_EXCLUDE = ("Pembelian Ayam", "Pembayaran Hutang")
+
+
+class ClosingBody(BaseModel):
+    date: Optional[str] = None
+    notes: str = ""
+
+
+async def _closing_snapshot(d: str) -> dict:
+    """Hitung ringkasan tutup buku untuk satu tanggal. Semua angka dari database."""
+    sales = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(20000)
+    cancelled = await db.sales.count_documents({"date": d, "status": "batal"})
+
+    omzet = hpp = diskon = piutang_baru = kas_masuk_jual = 0.0
+    weight = ekor = pcs = 0.0
+    by_method: Dict[str, dict] = {}
+    by_cashier: Dict[str, dict] = {}
+    per_product: Dict[str, dict] = {}
+    for s in sales:
+        total = float(s.get("total", 0) or 0)
+        s_hpp = float(s.get("total_hpp", 0) or 0)
+        recv = float(s.get("receivable", 0) or 0)
+        omzet += total
+        hpp += s_hpp
+        diskon += float(s.get("discount", 0) or 0)
+        piutang_baru += recv
+        kas_masuk_jual += max(total - recv, 0)
+        weight += float(s.get("total_weight", 0) or 0)
+        ekor += float(s.get("total_ekor", 0) or 0)
+        m = by_method.setdefault(s.get("payment_method", "cash"),
+                                 {"method": s.get("payment_method", "cash"), "count": 0, "total": 0.0, "kas": 0.0})
+        m["count"] += 1
+        m["total"] += total
+        m["kas"] += max(total - recv, 0)
+        c = by_cashier.setdefault(s.get("cashier_name", "-"),
+                                  {"cashier": s.get("cashier_name", "-"), "count": 0, "total": 0.0, "laba": 0.0})
+        c["count"] += 1
+        c["total"] += total
+        c["laba"] += total - s_hpp
+        for it in s.get("items", []) or []:
+            if it.get("unit") == "pcs":
+                pcs += float(it.get("qty", 0) or 0)
+            p = per_product.setdefault(it.get("name", "-"), {"name": it.get("name", "-"), "qty_kg": 0.0,
+                                                             "qty_ekor": 0.0, "qty_pcs": 0.0,
+                                                             "penjualan": 0.0, "hpp": 0.0})
+            unit = it.get("unit")
+            qty = float(it.get("qty", 0) or 0)
+            if unit == "kg":
+                p["qty_kg"] += qty
+            elif unit == "ekor":
+                p["qty_ekor"] += qty
+            else:
+                p["qty_pcs"] += qty
+            p["penjualan"] += float(it.get("subtotal", 0) or 0)
+            p["hpp"] += float(it.get("hpp_total", 0) or 0)
+
+    gross = round(omzet - hpp, 2)
+
+    incomes = await db.incomes.find({"date": d}).to_list(20000)
+    bayar_piutang = sum(float(i.get("amount", 0) or 0) for i in incomes
+                        if i.get("category") == "Pembayaran Piutang")
+    income_total = sum(float(i.get("amount", 0) or 0) for i in incomes)
+
+    expenses = await db.expenses.find({"date": d}).to_list(20000)
+    exp_by_cat: Dict[str, float] = {}
+    opex = 0.0
+    for e in expenses:
+        amt = float(e.get("amount", 0) or 0)
+        exp_by_cat[e.get("category", "Lain-lain")] = exp_by_cat.get(e.get("category", "Lain-lain"), 0) + amt
+        if e.get("category") not in OPEX_EXCLUDE:
+            opex += amt
+    expense_total = sum(float(e.get("amount", 0) or 0) for e in expenses)
+
+    purchases = await db.purchases.find({"date": d}).to_list(5000)
+    beli_modal = sum(float(p.get("total_modal", 0) or 0) for p in purchases)
+    beli_kg = sum(float(p.get("total_weight", 0) or 0) for p in purchases)
+    beli_ekor = sum(float(p.get("total_ekor", 0) or 0) for p in purchases)
+    hutang_baru = sum(float(p.get("payable", 0) or 0) for p in purchases)
+
+    prods = await db.products.find({"active": True}).sort("name", 1).to_list(1000)
+    stock_items = []
+    stock_value = 0.0
+    for p in prods:
+        s_kg = float(p.get("stock_kg", 0) or 0)
+        s_pcs = float(p.get("stock_pcs", 0) or 0)
+        # Catatan: stok ekor & kg menggambarkan ayam yang SAMA (dua satuan),
+        # jadi nilai stok dihitung dari kg saja + pcs, supaya tidak dobel.
+        val = round(s_kg * float(p.get("hpp_kg", 0) or 0) + s_pcs * float(p.get("hpp_pcs", 0) or 0), 2)
+        stock_value += val
+        if s_kg or s_pcs or float(p.get("stock_ekor", 0) or 0):
+            stock_items.append({
+                "name": p["name"], "category": p.get("category", "-"),
+                "stock_kg": round(s_kg, 3), "stock_ekor": round(float(p.get("stock_ekor", 0) or 0), 2),
+                "stock_pcs": round(s_pcs, 2), "hpp_kg": float(p.get("hpp_kg", 0) or 0),
+                "hpp_ekor": float(p.get("hpp_ekor", 0) or 0),
+                "avg_weight": float(p.get("avg_weight_used", 0) or p.get("avg_weight_ekor", 0) or 0),
+                "value": val,
+            })
+
+    receivables_open = await db.receivables.find({"status": "belum_lunas"}).to_list(5000)
+    payables_open = await db.payables.find({"status": "belum_lunas"}).to_list(5000)
+
+    target = await db.targets.find_one({"date": d}) or {}
+    t_omzet = float(target.get("target_omzet", 0) or 0)
+
+    top = sorted(per_product.values(), key=lambda x: -x["penjualan"])[:12]
+    for p in top:
+        p["laba"] = round(p["penjualan"] - p["hpp"], 2)
+        p["penjualan"] = round(p["penjualan"], 2)
+        p["hpp"] = round(p["hpp"], 2)
+        p["qty_kg"] = round(p["qty_kg"], 3)
+
+    return {
+        "date": d,
+        "omzet": round(omzet, 2), "hpp": round(hpp, 2), "gross_profit": gross,
+        "margin": round(gross / omzet * 100, 2) if omzet else 0,
+        "opex": round(opex, 2), "net_profit": round(gross - opex, 2),
+        "diskon": round(diskon, 2),
+        "txn_count": len(sales), "cancelled_count": cancelled,
+        "weight": round(weight, 3), "ekor": round(ekor, 2), "pcs": round(pcs, 2),
+        "kas_dari_penjualan": round(kas_masuk_jual, 2),
+        "piutang_baru": round(piutang_baru, 2),
+        "bayar_piutang_masuk": round(bayar_piutang, 2),
+        "kas_masuk_total": round(kas_masuk_jual + bayar_piutang, 2),
+        "income_total": round(income_total, 2),
+        "expense_total": round(expense_total, 2),
+        "expenses_by_category": [{"category": k, "amount": round(v, 2)} for k, v in
+                                 sorted(exp_by_cat.items(), key=lambda x: -x[1])],
+        "by_method": sorted([{**v, "total": round(v["total"], 2), "kas": round(v["kas"], 2)}
+                             for v in by_method.values()], key=lambda x: -x["total"]),
+        "by_cashier": sorted([{**v, "total": round(v["total"], 2), "laba": round(v["laba"], 2)}
+                              for v in by_cashier.values()], key=lambda x: -x["total"]),
+        "top_products": top,
+        "purchase": {"count": len(purchases), "total_modal": round(beli_modal, 2),
+                     "weight": round(beli_kg, 3), "ekor": round(beli_ekor, 2),
+                     "hutang_baru": round(hutang_baru, 2)},
+        "stock_items": stock_items, "stock_value": round(stock_value, 2),
+        "receivable_outstanding": round(sum(float(r.get("remaining", 0) or 0) for r in receivables_open), 2),
+        "payable_outstanding": round(sum(float(p.get("remaining", 0) or 0) for p in payables_open), 2),
+        "target_omzet": t_omzet,
+        "target_achievement": round(omzet / t_omzet * 100, 2) if t_omzet else 0,
+    }
+
+
+@api.get("/daily-closing/preview")
+async def closing_preview(date: Optional[str] = None, user: dict = Depends(require_roles("owner", "admin"))):
+    d = date or today_str()
+    data = await _closing_snapshot(d)
+    existing = await db.daily_closings.find_one({"date": d})
+    data["already_closed"] = bool(existing)
+    data["closed_at"] = existing.get("closed_at") if existing else None
+    data["closed_by"] = existing.get("closed_by") if existing else None
+    data["version"] = existing.get("version", 0) if existing else 0
+    return data
+
+
+@api.get("/daily-closing")
+async def list_closings(limit: int = 60, user: dict = Depends(require_roles("owner", "admin"))):
+    docs = await db.daily_closings.find().sort("date", -1).to_list(max(1, min(limit, 365)))
+    out = []
+    for c in docs:
+        out.append({
+            "id": c["id"], "date": c["date"], "omzet": c.get("omzet", 0), "hpp": c.get("hpp", 0),
+            "gross_profit": c.get("gross_profit", 0), "net_profit": c.get("net_profit", 0),
+            "margin": c.get("margin", 0), "txn_count": c.get("txn_count", 0),
+            "stock_value": c.get("stock_value", 0), "piutang_baru": c.get("piutang_baru", 0),
+            "kas_masuk_total": c.get("kas_masuk_total", 0), "expense_total": c.get("expense_total", 0),
+            "closed_by": c.get("closed_by"), "closed_at": c.get("closed_at"),
+            "version": c.get("version", 1), "notes": c.get("notes", ""),
+        })
+    return out
+
+
+@api.post("/daily-closing")
+async def create_closing(body: ClosingBody, user: dict = Depends(require_roles("owner"))):
+    """Tutup buku: simpan snapshot angka hari itu. Bisa diulang (versi bertambah)."""
+    d = body.date or today_str()
+    snap = await _closing_snapshot(d)
+    existing = await db.daily_closings.find_one({"date": d})
+    doc = {
+        **snap,
+        "id": existing["id"] if existing else new_id(),
+        "notes": body.notes or (existing.get("notes", "") if existing else ""),
+        "closed_by": user["name"], "closed_at": iso_now(),
+        "version": int(existing.get("version", 1)) + 1 if existing else 1,
+        "created_at": existing.get("created_at") if existing else iso_now(),
+    }
+    await db.daily_closings.update_one({"date": d}, {"$set": doc}, upsert=True)
+    label = "Tutup Buku Diperbarui" if existing else "Tutup Buku Harian"
+    await add_activity("closing", label, f"{d} · omzet Rp {int(snap['omzet']):,} · laba Rp {int(snap['net_profit']):,}",
+                       snap["omzet"], user["name"])
+    await add_notification("closing", label, f"{d} · laba bersih Rp {int(snap['net_profit']):,}", "success")
+    await log_audit(user, "closing", "daily_closing", doc["id"], None,
+                    {"date": d, "omzet": snap["omzet"], "net_profit": snap["net_profit"]})
+    await rt_emit(["closing", "dashboard"], {"date": d})
+    return clean(await db.daily_closings.find_one({"date": d}))
+
+
+@api.get("/daily-closing/{cid}")
+async def get_closing(cid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    c = await db.daily_closings.find_one({"id": cid}) or await db.daily_closings.find_one({"date": cid})
+    if not c:
+        raise HTTPException(404, "Tutup buku tidak ditemukan")
+    return clean(c)
+
+
+@api.get("/daily-closing/{cid}/pdf")
+async def get_closing_pdf(cid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    c = await db.daily_closings.find_one({"id": cid}) or await db.daily_closings.find_one({"date": cid})
+    if not c:
+        raise HTTPException(404, "Tutup buku tidak ditemukan")
+    store = await _store_info()
+    pdf = await run_in_threadpool(pdf_reports.daily_closing_pdf, clean(c), store, user["name"])
+    return _pdf_response(pdf, f"tutup-buku_{c['date']}.pdf")
+
+
+# ------------------------- Realtime (WebSocket) -------------------------
+@api.websocket("/ws")
+async def realtime_socket(websocket: WebSocket):
+    await ws_handler(websocket)
+
+
+@api.get("/realtime/status")
+async def realtime_status(user: dict = Depends(get_current_user)):
+    return {"clients": rt_manager.count}
+
+
 # ------------------------- File upload / serving -------------------------
 @api.post("/upload")
 async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_roles("owner", "admin"))):
@@ -1103,11 +1449,16 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.sales.create_index("txn_id", unique=True, sparse=True)
     await db.sales.create_index("date")
+    await db.daily_closings.create_index("date", unique=True)
     await seed_admin()
     await seed_demo(db)
     added = await ensure_potong_parts(db)
     if added:
         logger.info("Produk potongan ditambahkan: %s", ", ".join(added))
+    try:
+        await migrate_avg_weights()
+    except Exception as e:
+        logger.error(f"Migrasi berat rata-rata gagal: {e}")
     try:
         init_storage()
         logger.info("Object storage initialized")

@@ -1,12 +1,14 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
+import { useRealtimeReload } from "@/lib/hooks";
 import api from "@/lib/api";
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Truck, Factory,
   Users as UsersIcon, Building2, Wallet, Target, FileBarChart, ScrollText,
   UserCog, Settings as SettingsIcon, LogOut, Menu, Bell, Wifi, WifiOff, History, Drumstick, RefreshCw, CloudOff,
+  BookCheck, Zap,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +32,7 @@ const NAV = [
   { to: "/keuangan", label: "Keuangan", icon: Wallet, roles: ["owner", "admin", "kasir"] },
   { to: "/target", label: "Target", icon: Target, roles: ["owner", "admin"] },
   { to: "/laporan", label: "Laporan", icon: FileBarChart, roles: ["owner", "admin"] },
+  { to: "/tutup-buku", label: "Tutup Buku", icon: BookCheck, roles: ["owner", "admin"] },
   { to: "/audit", label: "Audit Log", icon: ScrollText, roles: ["owner", "admin"] },
   { to: "/pengguna", label: "Pengguna", icon: UserCog, roles: ["owner"] },
   { to: "/pengaturan", label: "Pengaturan", icon: SettingsIcon, roles: ["owner"] },
@@ -89,21 +92,25 @@ export default function Layout({ children }) {
 
   useEffect(() => { setOpen(false); }, [location.pathname]);
 
-  useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const r = await api.get("/notifications");
-        if (alive) setNotifs(r.data);
-      } catch (e) {
-        if (e.response && process.env.NODE_ENV !== "production") console.error("Gagal memuat notifikasi:", e);
-        /* network errors are reflected by OfflineContext status */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 12000);
-    return () => { alive = false; clearInterval(id); };
+  const loadNotifs = useCallback(async () => {
+    try {
+      const r = await api.get("/notifications");
+      setNotifs(r.data);
+    } catch (e) {
+      if (e.response && process.env.NODE_ENV !== "production") console.error("Gagal memuat notifikasi:", e);
+      /* network errors are reflected by OfflineContext status */
+    }
   }, []);
+
+  // Notifikasi didorong server lewat WebSocket. Polling tetap ada sebagai
+  // jaring pengaman (jarang saat live, cepat saat socket mati).
+  const live = useRealtimeReload(["notifications"], loadNotifs);
+
+  useEffect(() => {
+    loadNotifs();
+    const id = setInterval(loadNotifs, live ? 60000 : 12000);
+    return () => clearInterval(id);
+  }, [loadNotifs, live]);
 
   const unread = notifs.filter((n) => !n.read).length;
   const markRead = async () => { await api.post("/notifications/read-all"); setNotifs((p) => p.map((n) => ({ ...n, read: true }))); };
@@ -148,6 +155,13 @@ export default function Layout({ children }) {
               ) : (
                 <span className="flex items-center gap-1.5 text-xs font-semibold text-destructive">
                   <WifiOff className="w-3.5 h-3.5" /> OFFLINE
+                </span>
+              )}
+
+              {live && online && !syncing && (
+                <span data-testid="live-badge" title="Data diperbarui seketika dari server (realtime)"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border border-chart-4/40 bg-chart-4/10 text-chart-4">
+                  <Zap className="w-3 h-3" /> LIVE
                 </span>
               )}
 

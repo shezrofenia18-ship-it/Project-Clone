@@ -19,6 +19,7 @@ import AuditLog from "@/pages/AuditLog";
 import Users from "@/pages/Users";
 import Settings from "@/pages/Settings";
 import SalesHistory from "@/pages/SalesHistory";
+import Closing from "@/pages/Closing";
 
 function Loader() {
   return (
@@ -77,6 +78,7 @@ function App() {
           <Route path="/keuangan" element={<Protected roles={R_POS}><Finance /></Protected>} />
           <Route path="/target" element={<Protected roles={R_OWNER_ADMIN}><Targets /></Protected>} />
           <Route path="/laporan" element={<Protected roles={R_OWNER_ADMIN}><Reports /></Protected>} />
+          <Route path="/tutup-buku" element={<Protected roles={R_OWNER_ADMIN}><Closing /></Protected>} />
           <Route path="/audit" element={<Protected roles={R_OWNER_ADMIN}><AuditLog /></Protected>} />
           <Route path="/pengguna" element={<Protected roles={R_OWNER}><Users /></Protected>} />
           <Route path="/pengaturan" element={<Protected roles={R_OWNER}><Settings /></Protected>} />

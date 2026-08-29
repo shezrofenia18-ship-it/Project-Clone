@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,10 @@ export default function Stock() {
   const { data: products, reload } = useFetch("/products");
   const { data: moves, reload: reloadMoves } = useFetch("/stock-movements");
   const [adj, setAdj] = useState(false);
+
+  // Stok bergerak seketika saat kasir menjual / ayam masuk dari device lain.
+  const reloadAll = useCallback(() => { reload(); reloadMoves(); }, [reload, reloadMoves]);
+  useRealtimeReload(["stock", "products"], reloadAll);
 
   const active = (products || []).filter((p) => p.active !== false);
   const totalValue = active.reduce((s, p) => s + (p.stock_kg || 0) * (p.hpp_kg || 0), 0);

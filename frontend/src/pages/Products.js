@@ -1,6 +1,6 @@
 import { useState } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,16 +11,22 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, formatPct, CATEGORY_LABELS } from "@/lib/format";
-import { Plus, Pencil, Trash2, Image as ImageIcon } from "lucide-react";
+import { Plus, Pencil, Trash2, Image as ImageIcon, RotateCcw } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
-const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, hpp_pcs: 0, price_kg: 0, price_ekor: 0, price_pcs: 0, stock_kg: 0, stock_ekor: 0, stock_pcs: 0, min_stock_kg: 0, min_stock_ekor: 0, min_stock_pcs: 0, image_url: "", is_byproduct: false, active: true };
+const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, hpp_pcs: 0, price_kg: 0, price_ekor: 0, price_pcs: 0, stock_kg: 0, stock_ekor: 0, stock_pcs: 0, min_stock_kg: 0, min_stock_ekor: 0, min_stock_pcs: 0, image_url: "", is_byproduct: false, active: true, avg_weight_override: 0 };
+
+// Berat perkiraan/ekor yang benar-benar dipakai sistem untuk menghitung HPP/ekor.
+const usedWeight = (p) => Number(p.avg_weight_override) > 0
+  ? Number(p.avg_weight_override)
+  : Number(p.avg_weight_used || p.avg_weight_ekor || 0);
 
 export default function Products() {
   const { data, reload } = useFetch("/products");
   const { user } = useAuth();
   const isOwner = user.role === "owner";
   const [edit, setEdit] = useState(null);
+  useRealtimeReload(["products", "stock"], reload);
 
   const del = async (p) => {
     if (!window.confirm(`Nonaktifkan produk "${p.name}"? Produk tidak akan muncul di POS.`)) return;
@@ -41,6 +47,8 @@ export default function Products() {
                 <th className="px-4 py-3 font-semibold">Kategori</th>
                 <th className="px-4 py-3 font-semibold text-right">Harga Beli/kg</th>
                 <th className="px-4 py-3 font-semibold text-right">HPP/kg</th>
+                <th className="px-4 py-3 font-semibold text-right">Berat/ekor</th>
+                <th className="px-4 py-3 font-semibold text-right">HPP/ekor</th>
                 <th className="px-4 py-3 font-semibold text-right">Jual/kg</th>
                 <th className="px-4 py-3 font-semibold text-right">Margin</th>
                 <th className="px-4 py-3"></th>
@@ -49,12 +57,28 @@ export default function Products() {
             <tbody>
               {(data || []).map((p) => {
                 const margin = p.price_kg ? ((p.price_kg - p.hpp_kg) / p.price_kg) * 100 : 0;
+                const berat = usedWeight(p);
+                const sellsEkor = (p.units || []).includes("ekor");
+                const needWeight = sellsEkor && !berat;
                 return (
                   <tr key={p.id} data-testid={`product-row-${p.id}`} className="border-t border-border hover:bg-accent/40">
                     <td className="px-4 py-3 font-semibold">{p.name}{p.active === false && <Badge variant="secondary" className="ml-2 text-[10px]">nonaktif</Badge>}</td>
                     <td className="px-4 py-3"><Badge variant="secondary">{CATEGORY_LABELS[p.category]}</Badge></td>
                     <td className="px-4 py-3 text-right tabular">{formatRupiah(p.buy_price_kg)}</td>
                     <td className="px-4 py-3 text-right tabular">{formatRupiah(p.hpp_kg)}</td>
+                    <td className="px-4 py-3 text-right tabular whitespace-nowrap">
+                      {berat ? `${formatNumber(berat, 2)} kg` : "-"}
+                      {Number(p.avg_weight_override) > 0 && (
+                        <Badge variant="secondary" className="ml-1.5 text-[10px]" title="Diisi manual oleh owner">manual</Badge>
+                      )}
+                      {needWeight && (
+                        <Badge className="ml-1.5 text-[10px] bg-warning/20 text-warning hover:bg-warning/20"
+                          title="Produk dijual per ekor tapi berat perkiraan belum ada, HPP/ekor belum akurat">
+                          isi berat
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(p.hpp_ekor)}</td>
                     <td className="px-4 py-3 text-right tabular font-semibold">{formatRupiah(p.price_kg)}</td>
                     <td className="px-4 py-3 text-right tabular text-success">{formatPct(margin)}</td>
                     <td className="px-4 py-3 text-right">
@@ -79,6 +103,8 @@ function ProductDialog({ init, onClose, onSaved }) {
   const [uploading, setUploading] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const num = (k) => (e) => set(k, Number(e.target.value));
+  const autoAvg = Number(f.avg_weight_ekor || 0);
+  const effAvg = Number(f.avg_weight_override) > 0 ? Number(f.avg_weight_override) : autoAvg;
 
   const onUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -137,6 +163,32 @@ function ProductDialog({ init, onClose, onSaved }) {
           </div>
           <div><Label className="text-xs">Harga Beli/kg</Label><Input type="number" value={f.buy_price_kg} onChange={num("buy_price_kg")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">HPP/kg</Label><Input type="number" value={f.hpp_kg} onChange={num("hpp_kg")} className="mt-1 tabular" /></div>
+
+          {/* Toko menjual per ekor, pembelian ditimbang. HPP/ekor = HPP/kg x berat perkiraan. */}
+          <div className="col-span-2 rounded-lg border border-border bg-muted/30 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs font-semibold">Berat perkiraan per ekor (kg)</Label>
+              {Number(f.avg_weight_override) > 0 && (
+                <Button type="button" variant="outline" size="sm" data-testid="use-auto-weight"
+                  onClick={() => set("avg_weight_override", 0)}>
+                  <RotateCcw className="w-3.5 h-3.5 mr-1" /> Pakai Otomatis
+                </Button>
+              )}
+            </div>
+            <Input data-testid="prod-avg-weight" type="number" step="0.01" min="0"
+              value={f.avg_weight_override || 0} onChange={num("avg_weight_override")}
+              placeholder="0 = otomatis" className="mt-1.5 tabular" />
+            <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
+              {autoAvg > 0
+                ? `Otomatis dari ayam yang pernah masuk stok: ${formatNumber(autoAvg, 3)} kg/ekor (${formatNumber(f.cum_ekor_in)} ekor · ${formatWeight(f.cum_weight_in)}).`
+                : "Belum ada data pembelian per ekor untuk produk ini — isi manual agar HPP per ekor akurat."}
+              {" "}Isi 0 untuk memakai perhitungan otomatis.
+            </p>
+            <p className="text-xs mt-2">
+              HPP per ekor dipakai sistem: <b className="tabular">{formatRupiah((f.hpp_kg || 0) * effAvg)}</b>
+              {effAvg > 0 ? ` (${formatRupiah(f.hpp_kg)}/kg × ${formatNumber(effAvg, 3)} kg)` : " — belum bisa dihitung"}
+            </p>
+          </div>
           <div><Label className="text-xs">Harga Jual/kg</Label><Input data-testid="prod-price-kg" type="number" value={f.price_kg} onChange={num("price_kg")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">Harga Jual/ekor</Label><Input type="number" value={f.price_ekor} onChange={num("price_ekor")} className="mt-1 tabular" /></div>
           <div><Label className="text-xs">Harga Jual/pcs</Label><Input type="number" value={f.price_pcs} onChange={num("price_pcs")} className="mt-1 tabular" /></div>

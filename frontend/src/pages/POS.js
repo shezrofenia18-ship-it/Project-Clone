@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,9 @@ export default function POS() {
     const id = setInterval(reload, 15000);
     return () => clearInterval(id);
   }, [reload]);
+
+  // Stok & harga ikut berubah seketika saat ada transaksi/pembelian di device lain.
+  useRealtimeReload(["stock", "products"], reload);
 
   const active = (products || []).filter((p) => p.active !== false);
   const shown = active.filter((p) => cat === "all" || p.category === cat);
@@ -338,6 +341,9 @@ function ReceivableDialog({ onClose }) {
 }
 
 function EntryDialog({ product, onClose, onAdd }) {
+  const { user } = useAuth();
+  // Kasir tidak boleh melihat modal/HPP & laba (hanya owner & admin).
+  const canSeeCost = user.role === "owner" || user.role === "admin";
   const units = product.units && product.units.length ? product.units : ["kg"];
   const priceFor = useCallback(
     (u) => (u === "kg" ? product.price_kg : u === "ekor" ? product.price_ekor : product.price_pcs),
@@ -396,6 +402,7 @@ function EntryDialog({ product, onClose, onAdd }) {
           </div>
 
           {(() => {
+            if (!canSeeCost) return null;
             const modal = unit === "ekor" ? product.hpp_ekor : unit === "pcs" ? product.hpp_pcs : product.hpp_kg;
             return modal > 0 ? (
               <p data-testid="entry-modal" className="text-xs text-muted-foreground -mt-1">

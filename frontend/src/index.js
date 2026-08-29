@@ -5,6 +5,7 @@ import "@/index.css";
 import App from "@/App";
 import { AuthProvider } from "@/context/AuthContext";
 import { OfflineProvider } from "@/context/OfflineContext";
+import { RealtimeProvider } from "@/context/RealtimeContext";
 import { Toaster } from "@/components/ui/sonner";
 
 const queryClient = new QueryClient({
@@ -15,10 +16,12 @@ const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <OfflineProvider>
-        <App />
-        <Toaster position="top-right" richColors />
-      </OfflineProvider>
+      <RealtimeProvider>
+        <OfflineProvider>
+          <App />
+          <Toaster position="top-right" richColors />
+        </OfflineProvider>
+      </RealtimeProvider>
     </AuthProvider>
   </QueryClientProvider>
 );

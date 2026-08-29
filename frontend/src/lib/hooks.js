@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { cacheCatalog, readCatalog } from "@/lib/offline";
+import { useRealtime } from "@/context/RealtimeContext";
 
 export function useFetch(path, deps = [], cacheKey = null) {
   const [data, setData] = useState(cacheKey ? readCatalog(cacheKey) : null);
@@ -37,22 +38,39 @@ export function useStore() {
   };
 }
 
-export function usePoll(path, interval = 8000) {
+export function usePoll(path, interval = 8000, topics = []) {
   const [data, setData] = useState(null);
   const [online, setOnline] = useState(true);
+  const { connected, subscribe } = useRealtime();
+
+  const tick = useCallback(async () => {
+    try {
+      const r = await api.get(path);
+      setData(r.data);
+      setOnline(true);
+    } catch (e) {
+      if (!e.response) setOnline(false);
+    }
+  }, [path]);
+
   useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      try {
-        const r = await api.get(path);
-        if (alive) { setData(r.data); setOnline(true); }
-      } catch (e) {
-        if (alive && !e.response) setOnline(false);
-      }
-    };
     tick();
-    const id = setInterval(tick, interval);
-    return () => { alive = false; clearInterval(id); };
-  }, [path, interval]);
-  return { data, online };
+    // Saat WebSocket hidup, polling hanya jaring pengaman (60s) karena data
+    // sudah didorong server. Kalau socket mati, kembali ke interval cepat.
+    const id = setInterval(tick, connected ? 60000 : interval);
+    return () => clearInterval(id);
+  }, [tick, interval, connected]);
+
+  const topicKey = JSON.stringify(topics);
+  useEffect(() => subscribe(JSON.parse(topicKey), tick), [subscribe, tick, topicKey]);
+
+  return { data, online, reload: tick, live: connected };
+}
+
+// Refetch instan ketika server memberi tahu ada perubahan pada topik tertentu.
+export function useRealtimeReload(topics, reload) {
+  const { subscribe, connected } = useRealtime();
+  const topicKey = JSON.stringify(topics);
+  useEffect(() => subscribe(JSON.parse(topicKey), reload), [subscribe, reload, topicKey]);
+  return connected;
 }

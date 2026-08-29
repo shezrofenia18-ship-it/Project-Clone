@@ -381,3 +381,153 @@ def stock_pdf(data, store, printed_by=""):
 
     story += _signature(printed_by, W)
     return _build(story, store, "Laporan Nilai Stok")
+
+
+# ------------------------- 4. Tutup Buku Harian -------------------------
+def daily_closing_pdf(data, store, printed_by=""):
+    """Rekap tutup buku satu hari: uang masuk, laba, stok sisa, piutang & hutang."""
+    W = 180 * mm
+    d = data.get("date") or datetime.now(JKT).strftime("%Y-%m-%d")
+    story = _kop(store, "Rekap Tutup Buku Harian", d, d, printed_by, W)
+
+    closed_at = data.get("closed_at")
+    info = f"Rekap penuh transaksi tanggal {tgl(d)}."
+    if closed_at:
+        info += f" Ditutup oleh {data.get('closed_by') or '-'} pada {tgl(closed_at)}"
+        info += f" (versi {data.get('version', 1)})."
+    story.append(Paragraph(info, S_SMALL))
+    story.append(Spacer(1, 6))
+
+    omzet = float(data.get("omzet", 0) or 0)
+    hpp = float(data.get("hpp", 0) or 0)
+    gross = float(data.get("gross_profit", 0) or 0)
+    opex = float(data.get("opex", 0) or 0)
+    net = float(data.get("net_profit", 0) or 0)
+
+    # --- Ringkasan laba ---
+    story.append(Paragraph("A. Ringkasan Laba", S_SEC))
+    rows = [
+        ["Uraian", "Nilai", "% dari Omzet"],
+        [f"Omzet Penjualan ({int(data.get('txn_count', 0) or 0)} transaksi)", rp(omzet), pct(100 if omzet else 0)],
+        ["Harga Pokok Penjualan (HPP)", "(" + rp(hpp) + ")", pct(hpp / omzet * 100 if omzet else 0)],
+        ["LABA KOTOR", rp(gross), pct(data.get("margin", 0))],
+        ["Beban Operasional", "(" + rp(opex) + ")", pct(opex / omzet * 100 if omzet else 0)],
+        ["LABA BERSIH", rp(net), pct(net / omzet * 100 if omzet else 0)],
+    ]
+    t = Table(rows, colWidths=[W * 0.52, W * 0.26, W * 0.22])
+    st = _table_style(3)
+    for r in (3, 5):
+        st.add("FONTNAME", (0, r), (-1, r), "Helvetica-Bold")
+        st.add("LINEABOVE", (0, r), (-1, r), 0.9, INK)
+    st.add("BACKGROUND", (0, 3), (-1, 3), colors.HexColor("#EEF3EF"))
+    st.add("BACKGROUND", (0, 5), (-1, 5), colors.HexColor("#EEF3EF") if net >= 0 else colors.HexColor("#FBEDEB"))
+    st.add("TEXTCOLOR", (1, 5), (1, 5), POS if net >= 0 else NEG)
+    st.add("FONTSIZE", (0, 5), (-1, 5), 9.5)
+    t.setStyle(st)
+    story.append(t)
+
+    # --- Volume & kas ---
+    story.append(Paragraph("B. Volume Terjual & Uang Masuk", S_SEC))
+    vol = [
+        ["Keterangan", "Jumlah", "Keterangan", "Jumlah"],
+        ["Berat terjual", num(data.get("weight"), 2) + " kg",
+         "Kas dari penjualan", rp(data.get("kas_dari_penjualan"))],
+        ["Ayam terjual", num(data.get("ekor")) + " ekor",
+         "Pembayaran piutang masuk", rp(data.get("bayar_piutang_masuk"))],
+        ["Potongan terjual", num(data.get("pcs")) + " pcs",
+         "TOTAL UANG MASUK", rp(data.get("kas_masuk_total"))],
+        ["Transaksi dibatalkan", num(data.get("cancelled_count")) + " transaksi",
+         "Piutang baru hari ini", rp(data.get("piutang_baru"))],
+        ["Diskon diberikan", rp(data.get("diskon")),
+         "Total pengeluaran tercatat", rp(data.get("expense_total"))],
+    ]
+    vt = Table(vol, colWidths=[W * 0.27, W * 0.23, W * 0.29, W * 0.21])
+    vst = _table_style(4)
+    vst.add("ALIGN", (0, 0), (0, -1), "LEFT")
+    vst.add("ALIGN", (2, 0), (2, -1), "LEFT")
+    vst.add("FONTNAME", (2, 3), (3, 3), "Helvetica-Bold")
+    vt.setStyle(vst)
+    story.append(vt)
+
+    # --- Kas per metode bayar ---
+    methods = data.get("by_method") or []
+    if methods:
+        story.append(Paragraph("C. Rincian per Metode Pembayaran", S_SEC))
+        mrows = [["Metode", "Transaksi", "Nilai Penjualan", "Uang Diterima"]]
+        for m in methods:
+            mrows.append([PAYMENT_LABELS.get(m.get("method"), m.get("method", "-")),
+                          num(m.get("count")), rp(m.get("total")), rp(m.get("kas"))])
+        mrows.append(["TOTAL", num(sum(int(m.get("count", 0) or 0) for m in methods)),
+                      rp(sum(float(m.get("total", 0) or 0) for m in methods)),
+                      rp(sum(float(m.get("kas", 0) or 0) for m in methods))])
+        mt = Table(mrows, colWidths=[W * 0.28, W * 0.16, W * 0.28, W * 0.28])
+        mst = _table_style(4)
+        mst.add("FONTNAME", (0, len(mrows) - 1), (-1, len(mrows) - 1), "Helvetica-Bold")
+        mst.add("LINEABOVE", (0, len(mrows) - 1), (-1, len(mrows) - 1), 0.9, INK)
+        mt.setStyle(mst)
+        story.append(mt)
+
+    # --- Produk terlaris ---
+    tops = data.get("top_products") or []
+    if tops:
+        story.append(Paragraph("D. Produk Terjual Hari Ini", S_SEC))
+        prows = [["Produk", "Kg", "Ekor", "Pcs", "Penjualan", "HPP", "Laba"]]
+        for p in tops:
+            prows.append([Paragraph(str(p.get("name", "-")), S_CELL), num(p.get("qty_kg"), 2),
+                          num(p.get("qty_ekor")), num(p.get("qty_pcs")),
+                          rp(p.get("penjualan")), rp(p.get("hpp")), rp(p.get("laba"))])
+        pt = Table(prows, colWidths=[W * 0.24, W * 0.09, W * 0.09, W * 0.08,
+                                     W * 0.17, W * 0.16, W * 0.17], repeatRows=1)
+        pt.setStyle(_table_style(7))
+        story.append(pt)
+
+    # --- Pembelian & beban ---
+    pur = data.get("purchase") or {}
+    story.append(Paragraph("E. Pembelian & Beban", S_SEC))
+    erows = [["Uraian", "Nilai"],
+             [f"Pembelian ayam ({int(pur.get('count', 0) or 0)} nota, "
+              f"{num(pur.get('weight'), 2)} kg / {num(pur.get('ekor'))} ekor)", rp(pur.get("total_modal"))],
+             ["Hutang supplier baru hari ini", rp(pur.get("hutang_baru"))]]
+    for e in (data.get("expenses_by_category") or []):
+        erows.append([f"Beban: {e.get('category', '-')}", rp(e.get("amount"))])
+    et = Table(erows, colWidths=[W * 0.7, W * 0.3])
+    et.setStyle(_table_style(2))
+    story.append(et)
+
+    # --- Stok sisa ---
+    items = data.get("stock_items") or []
+    if items:
+        story.append(Paragraph("F. Stok Sisa Akhir Hari", S_SEC))
+        srows = [["Produk", "Ekor", "Berat (kg)", "Pcs", "Berat/ekor", "HPP/kg", "Nilai"]]
+        for i in items:
+            srows.append([Paragraph(str(i.get("name", "-")), S_CELL), num(i.get("stock_ekor")),
+                          num(i.get("stock_kg"), 2), num(i.get("stock_pcs")),
+                          num(i.get("avg_weight"), 2) + " kg", rp(i.get("hpp_kg")), rp(i.get("value"))])
+        srows.append(["TOTAL NILAI STOK", "", "", "", "", "", rp(data.get("stock_value"))])
+        stt = Table(srows, colWidths=[W * 0.24, W * 0.09, W * 0.13, W * 0.09,
+                                      W * 0.14, W * 0.14, W * 0.17], repeatRows=1)
+        sst = _table_style(7)
+        sst.add("FONTNAME", (0, len(srows) - 1), (-1, len(srows) - 1), "Helvetica-Bold")
+        sst.add("LINEABOVE", (0, len(srows) - 1), (-1, len(srows) - 1), 0.9, INK)
+        stt.setStyle(sst)
+        story.append(stt)
+
+    # --- Posisi piutang & hutang ---
+    story.append(Paragraph("G. Posisi Piutang & Hutang (kumulatif)", S_SEC))
+    prows2 = [["Uraian", "Nilai"],
+              ["Total piutang pelanggan belum lunas", rp(data.get("receivable_outstanding"))],
+              ["Total hutang ke supplier belum lunas", rp(data.get("payable_outstanding"))]]
+    pt2 = Table(prows2, colWidths=[W * 0.7, W * 0.3])
+    pt2.setStyle(_table_style(2))
+    story.append(pt2)
+
+    if data.get("notes"):
+        story.append(Paragraph("Catatan Owner", S_SEC))
+        story.append(Paragraph(str(data["notes"]), S_CELL))
+
+    story.append(Paragraph(
+        "Catatan: Nilai stok dihitung dari berat (kg) + satuan pcs. Stok ekor tidak "
+        "dinilai terpisah karena menunjuk ayam yang sama dengan stok kg. "
+        "Beban Operasional tidak memasukkan \"Pembelian Ayam\" dan \"Pembayaran Hutang\".", S_SMALL))
+    story += _signature(printed_by, W)
+    return _build(story, store, f"Tutup Buku {d}")
