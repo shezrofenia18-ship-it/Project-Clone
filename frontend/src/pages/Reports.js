@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import api from "@/lib/api";
+import { useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,8 @@ export default function Reports() {
     api.get(`/reports/stock`).then((r) => setStock(r.data));
   }, [start, end]);
   useEffect(() => { load(); }, [load]);
+  // Laporan ikut segar begitu ada penjualan/pembelian/pengeluaran baru.
+  useRealtimeReload(["sales", "expenses", "incomes", "purchases", "stock", "dashboard"], load);
 
   return (
     <div className="bam-fade">
@@ -107,8 +110,23 @@ export default function Reports() {
                   <Row label="HPP" value={`- ${formatRupiah(pl.hpp)}`} tone="text-muted-foreground" />
                   <div className="border-t border-border pt-2.5"><Row label="Laba Kotor" value={formatRupiah(pl.gross_profit)} bold tone="text-success" /></div>
                   <Row label="Biaya Operasional" value={`- ${formatRupiah(pl.opex)}`} tone="text-muted-foreground" />
-                  <div className="border-t border-border pt-2.5"><Row label="Laba Bersih" value={formatRupiah(pl.net_profit)} bold tone="text-primary" /></div>
+                  <div className="border-t border-border pt-2.5"><Row label="Laba Bersih Usaha" value={formatRupiah(pl.net_profit)} bold tone="text-primary" /></div>
                   <div className="flex gap-2 pt-2"><Badge variant="secondary">Margin Kotor {formatPct(pl.gross_margin)}</Badge><Badge variant="secondary">Margin Bersih {formatPct(pl.net_margin)}</Badge></div>
+                  {/* Arus kas: di sinilah uang beli ayam & pelunasan hutang dihitung,
+                      supaya biaya ayam tidak dikurangi dua kali dari laba. */}
+                  <div className="mt-4 pt-3 border-t border-dashed border-border" data-testid="pl-cashflow">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Arus Kas Periode Ini</p>
+                    <Row label="Uang Masuk" value={formatRupiah(pl.cash_in)} tone="text-success" />
+                    <Row label="Uang Keluar (termasuk beli ayam)" value={`- ${formatRupiah(pl.cash_out)}`} tone="text-muted-foreground" />
+                    <div className="border-t border-border pt-2.5 mt-2">
+                      <Row label="Uang Bersih (Kas)" value={formatRupiah(pl.net_cash)} bold
+                        tone={pl.net_cash < 0 ? "text-destructive" : "text-success"} />
+                    </div>
+                    <p className="text-[11px] text-muted-foreground mt-2">
+                      Modal ayam periode ini {formatRupiah(pl.modal_value)} · dibayar tunai {formatRupiah(pl.modal_cash)}.
+                      Biaya ayam sudah termasuk di HPP, jadi tidak dikurangi lagi dari laba.
+                    </p>
+                  </div>
                 </div>
               </Card>
               <Card className="p-6">

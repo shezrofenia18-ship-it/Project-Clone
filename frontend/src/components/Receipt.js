@@ -1,12 +1,20 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { formatRupiah, formatQtyUnit, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
-import { printReceipt, waShareReceipt, RECEIPT_PROMO, RECEIPT_PROMO_NOTE } from "@/lib/receipt";
+import { printReceipt, waShareReceipt, RECEIPT_PROMO, RECEIPT_PROMO_NOTE, RECEIPT_PAPER_MM } from "@/lib/receipt";
 import { useStore } from "@/lib/hooks";
+import { useEffect, useRef } from "react";
 import { Printer, Share2, Check, WifiOff } from "lucide-react";
 
 export default function Receipt({ sale, phone, offline, onClose }) {
   const store = useStore();
+  // Cetak otomatis sekali saja per transaksi bila owner mengaktifkannya di Pengaturan.
+  const printedRef = useRef(false);
+  useEffect(() => {
+    if (!sale || !store.settingsLoaded || !store.autoPrint || printedRef.current) return;
+    printedRef.current = true;
+    printReceipt(sale, store);
+  }, [sale, store]);
   if (!sale) return null;
   return (
     <Dialog open onOpenChange={onClose}>
@@ -63,6 +71,11 @@ export default function Receipt({ sale, phone, offline, onClose }) {
             <Share2 className="w-4 h-4 mr-1" /> WhatsApp
           </Button>
         </div>
+        <p className="text-[11px] text-muted-foreground text-center" data-testid="receipt-paper-note">
+          {store.autoPrint
+            ? `Struk otomatis dikirim ke printer termal ${RECEIPT_PAPER_MM}mm`
+            : `Ukuran cetak: kertas termal ${RECEIPT_PAPER_MM}mm`}
+        </p>
         <Button data-testid="receipt-done" onClick={onClose} className="w-full">
           <Check className="w-4 h-4 mr-1" /> Selesai
         </Button>

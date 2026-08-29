@@ -7,6 +7,12 @@ export function useFetch(path, deps = [], cacheKey = null) {
   const [data, setData] = useState(cacheKey ? readCatalog(cacheKey) : null);
   const [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
+    // path null/kosong = memang tidak boleh diakses role ini (mis. kasir tidak
+    // melihat /incomes) -> jangan panggil API supaya tidak muncul error 404 palsu.
+    if (!path) {
+      setLoading(false);
+      return;
+    }
     try {
       const r = await api.get(path);
       setData(r.data);
@@ -35,6 +41,9 @@ export function useStore() {
     tagline: data?.store_tagline || "Ayam Potong & Fillet",
     address: data?.store_address || "",
     phone: data?.store_phone || "",
+    // struk dicetak otomatis setelah transaksi (bisa diatur owner di Pengaturan)
+    autoPrint: !!data?.receipt_auto_print,
+    settingsLoaded: !!data,
   };
 }
 

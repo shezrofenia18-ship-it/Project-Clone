@@ -117,5 +117,40 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Verifikasi live preview: login owner → Dashboard Owner tampil dengan data nyata (omzet Rp 3.743.030, 14 transaksi, 65,51 kg, margin 19,06%), indikator ONLINE + LIVE (WebSocket) aktif, grafik 7 hari & aktivitas terisi. DB utuh: 14 produk, 73 penjualan, 5 user.
 - `memory/test_credentials.md` dibuat ulang (5 akun: owner/admin/kasir).
 
+## Implemented (2026-08-29 — Grafik Bulanan, Struk Termal 58mm, & Perbaikan Sinkronisasi Data)
+
+### Rumus keuangan tunggal (`backend/finance.py`) — keputusan owner: "Cara 2"
+- `Laba Kotor` = Omzet − HPP · `Biaya Operasional` = pengeluaran KECUALI kategori modal ("Pembelian Ayam", "Pembayaran Hutang") · `Laba Bersih Usaha` = Laba Kotor − Biaya Operasional.
+- `Kas Masuk` = seluruh pemasukan · `Kas Keluar` = biaya operasional + uang yang BENAR-BENAR dibayar untuk ayam/hutang (`cash_amount`) · `Uang Bersih (Kas)` = Kas Masuk − Kas Keluar.
+- Biaya beli ayam ikut dihitung di jalur KAS (permintaan owner) tanpa dikurangi dua kali dari laba (sudah ada di HPP). Dipakai bersama oleh `/api/dashboard`, `/api/reports/profit-loss`, dan tutup buku → angka tidak bisa lagi berbeda antar halaman.
+
+### 10 penyebab data tidak sinkron yang ditutup
+1. Dashboard mengurangi SEMUA pengeluaran (termasuk beli ayam) sedangkan Laporan/Tutup Buku tidak → kini satu rumus.
+2. Pembelian Rp 4.640.000 (27 Agu) tidak punya catatan pengeluaran & `supplier.total_purchase` = 0 → dibuat + saldo direkalkulasi.
+3. 3 penjualan kurang bayar milik "Umum" mencatat piutang tanpa dokumen tagihan (selisih Rp 242.536 antara Riwayat & Keuangan) → `create_sale` kini SELALU membuat tagihan bila `receivable > 0`.
+4. `cancel_sale` meninggalkan piutang "hantu" → tagihan ditandai "batal" + saldo pelanggan dikoreksi.
+5. Pelunasan piutang tidak memperbarui dokumen penjualan → `pay_receivable` menyetel `sale.receivable` & `payment_status` ("lunas"). `sale.paid` sengaja tetap (= nilai catatan pemasukan) agar kas tidak dobel.
+6. `pay_receivable`/`pay_payable` tanpa validasi → 0/negatif/melebihi sisa/sudah lunas → 400.
+7. Pembelian kredit dicatat penuh lalu pelunasan dicatat lagi → kas keluar dobel → dipisah `amount` (modal) vs `cash_amount` (kas).
+8. Tidak ada `rt_emit` pada pembelian, pembayaran piutang/hutang, penyesuaian stok → ditambahkan (+ topik incomes/customers/suppliers/purchases/payables).
+9. Halaman Keuangan, Riwayat, Pembelian, Laporan, Pelanggan, Supplier tidak berlangganan realtime → sekarang ikut segar otomatis.
+10. "Pembelian Ayam" ada di dropdown pengeluaran manual (pengeluaran jadi luput dari laba) → dihapus dari `EXP_CATS`.
+
+### Rekonsiliasi otomatis (`backend/reconcile.py`)
+- 7 invarian diperiksa/diperbaiki, IDEMPOTEN, jalan otomatis saat startup + `GET /api/maintenance/consistency` (owner/admin) & `POST /api/maintenance/reconcile` (owner) → tombol "Periksa Data"/"Perbaiki Sekarang" di Pengaturan.
+
+### Grafik tren bulanan
+- `GET /api/dashboard/monthly?months=N` (clamp 1..36). Dashboard: toggle `7 Hari / Bulanan` + dropdown 3/6/12/24 bulan, batang Omzet + garis Laba Kotor & Laba Bersih, ringkasan pertumbuhan vs bulan lalu / bulan terbaik / rata-rata / total. Kartu baru "Uang Masuk & Keluar Hari Ini"; blok arus kas di Laporan & Tutup Buku.
+
+### Struk termal 58mm
+- `@page { size: 58mm auto; margin: 0 }`, body 58mm, Courier 11px, ruang sobek 10mm. Cetak lewat IFRAME tersembunyi (bebas pemblokir popup) → mendukung cetak otomatis; fallback `window.open`.
+- Setting `receipt_auto_print` (Pengaturan) + tombol "Tes Cetak Struk". Terverifikasi: transaksi POS Rp 14.000 → 1 iframe (tidak dobel), lebar body 219,203px = tepat 58mm, iframe dibersihkan otomatis.
+
+### RBAC
+- Menu & rute **Pembelian** dihapus dari kasir (nav, `/pembelian` redirect ke `/pos`, `GET /api/purchases` owner/admin saja). `useFetch` tidak lagi memanggil API bila path null → hilang 404 palsu di konsol kasir.
+
+### Teruji
+- Backend **58/58 PASS**, `issue_count = 0` sebelum & sesudah seluruh rangkaian uji. Frontend **29/30 PASS**; satu sisa (cetak otomatis pasca-transaksi) diverifikasi manual oleh main agent. Transaksi uji dibatalkan, saklar cetak otomatis dikembalikan MATI.
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

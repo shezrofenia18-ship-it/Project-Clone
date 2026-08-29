@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,16 +15,31 @@ import { formatRupiah, formatDate } from "@/lib/format";
 import { Plus } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
-const EXP_CATS = ["Pembelian Ayam", "Transportasi", "Tenaga Kerja", "Es", "Air", "Listrik", "Plastik", "Kemasan", "Sewa", "Peralatan", "Perawatan", "BBM", "Administrasi", "Marketing", "Pengeluaran Lainnya"];
+// "Pembelian Ayam" & "Pembayaran Hutang" TIDAK ada di sini: keduanya dicatat otomatis
+// dari modul Pembelian / pembayaran hutang. Kalau dipilih manual, pengeluaran itu akan
+// dianggap modal dan tidak ikut mengurangi laba usaha (menyesatkan).
+const EXP_CATS = ["Transportasi", "Tenaga Kerja", "Es", "Air", "Listrik", "Plastik", "Kemasan", "Sewa", "Peralatan", "Perawatan", "BBM", "Administrasi", "Marketing", "Pengeluaran Lainnya"];
 
 export default function Finance() {
   const { user } = useAuth();
   const isKasir = user.role === "kasir";
   const [expOpen, setExpOpen] = useState(false);
   const { data: expenses, reload: rExp } = useFetch("/expenses");
-  const { data: incomes } = useFetch(isKasir ? null : "/incomes");
+  const { data: incomes, reload: rInc } = useFetch(isKasir ? null : "/incomes");
   const { data: receivables, reload: rRec } = useFetch("/receivables");
   const { data: payables, reload: rPay } = useFetch(isKasir ? null : "/payables");
+
+  // Halaman ini ikut berubah seketika saat kasir menjual, owner membeli, atau
+  // ada pembayaran piutang/hutang — dulu angkanya baru berubah kalau di-refresh manual.
+  const reloadAll = useCallback(() => {
+    rExp();
+    rRec();
+    if (!isKasir) {
+      rInc();
+      rPay();
+    }
+  }, [rExp, rRec, rInc, rPay, isKasir]);
+  useRealtimeReload(["expenses", "incomes", "receivables", "payables", "sales", "customers", "suppliers"], reloadAll);
 
   return (
     <div className="bam-fade">

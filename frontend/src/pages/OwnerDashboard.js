@@ -1,4 +1,6 @@
-import { usePoll } from "@/lib/hooks";
+import { useCallback, useEffect, useState } from "react";
+import api from "@/lib/api";
+import { usePoll, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -9,10 +11,12 @@ import {
 } from "@/lib/format";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell,
+  ComposedChart, Line, Legend,
 } from "recharts";
 import {
   Wallet, TrendingUp, Scale, Percent, Target as TargetIcon, Boxes,
   ShoppingCart, Truck, Scissors, Factory, AlertTriangle, CreditCard, Package,
+  ArrowUpRight, ArrowDownRight, Banknote, Loader2,
 } from "lucide-react";
 
 const ACT_ICON = { sale: ShoppingCart, purchase: Truck, slaughter: Scissors, production: Factory, stock_low: AlertTriangle, cancel: AlertTriangle, payment: CreditCard, adjust: Boxes };
@@ -43,9 +47,64 @@ const AREA_MARGIN = { left: -10, right: 8 };
 const BAR_MARGIN = { left: -10 };
 const BAR_RADIUS = [6, 6, 0, 0];
 const jtFmt = (v) => `${v / 1000000}jt`;
+const shortFmt = (v) => formatRupiahShort(v).replace("Rp ", "");
+// Rentang bulan yang bisa dipilih owner pada grafik tren.
+const MONTH_OPTIONS = [3, 6, 12, 24];
+
+// Ringkasan kecil untuk tren bulanan (pertumbuhan, bulan terbaik, rata-rata).
+function TrendBit({ label, value, tone = "", note }) {
+  return (
+    <div className="rounded-lg border border-border p-2.5 min-w-0">
+      <p className="text-[11px] text-muted-foreground truncate">{label}</p>
+      <p className={`font-bold text-sm tabular truncate ${tone}`}>{value}</p>
+      {note && <p className="text-[10px] text-muted-foreground truncate">{note}</p>}
+    </div>
+  );
+}
+
+function GrowthBadge({ value, testid }) {
+  if (value === null || value === undefined) {
+    return <Badge variant="secondary" className="text-[10px]" data-testid={testid}>Belum ada pembanding</Badge>;
+  }
+  const up = value >= 0;
+  const Icon = up ? ArrowUpRight : ArrowDownRight;
+  return (
+    <Badge data-testid={testid}
+      className={`text-[10px] gap-0.5 ${up ? "bg-success/15 text-success hover:bg-success/15" : "bg-destructive/15 text-destructive hover:bg-destructive/15"}`}>
+      <Icon className="w-3 h-3" />{up ? "+" : ""}{formatPct(value)}
+    </Badge>
+  );
+}
 
 export default function OwnerDashboard() {
   const { data: d } = usePoll("/dashboard", 8000, ["dashboard"]);
+  // Tren bulanan dimuat hanya saat owner menekan tombol "Bulanan" (hemat data).
+  const [range, setRange] = useState("7d");
+  const [months, setMonths] = useState(12);
+  const [monthly, setMonthly] = useState(null);
+  const [loadingMonthly, setLoadingMonthly] = useState(false);
+
+  const loadMonthly = useCallback(async (n) => {
+    setLoadingMonthly(true);
+    try {
+      const r = await api.get(`/dashboard/monthly?months=${n}`);
+      setMonthly(r.data);
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") console.error("tren bulanan gagal:", e);
+    } finally {
+      setLoadingMonthly(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (range === "bulanan") loadMonthly(months);
+  }, [range, months, loadMonthly]);
+
+  // Kalau ada transaksi baru, tren bulanan yang sedang dilihat ikut disegarkan.
+  const refreshMonthly = useCallback(() => {
+    if (range === "bulanan") loadMonthly(months);
+  }, [range, months, loadMonthly]);
+  useRealtimeReload(["dashboard"], refreshMonthly);
 
   if (!d) {
     return (
@@ -65,8 +124,39 @@ export default function OwnerDashboard() {
         <Stat testid="stat-omzet" icon={Wallet} label="Omzet Hari Ini" value={formatRupiah(d.omzet)} sub={`${d.txn_count} transaksi`} tone="primary" />
         <Stat testid="stat-terjual" icon={Scale} label="Ayam Terjual" value={formatWeight(d.weight)} sub={`${formatNumber(d.ekor)} ekor`} tone="chart4" />
         <Stat testid="stat-laba" icon={TrendingUp} label="Laba Kotor" value={formatRupiah(d.laba)} sub={`HPP ${formatRupiahShort(d.hpp)}`} tone="success" />
-        <Stat testid="stat-margin" icon={Percent} label="Margin" value={formatPct(d.margin)} sub={`Laba bersih ${formatRupiahShort(d.net_profit)}`} tone="warning" />
+        <Stat testid="stat-margin" icon={Percent} label="Margin" value={formatPct(d.margin)} sub={`Laba bersih usaha ${formatRupiahShort(d.net_profit)}`} tone="warning" />
       </div>
+
+      {/* Arus kas hari ini — di sinilah uang beli ayam & bayar hutang ikut dihitung,
+          supaya biaya ayam tidak dikurangi dua kali dari laba. */}
+      <Card className="p-4 mt-4" data-testid="cashflow-card">
+        <div className="flex items-center gap-2 mb-3">
+          <Banknote className="w-4 h-4 text-primary" />
+          <h3 className="font-head font-bold text-sm">Uang Masuk & Keluar Hari Ini</h3>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div>
+            <p className="text-[11px] text-muted-foreground">Uang Masuk</p>
+            <p className="font-head font-bold text-lg tabular text-success" data-testid="cash-in">{formatRupiah(d.cash_in)}</p>
+            <p className="text-[10px] text-muted-foreground">Tunai jual {formatRupiahShort(d.kas_dari_penjualan)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted-foreground">Uang Keluar</p>
+            <p className="font-head font-bold text-lg tabular text-destructive" data-testid="cash-out">{formatRupiah(d.cash_out)}</p>
+            <p className="text-[10px] text-muted-foreground">Beli ayam & hutang {formatRupiahShort(d.modal_cash)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted-foreground">Uang Bersih (Kas)</p>
+            <p className={`font-head font-bold text-lg tabular ${d.net_cash < 0 ? "text-destructive" : "text-success"}`} data-testid="net-cash">{formatRupiah(d.net_cash)}</p>
+            <p className="text-[10px] text-muted-foreground">Masuk − keluar</p>
+          </div>
+          <div>
+            <p className="text-[11px] text-muted-foreground">Biaya Operasional</p>
+            <p className="font-head font-bold text-lg tabular" data-testid="opex">{formatRupiah(d.opex)}</p>
+            <p className="text-[10px] text-muted-foreground">Piutang baru {formatRupiahShort(d.piutang_baru)}</p>
+          </div>
+        </div>
+      </Card>
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
         {/* target */}
@@ -94,25 +184,95 @@ export default function OwnerDashboard() {
           )}
         </Card>
 
-        {/* sales chart */}
+        {/* sales chart: 7 hari (harian) atau 12 bulan (tren jangka panjang) */}
         <Card className="p-5 lg:col-span-2" data-testid="sales-chart">
-          <h3 className="font-head font-bold mb-4">Grafik Penjualan 7 Hari</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={d.chart} margin={AREA_MARGIN}>
-              <defs>
-                <linearGradient id="gOmzet" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="label" tick={TICK_MD} stroke="hsl(var(--muted-foreground))" />
-              <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
-              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
-              <Area type="monotone" dataKey="omzet" name="Omzet" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#gOmzet)" />
-              <Area type="monotone" dataKey="laba" name="Laba" stroke="hsl(var(--success))" strokeWidth={2} fillOpacity={0} />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+            <h3 className="font-head font-bold">
+              {range === "7d" ? "Grafik Penjualan 7 Hari" : `Tren ${months} Bulan`}
+            </h3>
+            <div className="flex items-center gap-2">
+              {range === "bulanan" && (
+                <select data-testid="months-select" value={months} aria-label="Jumlah bulan"
+                  onChange={(e) => setMonths(Number(e.target.value))}
+                  className="h-8 rounded-lg border border-border bg-background px-2 text-xs font-semibold">
+                  {MONTH_OPTIONS.map((m) => <option key={m} value={m}>{m} bulan</option>)}
+                </select>
+              )}
+              <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5" data-testid="chart-range-toggle">
+                <button type="button" data-testid="range-7d" onClick={() => setRange("7d")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${range === "7d" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                  7 Hari
+                </button>
+                <button type="button" data-testid="range-12m" onClick={() => setRange("bulanan")}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${range === "bulanan" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+                  Bulanan
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {range === "7d" ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={d.chart} margin={AREA_MARGIN}>
+                <defs>
+                  <linearGradient id="gOmzet" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                <XAxis dataKey="label" tick={TICK_MD} stroke="hsl(var(--muted-foreground))" />
+                <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
+                <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
+                <Area type="monotone" dataKey="omzet" name="Omzet" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#gOmzet)" />
+                <Area type="monotone" dataKey="laba" name="Laba" stroke="hsl(var(--success))" strokeWidth={2} fillOpacity={0} />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : !monthly ? (
+            <div className="h-[220px] flex items-center justify-center text-sm text-muted-foreground gap-2" data-testid="monthly-loading">
+              <Loader2 className="w-4 h-4 animate-spin" /> Memuat tren bulanan…
+            </div>
+          ) : (
+            <div data-testid="monthly-chart" className={loadingMonthly ? "opacity-60 transition-opacity" : "transition-opacity"}>
+              <ResponsiveContainer width="100%" height={230}>
+                <ComposedChart data={monthly.series} margin={AREA_MARGIN}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <XAxis dataKey="label" tick={TICK_SM} stroke="hsl(var(--muted-foreground))" interval={0} angle={-30} textAnchor="end" height={48} />
+                  <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={shortFmt} />
+                  <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Bar dataKey="omzet" name="Omzet" fill="hsl(var(--primary))" radius={BAR_RADIUS} maxBarSize={26} />
+                  <Line type="monotone" dataKey="laba_kotor" name="Laba Kotor" stroke="hsl(var(--success))" strokeWidth={2.5} dot={false} />
+                  <Line type="monotone" dataKey="laba_bersih" name="Laba Bersih" stroke="hsl(var(--chart-4))" strokeWidth={2} strokeDasharray="5 3" dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <div className="flex items-center flex-wrap gap-2 mt-3 mb-2">
+                {monthly.summary.growth_omzet === null && monthly.summary.growth_laba_bersih === null ? (
+                  <span className="text-xs text-muted-foreground" data-testid="growth-empty">
+                    Belum ada bulan pembanding — pertumbuhan mulai terlihat bulan depan
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-xs text-muted-foreground">Omzet vs {monthly.summary.prev_month || "bulan lalu"}</span>
+                    <GrowthBadge value={monthly.summary.growth_omzet} testid="growth-omzet" />
+                    <span className="text-xs text-muted-foreground ml-2">Laba bersih</span>
+                    <GrowthBadge value={monthly.summary.growth_laba_bersih} testid="growth-laba" />
+                  </>
+                )}
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2" data-testid="monthly-summary">
+                <TrendBit label={`Bulan ini (${monthly.summary.this_month || "-"})`}
+                  value={formatRupiahShort(monthly.summary.this_omzet)}
+                  note={`Laba bersih ${formatRupiahShort(monthly.summary.this_laba_bersih)}`} />
+                <TrendBit label="Bulan terbaik" value={monthly.summary.best_month || "-"}
+                  tone="text-success" note={formatRupiahShort(monthly.summary.best_omzet)} />
+                <TrendBit label="Rata-rata omzet/bulan" value={formatRupiahShort(monthly.summary.avg_omzet)}
+                  note={`${monthly.summary.active_months} bulan berjalan`} />
+                <TrendBit label={`Total ${months} bulan`} value={formatRupiahShort(monthly.summary.total_omzet)}
+                  note={`Laba bersih ${formatRupiahShort(monthly.summary.total_laba_bersih)}`} />
+              </div>
+            </div>
+          )}
         </Card>
       </div>
 

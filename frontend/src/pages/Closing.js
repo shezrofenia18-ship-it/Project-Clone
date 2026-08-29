@@ -112,7 +112,7 @@ export function ClosingDetail({ d }) {
           sub={`${formatNumber(d.txn_count)} transaksi${d.cancelled_count ? ` · ${d.cancelled_count} batal` : ""}`} />
         <Stat testid="closing-laba" icon={TrendingUp} label="Laba Kotor" value={formatRupiah(d.gross_profit)}
           sub={`HPP ${formatRupiahShort(d.hpp)} · margin ${formatPct(d.margin)}`} tone="success" />
-        <Stat testid="closing-net" icon={ReceiptText} label="Laba Bersih" value={formatRupiah(d.net_profit)}
+        <Stat testid="closing-net" icon={ReceiptText} label="Laba Bersih Usaha" value={formatRupiah(d.net_profit)}
           sub={`Beban operasional ${formatRupiahShort(d.opex)}`} tone="warning" />
         <Stat testid="closing-stock" icon={Boxes} label="Nilai Stok Sisa" value={formatRupiah(d.stock_value)}
           sub={`${d.stock_items?.length || 0} produk bersisa`} tone="chart4" />
@@ -137,6 +137,13 @@ export function ClosingDetail({ d }) {
           <Row label={`Pembelian ayam (${formatNumber(d.purchase?.count)} nota)`}
             value={formatRupiah(d.purchase?.total_modal)} />
           <Row label="Total pengeluaran tercatat" value={formatRupiah(d.expense_total)} strong />
+          {/* Uang keluar = biaya operasional + uang yang benar-benar dibayar untuk ayam/hutang,
+              jadi pembelian kredit tidak dihitung dobel dengan pelunasan hutangnya. */}
+          <div className="mt-3 pt-2.5 border-t border-dashed border-border" data-testid="closing-cashflow">
+            <Row label="Uang keluar (kas)" value={formatRupiah(d.cash_out)} />
+            <Row label="Uang bersih hari ini (kas)" value={formatRupiah(d.net_cash)} strong
+              tone={d.net_cash < 0 ? "neg" : "pos"} />
+          </div>
         </Card>
       </div>
 

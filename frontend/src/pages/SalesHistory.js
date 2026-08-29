@@ -1,6 +1,6 @@
 import { useState } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export default function SalesHistory() {
   const store = useStore();
   const [detail, setDetail] = useState(null);
   const canCancel = ["owner", "admin"].includes(user.role);
+  // Ikut berubah seketika saat ada penjualan baru atau piutang dibayar (status jadi lunas).
+  useRealtimeReload(["sales", "receivables"], reload);
 
   const cancel = async (id) => {
     try { await api.post(`/sales/${id}/cancel`); toast.success("Transaksi dibatalkan, stok dikembalikan"); setDetail(null); reload(); }

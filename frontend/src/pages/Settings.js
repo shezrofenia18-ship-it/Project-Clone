@@ -8,7 +8,81 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { MessageCircle, Plus, Trash2, Loader2, Send } from "lucide-react";
+import { formatRupiah } from "@/lib/format";
+import { MessageCircle, Plus, Trash2, Loader2, Send, Printer, RefreshCw, ShieldCheck, AlertTriangle } from "lucide-react";
+import { printReceipt, sampleSale, RECEIPT_PAPER_MM } from "@/lib/receipt";
+
+// Pemeriksaan & perbaikan sinkronisasi data antar modul (penjualan, pembelian,
+// pengeluaran, piutang/hutang, saldo pelanggan & supplier).
+function DataSyncSettings() {
+  const [busy, setBusy] = useState("");
+  const [res, setRes] = useState(null);
+
+  const run = async (mode) => {
+    setBusy(mode);
+    try {
+      const r = mode === "fix"
+        ? await api.post("/maintenance/reconcile")
+        : await api.get("/maintenance/consistency");
+      setRes(r.data);
+      if (mode === "fix") {
+        toast.success(r.data.fixed_count > 0
+          ? `${r.data.fixed_count} data dirapikan`
+          : "Semua data sudah sinkron — tidak ada yang perlu diperbaiki");
+      } else {
+        toast[r.data.issue_count > 0 ? "warning" : "success"](
+          r.data.issue_count > 0
+            ? `Ditemukan ${r.data.issue_count} data tidak sinkron`
+            : "Semua data sinkron");
+      }
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="space-y-3 border-t border-border pt-5" data-testid="data-sync-card">
+      <div>
+        <p className="font-semibold text-sm flex items-center gap-1.5">
+          <ShieldCheck className="w-4 h-4 text-primary" /> Sinkronisasi Data
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Memastikan angka di Penjualan, Pembelian, Pengeluaran, Keuangan, Laporan, dan Riwayat
+          selalu cocok satu sama lain. Aman dijalankan kapan saja.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" data-testid="sync-check" disabled={!!busy} onClick={() => run("check")}>
+          {busy === "check" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+          Periksa Data
+        </Button>
+        <Button data-testid="sync-fix" disabled={!!busy} onClick={() => run("fix")}>
+          {busy === "fix" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ShieldCheck className="w-4 h-4 mr-1" />}
+          Perbaiki Sekarang
+        </Button>
+      </div>
+      {res && (
+        <div className="rounded-lg bg-muted/40 p-3 space-y-1.5" data-testid="sync-result">
+          <p className="text-xs font-semibold flex items-center gap-1.5">
+            {res.issue_count > 0
+              ? <><AlertTriangle className="w-3.5 h-3.5 text-warning" /> {res.issue_count} temuan{res.repaired ? ` · ${res.fixed_count} diperbaiki` : ""}</>
+              : <><ShieldCheck className="w-3.5 h-3.5 text-success" /> Semua data sinkron</>}
+          </p>
+          {(res.findings || []).slice(0, 8).map((f, i) => (
+            <p key={`f-${i}`} className="text-[11px] text-muted-foreground">
+              • {f.label} — {f.detail}{f.amount ? ` (${formatRupiah(f.amount)})` : ""}
+            </p>
+          ))}
+          {(res.findings || []).length > 8 && (
+            <p className="text-[11px] text-muted-foreground">…dan {res.findings.length - 8} lainnya</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Rekap tutup buku harian dikirim ke WhatsApp. Nomor bisa ditambah/diubah kapan saja.
 function WhatsAppSettings() {
@@ -172,7 +246,7 @@ function WhatsAppSettings() {
 }
 
 export default function Settings() {
-  const [s, setS] = useState({ store_name: "", store_address: "", store_phone: "", allow_negative_stock: false });
+  const [s, setS] = useState({ store_name: "", store_address: "", store_phone: "", allow_negative_stock: false, receipt_auto_print: false });
 
   useEffect(() => {
     api.get("/settings").then((r) => setS({
@@ -180,6 +254,7 @@ export default function Settings() {
       store_address: r.data.store_address || "",
       store_phone: r.data.store_phone || "",
       allow_negative_stock: !!r.data.allow_negative_stock,
+      receipt_auto_print: !!r.data.receipt_auto_print,
     }));
   }, []);
 
@@ -229,6 +304,38 @@ export default function Settings() {
           <Switch data-testid="toggle-negative-stock" checked={s.allow_negative_stock}
             onCheckedChange={(v) => { setS({ ...s, allow_negative_stock: v }); put("allow_negative_stock", v); }} />
         </div>
+        {/* Struk & printer termal kasir */}
+        <div className="space-y-3 border-t border-border pt-5" data-testid="receipt-settings">
+          <div>
+            <p className="font-semibold text-sm flex items-center gap-1.5">
+              <Printer className="w-4 h-4 text-primary" /> Struk & Printer
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Struk dicetak untuk printer termal <b>{RECEIPT_PAPER_MM}mm</b> (lebar kertas kasir).
+              Pastikan printer termal sudah terpasang di tablet/PC kasir.
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-sm">Cetak Struk Otomatis</p>
+              <p className="text-xs text-muted-foreground">
+                Begitu transaksi selesai, struk langsung dikirim ke printer tanpa kasir menekan tombol.
+              </p>
+            </div>
+            <Switch data-testid="toggle-auto-print" checked={s.receipt_auto_print}
+              onCheckedChange={(v) => { setS({ ...s, receipt_auto_print: v }); put("receipt_auto_print", v); }} />
+          </div>
+          <Button variant="outline" data-testid="test-print"
+            onClick={() => {
+              printReceipt(sampleSale(), {
+                name: s.store_name, address: s.store_address, phone: s.store_phone,
+              });
+              toast.info("Struk contoh dikirim ke dialog cetak");
+            }}>
+            <Printer className="w-4 h-4 mr-1" /> Tes Cetak Struk
+          </Button>
+        </div>
+        <DataSyncSettings />
         <WhatsAppSettings />
       </Card>
     </div>

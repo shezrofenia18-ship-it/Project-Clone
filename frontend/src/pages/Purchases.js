@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,9 +15,12 @@ import { Plus, Trash2 } from "lucide-react";
 
 export default function Purchases() {
   const { data, reload } = useFetch("/purchases");
-  const { data: suppliers } = useFetch("/suppliers");
+  const { data: suppliers, reload: rSup } = useFetch("/suppliers");
   const { data: products } = useFetch("/products");
   const [open, setOpen] = useState(false);
+  // Pembelian & saldo hutang supplier ikut berubah seketika (mis. setelah bayar hutang).
+  const reloadAll = useCallback(() => { reload(); rSup(); }, [reload, rSup]);
+  useRealtimeReload(["purchases", "payables", "suppliers"], reloadAll);
 
   return (
     <div className="bam-fade">

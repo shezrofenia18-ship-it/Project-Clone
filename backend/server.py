@@ -31,6 +31,9 @@ from seed import seed_demo, ensure_potong_parts
 from realtime import manager as rt_manager, emit as rt_emit, ws_handler
 import whatsapp
 import pdf_reports
+import finance
+import reconcile
+from finance import MODAL_CATEGORIES, OPEX_EXCLUDE
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("berkah")
@@ -608,7 +611,7 @@ async def delete_supplier(sid: str, user: dict = Depends(require_roles("owner", 
 
 # ------------------------- Purchases -------------------------
 @api.get("/purchases")
-async def list_purchases(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+async def list_purchases(user: dict = Depends(require_roles("owner", "admin"))):
     p = await db.purchases.find().sort("created_at", -1).to_list(1000)
     return [clean(x) for x in p]
 
@@ -671,6 +674,9 @@ async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
             "due_date": body.due_date, "status": "belum_lunas", "date": doc["date"], "created_at": iso_now()})
     await db.expenses.insert_one({
         "id": new_id(), "date": doc["date"], "category": "Pembelian Ayam", "amount": total_modal,
+        # cash_amount = uang yang benar-benar keluar saat ini (sisanya jadi hutang,
+        # dicatat sebagai kas keluar saat dilunasi) -> kas tidak dihitung dobel.
+        "cash_amount": round(float(body.paid or 0), 2),
         "description": f"Pembelian dari {supplier['name']}", "ref": pid,
         "created_by": user["name"], "created_at": iso_now()})
     return doc, total_weight_all, total_modal
@@ -698,6 +704,7 @@ async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles
     await add_activity("purchase", "Ayam Masuk", f"Pembelian dari {doc['supplier_name']} - {round(tw,1)} kg", total_modal, user["name"])
     await add_notification("purchase", "Pembelian Baru", f"{doc['supplier_name']} - {round(tw,1)} kg", "info")
     await log_audit(user, "create", "purchase", pid, None, {"total_modal": total_modal})
+    await rt_emit(["purchases", "expenses", "payables", "suppliers", "stock", "products", "dashboard"], {"id": pid})
     return clean(doc)
 
 
@@ -711,6 +718,7 @@ async def update_purchase(pid: str, body: PurchaseBody, user: dict = Depends(req
     doc, tw, total_modal = await _persist_purchase(body, user, pid)
     await add_activity("purchase", "Pembelian Diubah", f"{doc['supplier_name']} - {round(tw,1)} kg", total_modal, user["name"])
     await log_audit(user, "update", "purchase", pid, clean(existing), {"total_modal": total_modal})
+    await rt_emit(["purchases", "expenses", "payables", "suppliers", "stock", "products", "dashboard"], {"id": pid})
     return clean(doc)
 
 
@@ -723,6 +731,7 @@ async def delete_purchase(pid: str, user: dict = Depends(require_roles("owner"))
     await db.purchases.delete_one({"id": pid})
     await add_activity("cancel", "Pembelian Dihapus", f"{existing['supplier_name']} dihapus", existing.get("total_modal", 0), user["name"])
     await log_audit(user, "delete", "purchase", pid, clean(existing), None)
+    await rt_emit(["purchases", "expenses", "payables", "suppliers", "stock", "products", "dashboard"], {"id": pid})
     return {"ok": True}
 
 
@@ -890,10 +899,16 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
                                  "amount": paid, "source": "pos", "ref": sid, "created_at": iso_now()})
     if customer:
         await db.customers.update_one({"id": customer["id"]}, {"$inc": {"total_purchase": total, "receivable": receivable}})
-        if receivable > 0:
-            await db.receivables.insert_one({"id": new_id(), "customer_id": customer["id"], "customer_name": customer["name"],
-                                             "sale_id": sid, "amount": total, "paid": paid, "remaining": receivable,
-                                             "due_date": None, "status": "belum_lunas", "date": doc["date"], "created_at": iso_now()})
+    if receivable > 0:
+        # Setiap kekurangan bayar WAJIB punya tagihan, walau pembelinya "Umum".
+        # Tanpa ini, piutang hanya tercatat di dokumen penjualan dan tidak pernah
+        # muncul di modul Keuangan (pernah terjadi: selisih Rp 242.536).
+        await db.receivables.insert_one({"id": new_id(),
+                                         "customer_id": customer["id"] if customer else None,
+                                         "customer_name": customer["name"] if customer else "Umum",
+                                         "sale_id": sid, "amount": total, "paid": paid, "remaining": receivable,
+                                         "due_date": None, "status": "belum_lunas", "date": doc["date"],
+                                         "created_at": iso_now()})
     if body.offline_at:
         await add_activity("sale", "Penjualan Offline Tersinkron",
                            f"{user['name']} menjual {len(items_out)} item (dibuat saat offline)", total, user["name"])
@@ -904,7 +919,7 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
     if total >= 1000000:
         await add_notification("big_sale", "Transaksi Besar", f"{user['name']} - Rp {int(total):,}", "success")
     await log_audit(user, "create", "sale", sid, None, {"total": total})
-    await rt_emit(["sales", "dashboard", "stock", "receivables"], {"total": total, "id": sid})
+    await rt_emit(["sales", "dashboard", "stock", "receivables", "incomes", "customers"], {"total": total, "id": sid})
     return clean(doc)
 
 
@@ -925,10 +940,21 @@ async def cancel_sale(sid: str, user: dict = Depends(require_roles("owner", "adm
         await apply_stock(product, d_ekor, d_kg, "retur", user["name"], sid, allow_negative=True, delta_pcs=d_pcs)
     await db.sales.update_one({"id": sid}, {"$set": {"status": "batal"}})
     await db.incomes.delete_many({"ref": sid})
+    # Piutang & saldo pelanggan HARUS ikut dikoreksi, kalau tidak akan tertinggal
+    # tagihan "hantu" di Keuangan dan laporan piutang jadi salah.
+    sisa_piutang = 0.0
+    async for r in db.receivables.find({"sale_id": sid}):
+        sisa_piutang += float(r.get("remaining", 0) or 0)
+        await db.receivables.update_one({"id": r["id"]},
+                                        {"$set": {"status": "batal", "remaining": 0}})
+    if sale.get("customer_id"):
+        await db.customers.update_one({"id": sale["customer_id"]}, {"$inc": {
+            "total_purchase": -float(sale.get("total", 0) or 0),
+            "receivable": -round(sisa_piutang, 2)}})
     await add_activity("cancel", "Transaksi Dibatalkan", f"Transaksi {sid[:8]} dibatalkan", sale["total"], user["name"])
     await add_notification("cancel", "Transaksi Dibatalkan", f"Rp {int(sale['total']):,} oleh {user['name']}", "danger")
     await log_audit(user, "cancel", "sale", sid, {"status": "selesai"}, {"status": "batal"})
-    await rt_emit(["sales", "dashboard", "stock", "receivables"], {"id": sid})
+    await rt_emit(["sales", "dashboard", "stock", "receivables", "incomes", "customers"], {"id": sid})
     return {"ok": True}
 
 
@@ -949,6 +975,7 @@ async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles
     await log_audit(user, "adjust", "stock", body.product_id, None,
                     {"delta_kg": body.delta_kg, "delta_ekor": body.delta_ekor, "reason": body.reason})
     await add_activity("adjust", "Penyesuaian Stok", f"{product['name']}: {body.reason}", 0, user["name"])
+    await rt_emit(["stock", "products", "dashboard"], {"id": body.product_id})
     return {"ok": True}
 
 
@@ -989,13 +1016,31 @@ async def pay_receivable(rid: str, body: PayBody, user: dict = Depends(require_r
     r = await db.receivables.find_one({"id": rid})
     if not r:
         raise HTTPException(404, "Piutang tidak ditemukan")
-    remaining = round(r["remaining"] - body.amount, 2)
+    if r.get("status") == "batal":
+        raise HTTPException(400, "Tagihan ini sudah dibatalkan")
+    amount = round(float(body.amount or 0), 2)
+    sisa = round(float(r.get("remaining", 0) or 0), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Jumlah bayar harus lebih dari nol")
+    if sisa <= 0:
+        raise HTTPException(400, "Piutang ini sudah lunas")
+    if amount > sisa + 0.01:
+        raise HTTPException(400, f"Jumlah bayar melebihi sisa piutang (Rp {int(sisa):,})".replace(",", "."))
+    remaining = round(sisa - amount, 2)
     status = "lunas" if remaining <= 0 else "belum_lunas"
-    await db.receivables.update_one({"id": rid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": body.amount}})
-    await db.customers.update_one({"id": r["customer_id"]}, {"$inc": {"receivable": -body.amount}})
+    await db.receivables.update_one({"id": rid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": amount}})
+    await db.customers.update_one({"id": r["customer_id"]}, {"$inc": {"receivable": -amount}})
+    # Transaksi aslinya ikut diperbarui supaya Riwayat Transaksi & laporan
+    # tidak lagi menampilkan piutang yang sebetulnya sudah dibayar.
+    if r.get("sale_id"):
+        await db.sales.update_one({"id": r["sale_id"]}, {"$set": {
+            "receivable": max(0, remaining),
+            "payment_status": "lunas" if remaining <= 0 else "piutang"}})
     await db.incomes.insert_one({"id": new_id(), "date": today_str(), "category": "Pembayaran Piutang",
-                                 "amount": body.amount, "source": "receivable", "ref": rid, "created_at": iso_now()})
-    await add_activity("payment", "Pembayaran Piutang", f"{r['customer_name']} bayar", body.amount, user["name"])
+                                 "amount": amount, "source": "receivable", "ref": rid, "created_at": iso_now()})
+    await add_activity("payment", "Pembayaran Piutang", f"{r['customer_name']} bayar", amount, user["name"])
+    await log_audit(user, "pay", "receivable", rid, {"remaining": sisa}, {"remaining": max(0, remaining)})
+    await rt_emit(["receivables", "incomes", "sales", "customers", "dashboard"], {"id": rid})
     return {"ok": True, "remaining": max(0, remaining)}
 
 
@@ -1010,14 +1055,27 @@ async def pay_payable(pid: str, body: PayBody, user: dict = Depends(require_role
     p = await db.payables.find_one({"id": pid})
     if not p:
         raise HTTPException(404, "Hutang tidak ditemukan")
-    remaining = round(p["remaining"] - body.amount, 2)
+    if p.get("status") == "batal":
+        raise HTTPException(400, "Hutang ini sudah dibatalkan")
+    amount = round(float(body.amount or 0), 2)
+    sisa = round(float(p.get("remaining", 0) or 0), 2)
+    if amount <= 0:
+        raise HTTPException(400, "Jumlah bayar harus lebih dari nol")
+    if sisa <= 0:
+        raise HTTPException(400, "Hutang ini sudah lunas")
+    if amount > sisa + 0.01:
+        raise HTTPException(400, f"Jumlah bayar melebihi sisa hutang (Rp {int(sisa):,})".replace(",", "."))
+    remaining = round(sisa - amount, 2)
     status = "lunas" if remaining <= 0 else "belum_lunas"
-    await db.payables.update_one({"id": pid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": body.amount}})
-    await db.suppliers.update_one({"id": p["supplier_id"]}, {"$inc": {"payable": -body.amount}})
+    await db.payables.update_one({"id": pid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": amount}})
+    await db.suppliers.update_one({"id": p["supplier_id"]}, {"$inc": {"payable": -amount}})
     await db.expenses.insert_one({"id": new_id(), "date": today_str(), "category": "Pembayaran Hutang",
-                                  "amount": body.amount, "description": f"Bayar ke {p['supplier_name']}",
+                                  "amount": amount, "cash_amount": amount,
+                                  "description": f"Bayar ke {p['supplier_name']}",
                                   "ref": pid, "created_by": user["name"], "created_at": iso_now()})
-    await add_activity("payment", "Pembayaran Supplier", f"{p['supplier_name']}", body.amount, user["name"])
+    await add_activity("payment", "Pembayaran Supplier", f"{p['supplier_name']}", amount, user["name"])
+    await log_audit(user, "pay", "payable", pid, {"remaining": sisa}, {"remaining": max(0, remaining)})
+    await rt_emit(["payables", "expenses", "suppliers", "purchases", "dashboard"], {"id": pid})
     return {"ok": True, "remaining": max(0, remaining)}
 
 
@@ -1086,20 +1144,42 @@ async def put_setting(body: SettingBody, user: dict = Depends(require_roles("own
     return {"ok": True}
 
 
+# ------------------------- Pemeliharaan data (sinkronisasi) -------------------------
+@api.get("/maintenance/consistency")
+async def check_consistency(user: dict = Depends(require_roles("owner", "admin"))):
+    """Periksa apakah angka turunan (pengeluaran, saldo, status bayar) masih cocok
+    dengan sumbernya (penjualan & pembelian). Tidak mengubah apa pun."""
+    res = await reconcile.audit(db, fix=False)
+    res["checked_at"] = iso_now()
+    return res
+
+
+@api.post("/maintenance/reconcile")
+async def run_reconcile(user: dict = Depends(require_roles("owner"))):
+    """Perbaiki ketidaksinkronan data. Aman dijalankan berulang kali."""
+    res = await reconcile.audit(db, fix=True, actor=user["name"])
+    res["checked_at"] = iso_now()
+    if res["fixed_count"]:
+        await add_activity("adjust", "Sinkronisasi Data",
+                           f"{res['fixed_count']} data dirapikan", 0, user["name"])
+        await log_audit(user, "reconcile", "maintenance", "-", None, {"fixed": res["fixed_count"]})
+        await rt_emit(["dashboard", "sales", "expenses", "incomes", "receivables",
+                       "payables", "customers", "suppliers", "purchases"], {"fixed": res["fixed_count"]})
+    return res
+
+
 # ------------------------- Dashboard -------------------------
 @api.get("/dashboard")
 async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
     d = today_str()
     sales_today = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(5000)
-    omzet = sum(s["total"] for s in sales_today)
-    hpp = sum(s["total_hpp"] for s in sales_today)
-    weight = sum(s.get("total_weight", 0) for s in sales_today)
-    ekor = sum(s.get("total_ekor", 0) for s in sales_today)
-    laba = round(omzet - hpp, 2)
-    margin = round(laba / omzet * 100, 2) if omzet else 0
     exp_today = await db.expenses.find({"date": d}).to_list(2000)
-    expense = sum(e["amount"] for e in exp_today)
-    net_profit = round(laba - expense, 2)
+    inc_today = await db.incomes.find({"date": d}).to_list(2000)
+    # SATU rumus untuk Dashboard, Laporan, & Tutup Buku (lihat finance.py).
+    fin = finance.summarize(sales_today, exp_today, inc_today)
+    omzet, hpp, laba, margin = fin["omzet"], fin["hpp"], fin["gross_profit"], fin["margin"]
+    weight, ekor = fin["weight"], fin["ekor"]
+    net_profit = fin["net_profit"]
     target = await db.targets.find_one({"date": d}) or {}
     t_omzet = target.get("target_omzet", 0)
     achievement = round(omzet / t_omzet * 100, 2) if t_omzet else 0
@@ -1151,13 +1231,89 @@ async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
 
     return {"omzet": round(omzet, 2), "hpp": round(hpp, 2), "laba": laba, "margin": margin,
             "weight": round(weight, 2), "ekor": ekor, "txn_count": len(sales_today),
-            "expense": round(expense, 2), "net_profit": net_profit,
+            # "expense" = biaya operasional saja (beli ayam sudah masuk HPP, tidak dikurangi 2x)
+            "expense": fin["opex"], "opex": fin["opex"], "expense_total": fin["expense_total"],
+            "net_profit": net_profit, "net_margin": fin["net_margin"],
+            # arus kas: di sinilah uang beli ayam & pelunasan hutang ikut dihitung
+            "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+            "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
+            "piutang_baru": fin["piutang_baru"], "kas_dari_penjualan": fin["kas_dari_penjualan"],
             "target": {"omzet": t_omzet, "weight": target.get("target_weight", 0),
                        "ekor": target.get("target_ekor", 0), "laba": target.get("target_laba", 0),
                        "achievement": achievement},
             "chart": chart, "products_perf": products_perf, "critical_stock": critical,
             "stock_value": round(stock_value, 2), "recent_sales": [clean(r) for r in recent],
             "activities": [clean(a) for a in activities], "prices": prices}
+
+
+@api.get("/dashboard/monthly")
+async def dashboard_monthly(months: int = 12, user: dict = Depends(require_roles("owner", "admin"))):
+    """Tren bulanan omzet, laba kotor, laba bersih usaha, & uang bersih (kas).
+
+    Rumus identik dengan Dashboard harian, Laporan, dan Tutup Buku (finance.py),
+    sehingga total 12 bulan selalu cocok dengan jumlah laporan hariannya.
+    """
+    months = max(1, min(int(months or 12), 36))
+    now = now_jkt()
+    keys = finance.month_series(now.year, now.month, months)
+    start = keys[0] + "-01"
+
+    sales = await db.sales.find({"date": {"$gte": start}, "status": {"$ne": "batal"}}).to_list(100000)
+    expenses = await db.expenses.find({"date": {"$gte": start}}).to_list(100000)
+    incomes = await db.incomes.find({"date": {"$gte": start}}).to_list(100000)
+
+    buckets: Dict[str, Dict[str, list]] = {k: {"sales": [], "expenses": [], "incomes": []} for k in keys}
+    for coll, rows in (("sales", sales), ("expenses", expenses), ("incomes", incomes)):
+        for row in rows:
+            b = buckets.get(finance.month_key(row.get("date", "")))
+            if b is not None:
+                b[coll].append(row)
+
+    series = []
+    for k in keys:
+        b = buckets[k]
+        fin = finance.summarize(b["sales"], b["expenses"], b["incomes"])
+        series.append({
+            "month": k, "label": finance.month_label(k),
+            "omzet": fin["omzet"], "hpp": fin["hpp"], "laba_kotor": fin["gross_profit"],
+            "opex": fin["opex"], "laba_bersih": fin["net_profit"], "margin": fin["margin"],
+            "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+            "modal": fin["modal_value"],
+            "txn_count": fin["txn_count"], "weight": fin["weight"], "ekor": fin["ekor"],
+        })
+
+    filled = [m for m in series if m["omzet"] or m["txn_count"]]
+    total_omzet = round(sum(m["omzet"] for m in series), 2)
+    total_kotor = round(sum(m["laba_kotor"] for m in series), 2)
+    total_bersih = round(sum(m["laba_bersih"] for m in series), 2)
+    best = max(series, key=lambda m: m["omzet"]) if series else None
+    this_m = series[-1] if series else None
+    prev_m = series[-2] if len(series) > 1 else None
+
+    def growth(cur, prev):
+        if not prev:
+            return None
+        return round((cur - prev) / abs(prev) * 100, 2)
+
+    return {
+        "months": months, "series": series,
+        "summary": {
+            "total_omzet": total_omzet, "total_laba_kotor": total_kotor,
+            "total_laba_bersih": total_bersih,
+            "avg_omzet": round(total_omzet / len(filled), 2) if filled else 0,
+            "avg_laba_bersih": round(total_bersih / len(filled), 2) if filled else 0,
+            "active_months": len(filled),
+            "this_month": this_m["label"] if this_m else None,
+            "this_omzet": this_m["omzet"] if this_m else 0,
+            "this_laba_bersih": this_m["laba_bersih"] if this_m else 0,
+            "growth_omzet": growth(this_m["omzet"], prev_m["omzet"]) if this_m and prev_m else None,
+            "growth_laba_bersih": growth(this_m["laba_bersih"], prev_m["laba_bersih"]) if this_m and prev_m else None,
+            "prev_month": prev_m["label"] if prev_m else None,
+            "best_month": best["label"] if best and best["omzet"] else None,
+            "best_omzet": best["omzet"] if best else 0,
+        },
+    }
+
 
 
 # ------------------------- Reports -------------------------
@@ -1168,22 +1324,21 @@ async def report_pl(start: Optional[str] = None, end: Optional[str] = None,
     if start and end:
         q["date"] = {"$gte": start, "$lte": end}
     sales = await db.sales.find(q).to_list(20000)
-    omzet = sum(s["total"] for s in sales)
-    hpp = sum(s["total_hpp"] for s in sales)
-    gross = round(omzet - hpp, 2)
     eq = {}
     if start and end:
         eq["date"] = {"$gte": start, "$lte": end}
     exps = await db.expenses.find(eq).to_list(20000)
-    opex = sum(e["amount"] for e in exps if e.get("category") not in ("Pembelian Ayam", "Pembayaran Hutang"))
-    net = round(gross - opex, 2)
-    by_cat = {}
-    for e in exps:
-        by_cat[e["category"]] = by_cat.get(e["category"], 0) + e["amount"]
-    return {"omzet": round(omzet, 2), "hpp": round(hpp, 2), "gross_profit": gross, "opex": round(opex, 2),
-            "net_profit": net, "gross_margin": round(gross / omzet * 100, 2) if omzet else 0,
-            "net_margin": round(net / omzet * 100, 2) if omzet else 0,
-            "expenses_by_category": [{"category": k, "amount": round(v, 2)} for k, v in by_cat.items()]}
+    incs = await db.incomes.find(eq).to_list(20000)
+    # SATU rumus untuk semua halaman (finance.py) — sama dengan Dashboard & Tutup Buku.
+    fin = finance.summarize(sales, exps, incs)
+    return {"omzet": fin["omzet"], "hpp": fin["hpp"], "gross_profit": fin["gross_profit"],
+            "opex": fin["opex"], "net_profit": fin["net_profit"],
+            "gross_margin": fin["margin"], "net_margin": fin["net_margin"],
+            "expense_total": fin["expense_total"],
+            "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
+            "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+            "txn_count": fin["txn_count"], "weight": fin["weight"], "ekor": fin["ekor"],
+            "expenses_by_category": fin["expenses_by_category"]}
 
 
 @api.get("/reports/sales")
@@ -1276,8 +1431,7 @@ async def report_stock_pdf(user: dict = Depends(require_roles("owner", "admin"))
 
 
 # ------------------------- Tutup Buku Harian -------------------------
-# Beban yang BUKAN biaya usaha (sudah masuk modal/HPP) — sama seperti laporan laba rugi.
-OPEX_EXCLUDE = ("Pembelian Ayam", "Pembayaran Hutang")
+# Rumus laba & kas ada di finance.py (satu sumber untuk semua halaman).
 
 
 class ClosingBody(BaseModel):
@@ -1290,35 +1444,26 @@ async def _closing_snapshot(d: str) -> dict:
     sales = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(20000)
     cancelled = await db.sales.count_documents({"date": d, "status": "batal"})
 
-    omzet = hpp = diskon = piutang_baru = kas_masuk_jual = 0.0
-    weight = ekor = pcs = 0.0
     by_method: Dict[str, dict] = {}
     by_cashier: Dict[str, dict] = {}
     per_product: Dict[str, dict] = {}
     for s in sales:
         total = float(s.get("total", 0) or 0)
         s_hpp = float(s.get("total_hpp", 0) or 0)
-        recv = float(s.get("receivable", 0) or 0)
-        omzet += total
-        hpp += s_hpp
-        diskon += float(s.get("discount", 0) or 0)
-        piutang_baru += recv
-        kas_masuk_jual += max(total - recv, 0)
-        weight += float(s.get("total_weight", 0) or 0)
-        ekor += float(s.get("total_ekor", 0) or 0)
+        # kas = uang yang diterima saat transaksi; pelunasan piutang dicatat
+        # terpisah sebagai pemasukan supaya kas tidak dihitung dua kali.
+        kas = min(float(s.get("paid", 0) or 0), total)
         m = by_method.setdefault(s.get("payment_method", "cash"),
                                  {"method": s.get("payment_method", "cash"), "count": 0, "total": 0.0, "kas": 0.0})
         m["count"] += 1
         m["total"] += total
-        m["kas"] += max(total - recv, 0)
+        m["kas"] += max(kas, 0)
         c = by_cashier.setdefault(s.get("cashier_name", "-"),
                                   {"cashier": s.get("cashier_name", "-"), "count": 0, "total": 0.0, "laba": 0.0})
         c["count"] += 1
         c["total"] += total
         c["laba"] += total - s_hpp
         for it in s.get("items", []) or []:
-            if it.get("unit") == "pcs":
-                pcs += float(it.get("qty", 0) or 0)
             p = per_product.setdefault(it.get("name", "-"), {"name": it.get("name", "-"), "qty_kg": 0.0,
                                                              "qty_ekor": 0.0, "qty_pcs": 0.0,
                                                              "penjualan": 0.0, "hpp": 0.0})
@@ -1333,22 +1478,17 @@ async def _closing_snapshot(d: str) -> dict:
             p["penjualan"] += float(it.get("subtotal", 0) or 0)
             p["hpp"] += float(it.get("hpp_total", 0) or 0)
 
-    gross = round(omzet - hpp, 2)
-
     incomes = await db.incomes.find({"date": d}).to_list(20000)
-    bayar_piutang = sum(float(i.get("amount", 0) or 0) for i in incomes
-                        if i.get("category") == "Pembayaran Piutang")
-    income_total = sum(float(i.get("amount", 0) or 0) for i in incomes)
-
     expenses = await db.expenses.find({"date": d}).to_list(20000)
-    exp_by_cat: Dict[str, float] = {}
-    opex = 0.0
-    for e in expenses:
-        amt = float(e.get("amount", 0) or 0)
-        exp_by_cat[e.get("category", "Lain-lain")] = exp_by_cat.get(e.get("category", "Lain-lain"), 0) + amt
-        if e.get("category") not in OPEX_EXCLUDE:
-            opex += amt
-    expense_total = sum(float(e.get("amount", 0) or 0) for e in expenses)
+    # SATU rumus untuk semua halaman (lihat finance.py).
+    fin = finance.summarize(sales, expenses, incomes)
+    omzet, hpp, gross = fin["omzet"], fin["hpp"], fin["gross_profit"]
+    diskon, piutang_baru = fin["diskon"], fin["piutang_baru"]
+    kas_masuk_jual = fin["kas_dari_penjualan"]
+    weight, ekor, pcs = fin["weight"], fin["ekor"], fin["pcs"]
+    opex, expense_total = fin["opex"], fin["expense_total"]
+    income_total, bayar_piutang = fin["cash_in"], fin["bayar_piutang_masuk"]
+    exp_by_cat = {x["category"]: x["amount"] for x in fin["expenses_by_category"]}
 
     purchases = await db.purchases.find({"date": d}).to_list(5000)
     beli_modal = sum(float(p.get("total_modal", 0) or 0) for p in purchases)
@@ -1394,6 +1534,10 @@ async def _closing_snapshot(d: str) -> dict:
         "omzet": round(omzet, 2), "hpp": round(hpp, 2), "gross_profit": gross,
         "margin": round(gross / omzet * 100, 2) if omzet else 0,
         "opex": round(opex, 2), "net_profit": round(gross - opex, 2),
+        "net_margin": fin["net_margin"],
+        # arus kas (biaya beli ayam & pelunasan hutang dihitung di sini, bukan di laba)
+        "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+        "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
         "diskon": round(diskon, 2),
         "txn_count": len(sales), "cancelled_count": cancelled,
         "weight": round(weight, 3), "ekor": round(ekor, 2), "pcs": round(pcs, 2),
@@ -1757,6 +1901,11 @@ async def startup():
         await refresh_all_avg_weights()
     except Exception as e:
         logger.error(f"Migrasi berat rata-rata gagal: {e}")
+    # Rapikan data warisan supaya Penjualan/Pembelian/Keuangan/Laporan selalu sinkron.
+    try:
+        await reconcile.repair_on_startup(db)
+    except Exception as e:
+        logger.error(f"Rekonsiliasi data gagal: {e}")
     # Nomor penerima rekap WhatsApp default (bisa diubah owner di Pengaturan).
     if await db.settings.find_one({"key": "wa_recipients"}) is None:
         await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": [

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { useAuth } from "@/context/AuthContext";
 export default function Customers() {
   const { user } = useAuth();
   const { data, reload } = useFetch("/customers");
+  useRealtimeReload(["customers", "sales", "receivables"], reload);
   const [edit, setEdit] = useState(null);
   const canEdit = ["owner", "admin"].includes(user.role);
 

@@ -70,7 +70,7 @@ function App() {
           <Route path="/riwayat" element={<Protected roles={R_POS}><SalesHistory /></Protected>} />
           <Route path="/produk" element={<Protected roles={R_OWNER_ADMIN}><Products /></Protected>} />
           <Route path="/stok" element={<Protected roles={R_OPS}><Stock /></Protected>} />
-          <Route path="/pembelian" element={<Protected roles={R_OPS}><Purchases /></Protected>} />
+          <Route path="/pembelian" element={<Protected roles={R_OWNER_ADMIN}><Purchases /></Protected>} />
           <Route path="/pemotongan" element={<Protected roles={R_OPS}><Slaughter /></Protected>} />
           <Route path="/produksi" element={<Protected roles={R_OPS}><Production /></Protected>} />
           <Route path="/pelanggan" element={<Protected roles={R_POS}><Customers /></Protected>} />

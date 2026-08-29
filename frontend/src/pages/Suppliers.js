@@ -1,6 +1,6 @@
 import { useState } from "react";
 import api, { apiError } from "@/lib/api";
-import { useFetch } from "@/lib/hooks";
+import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Plus, Pencil, Phone } from "lucide-react";
 
 export default function Suppliers() {
   const { data, reload } = useFetch("/suppliers");
+  useRealtimeReload(["suppliers", "purchases", "payables"], reload);
   const [edit, setEdit] = useState(null);
 
   const cats = ["broiler", "kampung", "pejantan"];
