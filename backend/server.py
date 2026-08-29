@@ -6,6 +6,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import uuid
+import asyncio
+import re
 import logging
 import requests
 from datetime import timedelta
@@ -27,6 +29,7 @@ from auth import (
 )
 from seed import seed_demo, ensure_potong_parts
 from realtime import manager as rt_manager, emit as rt_emit, ws_handler
+import whatsapp
 import pdf_reports
 
 logging.basicConfig(level=logging.INFO)
@@ -1346,25 +1349,152 @@ async def list_closings(limit: int = 60, user: dict = Depends(require_roles("own
 async def create_closing(body: ClosingBody, user: dict = Depends(require_roles("owner"))):
     """Tutup buku: simpan snapshot angka hari itu. Bisa diulang (versi bertambah)."""
     d = body.date or today_str()
+    doc = await _save_closing(d, body.notes, user["name"])
+    await log_audit(user, "closing", "daily_closing", doc["id"], None,
+                    {"date": d, "omzet": doc["omzet"], "net_profit": doc["net_profit"]})
+    out = await _dispatch_closing_whatsapp(doc, body.notes)
+    result = clean(await db.daily_closings.find_one({"date": d}))
+    result["whatsapp"] = out
+    return result
+
+
+async def _save_closing(d: str, notes: str, actor: str) -> dict:
+    """Simpan/segarkan snapshot tutup buku untuk tanggal d (idempotent per tanggal)."""
     snap = await _closing_snapshot(d)
     existing = await db.daily_closings.find_one({"date": d})
     doc = {
         **snap,
         "id": existing["id"] if existing else new_id(),
-        "notes": body.notes or (existing.get("notes", "") if existing else ""),
-        "closed_by": user["name"], "closed_at": iso_now(),
+        "notes": notes or (existing.get("notes", "") if existing else ""),
+        "closed_by": actor, "closed_at": iso_now(),
         "version": int(existing.get("version", 1)) + 1 if existing else 1,
         "created_at": existing.get("created_at") if existing else iso_now(),
     }
     await db.daily_closings.update_one({"date": d}, {"$set": doc}, upsert=True)
     label = "Tutup Buku Diperbarui" if existing else "Tutup Buku Harian"
     await add_activity("closing", label, f"{d} · omzet Rp {int(snap['omzet']):,} · laba Rp {int(snap['net_profit']):,}",
-                       snap["omzet"], user["name"])
+                       snap["omzet"], actor)
     await add_notification("closing", label, f"{d} · laba bersih Rp {int(snap['net_profit']):,}", "success")
-    await log_audit(user, "closing", "daily_closing", doc["id"], None,
-                    {"date": d, "omzet": snap["omzet"], "net_profit": snap["net_profit"]})
     await rt_emit(["closing", "dashboard"], {"date": d})
-    return clean(await db.daily_closings.find_one({"date": d}))
+    return doc
+
+
+async def _wa_recipients() -> List[dict]:
+    recs = await get_setting("wa_recipients", None)
+    if not recs:
+        return []
+    out = []
+    for r in recs:
+        if isinstance(r, str):
+            r = {"name": "", "number": r}
+        number = whatsapp.normalize_number(r.get("number"))
+        if number:
+            out.append({"name": r.get("name") or number, "number": number})
+    return out
+
+
+async def _dispatch_closing_whatsapp(closing: dict, notes: str = "") -> dict:
+    """Kirim rekap tutup buku ke WhatsApp. Tidak boleh menggagalkan tutup buku."""
+    try:
+        recipients = await _wa_recipients()
+        store = await _store_info()
+        if not recipients:
+            await add_notification("whatsapp", "Nomor WhatsApp Belum Diisi",
+                                   "Tambahkan nomor penerima rekap di Pengaturan → Rekap WhatsApp", "warning")
+            return {"text": whatsapp.build_closing_text(clean(closing), store, notes),
+                    "provider": whatsapp.provider_info(), "results": [], "sent_count": 0, "mode": "manual"}
+        out = await whatsapp.send_closing(clean(closing), store, recipients, notes)
+        upd = {"wa_status": out["mode"], "wa_results": out["results"], "wa_attempt_at": iso_now()}
+        if out["sent_count"]:
+            upd["wa_sent_at"] = iso_now()
+        await db.daily_closings.update_one({"date": closing["date"]}, {"$set": upd})
+        if out["sent_count"]:
+            await add_notification("whatsapp", "Rekap WhatsApp Terkirim",
+                                   f"{closing['date']} · terkirim ke {out['sent_count']} nomor", "success")
+        else:
+            await add_notification("whatsapp", "Rekap WhatsApp Siap Dikirim",
+                                   f"{closing['date']} · tekan tombol Kirim ke WhatsApp di halaman Tutup Buku", "info")
+        return out
+    except Exception as e:
+        logger.error("Dispatch rekap WhatsApp gagal: %s", e)
+        return {"text": "", "provider": whatsapp.provider_info(), "results": [],
+                "sent_count": 0, "mode": "manual", "error": str(e)[:200]}
+
+
+class WaSettingsBody(BaseModel):
+    recipients: List[Dict[str, str]] = []
+    auto_enabled: bool = True
+    auto_time: str = "21:00"
+
+
+@api.get("/whatsapp/settings")
+async def get_wa_settings(user: dict = Depends(require_roles("owner", "admin"))):
+    return {
+        "recipients": await _wa_recipients(),
+        "auto_enabled": bool(await get_setting("wa_auto_enabled", True)),
+        "auto_time": str(await get_setting("wa_auto_time", "21:00"))[:5],
+        "provider": whatsapp.provider_info(),
+    }
+
+
+@api.put("/whatsapp/settings")
+async def put_wa_settings(body: WaSettingsBody, user: dict = Depends(require_roles("owner"))):
+    recs = []
+    for r in body.recipients:
+        number = whatsapp.normalize_number(r.get("number", ""))
+        if not number:
+            continue
+        if len(number) < 10:
+            raise HTTPException(400, f"Nomor WhatsApp tidak valid: {r.get('number')}")
+        recs.append({"name": (r.get("name") or "").strip() or number, "number": number})
+    if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", body.auto_time or ""):
+        raise HTTPException(400, "Jam kirim harus format HH:MM (24 jam), mis. 21:00")
+    await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": recs}}, upsert=True)
+    await db.settings.update_one({"key": "wa_auto_enabled"}, {"$set": {"value": bool(body.auto_enabled)}}, upsert=True)
+    await db.settings.update_one({"key": "wa_auto_time"}, {"$set": {"value": body.auto_time}}, upsert=True)
+    await log_audit(user, "update", "whatsapp_settings", "wa", None,
+                    {"count": len(recs), "auto_enabled": body.auto_enabled, "auto_time": body.auto_time})
+    return await get_wa_settings(user)
+
+
+@api.post("/daily-closing/{cid}/whatsapp")
+async def send_closing_whatsapp(cid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    """Siapkan/kirim rekap. Kalau provider belum dikonfigurasi, kembalikan tautan 1-tap."""
+    c = await db.daily_closings.find_one({"id": cid}) or await db.daily_closings.find_one({"date": cid})
+    if not c:
+        raise HTTPException(404, "Tutup buku tidak ditemukan")
+    return await _dispatch_closing_whatsapp(c, c.get("notes", ""))
+
+
+async def auto_closing_worker():
+    """Tutup buku + kirim rekap otomatis pada jam yang diatur owner (WIB)."""
+    await asyncio.sleep(20)
+    last_done = None
+    while True:
+        try:
+            await asyncio.sleep(30)
+            if not bool(await get_setting("wa_auto_enabled", True)):
+                continue
+            target = str(await get_setting("wa_auto_time", "21:00"))[:5]
+            now = now_jkt()
+            if now.strftime("%H:%M") != target:
+                continue
+            d = now.strftime("%Y-%m-%d")
+            if last_done == d:
+                continue
+            existing = await db.daily_closings.find_one({"date": d})
+            if existing and existing.get("wa_sent_at"):
+                last_done = d
+                continue
+            logger.info("Tutup buku otomatis dijalankan untuk %s", d)
+            doc = await _save_closing(d, "", "Sistem (Otomatis)")
+            await _dispatch_closing_whatsapp(doc)
+            last_done = d
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error("Penjadwal tutup buku otomatis error: %s", e)
+
 
 
 @api.get("/daily-closing/{cid}")
@@ -1459,6 +1589,13 @@ async def startup():
         await migrate_avg_weights()
     except Exception as e:
         logger.error(f"Migrasi berat rata-rata gagal: {e}")
+    # Nomor penerima rekap WhatsApp default (bisa diubah owner di Pengaturan).
+    if await db.settings.find_one({"key": "wa_recipients"}) is None:
+        await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": [
+            {"name": "Owner", "number": "6281289478221"}]}}, upsert=True)
+    app.state.auto_closing_task = asyncio.create_task(auto_closing_worker())
+    logger.info("Penjadwal tutup buku otomatis aktif (jam %s WIB)",
+                str(await get_setting("wa_auto_time", "21:00"))[:5])
     try:
         init_storage()
         logger.info("Object storage initialized")
@@ -1469,4 +1606,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    task = getattr(app.state, "auto_closing_task", None)
+    if task:
+        task.cancel()
     client.close()

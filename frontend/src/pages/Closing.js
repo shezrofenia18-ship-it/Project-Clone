@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   formatRupiah, formatRupiahShort, formatWeight, formatNumber, formatPct,
@@ -17,7 +17,7 @@ import {
 } from "@/lib/format";
 import {
   BookCheck, Wallet, TrendingUp, Boxes, FileDown, Loader2, Lock, Eye,
-  ReceiptText, HandCoins, AlertTriangle,
+  ReceiptText, HandCoins, AlertTriangle, MessageCircle, Send, Copy, CheckCircle2,
 } from "lucide-react";
 
 const todayISO = () => {
@@ -249,6 +249,88 @@ export function ClosingDetail({ d }) {
   );
 }
 
+// Dialog rekap WhatsApp. Bila kredensial WhatsApp Business belum diisi, rekap
+// tetap bisa dikirim 1 tap lewat tautan wa.me (teks sudah tersusun rapi).
+function WaDialog({ data, onClose }) {
+  if (!data) return null;
+  const auto = data.mode === "auto";
+  const results = data.results || [];
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(data.text || "");
+      toast.success("Teks rekap disalin");
+    } catch {
+      toast.error("Gagal menyalin, silakan blok teks lalu salin manual");
+    }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-popover max-w-lg max-h-[90vh] overflow-y-auto" data-testid="wa-dialog">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MessageCircle className="w-5 h-5 text-success" /> Rekap WhatsApp
+          </DialogTitle>
+        </DialogHeader>
+
+        {auto ? (
+          <div className="flex items-start gap-2 text-sm rounded-lg border border-success/40 bg-success/5 p-3">
+            <CheckCircle2 className="w-4 h-4 text-success shrink-0 mt-0.5" />
+            <span>Rekap sudah <b>terkirim otomatis</b> ke {data.sent_count} nomor.</span>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 text-sm rounded-lg border border-warning/40 bg-warning/5 p-3">
+            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <span>
+              Pengiriman <b>otomatis penuh</b> belum aktif (kredensial WhatsApp Business belum diisi).
+              Tekan tombol di bawah — WhatsApp akan terbuka dengan teks rekap yang sudah siap, Anda tinggal kirim.
+            </span>
+          </div>
+        )}
+
+        {results.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Belum ada nomor penerima. Tambahkan di <b>Pengaturan → Rekap WhatsApp</b>.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {results.map((r) => (
+              <div key={r.number} className="flex items-center justify-between gap-2 rounded-lg border border-border p-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold truncate">{r.name}</p>
+                  <p className="text-xs text-muted-foreground tabular">+{r.number}</p>
+                  {r.error && <p className="text-[11px] text-destructive mt-0.5 break-all">{r.error}</p>}
+                </div>
+                {r.sent ? (
+                  <Badge className="bg-success/15 text-success hover:bg-success/15 shrink-0">terkirim</Badge>
+                ) : (
+                  <Button size="sm" data-testid={`wa-send-${r.number}`}
+                    onClick={() => window.open(r.link, "_blank", "noopener")}>
+                    <Send className="w-4 h-4 mr-1" /> Kirim
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div>
+          <Label className="text-xs">Pratinjau teks</Label>
+          <pre className="mt-1.5 text-[11px] leading-relaxed whitespace-pre-wrap bg-muted/40 rounded-lg p-3 max-h-56 overflow-y-auto font-sans">
+            {data.text || "-"}
+          </pre>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={copy} data-testid="wa-copy">
+            <Copy className="w-4 h-4 mr-1" /> Salin Teks
+          </Button>
+          <Button onClick={onClose}>Tutup</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Closing() {
   const { user } = useAuth();
   const isOwner = user.role === "owner";
@@ -258,6 +340,8 @@ export default function Closing() {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [wa, setWa] = useState(null);
+  const [waBusy, setWaBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -280,14 +364,33 @@ export default function Closing() {
       !window.confirm(`Tanggal ${date} sudah pernah ditutup. Tutup ulang dengan angka terbaru?`)) return;
     setBusy(true);
     try {
-      await api.post("/daily-closing", { date, notes });
+      const r = await api.post("/daily-closing", { date, notes });
       toast.success(`Tutup buku ${date} tersimpan`);
       setNotes("");
       load();
+      const w = r.data?.whatsapp;
+      if (w) {
+        if (w.mode === "auto") toast.success(`Rekap WhatsApp terkirim ke ${w.sent_count} nomor`);
+        setWa(w);
+      }
     } catch (e) {
       toast.error(apiError(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Siapkan/kirim ulang rekap WhatsApp untuk arsip tertentu.
+  const kirimWa = async (id) => {
+    setWaBusy(true);
+    try {
+      const r = await api.post(`/daily-closing/${id}/whatsapp`);
+      if (r.data?.mode === "auto") toast.success(`Rekap terkirim ke ${r.data.sent_count} nomor`);
+      setWa(r.data);
+    } catch (e) {
+      toast.error(apiError(e));
+    } finally {
+      setWaBusy(false);
     }
   };
 
@@ -306,6 +409,14 @@ export default function Closing() {
           <div className="flex items-center gap-2">
             <Input type="date" value={date} data-testid="closing-date"
               onChange={(e) => setDate(e.target.value)} className="w-[150px]" />
+            {preview?.already_closed && (
+              <Button variant="outline" data-testid="closing-wa" disabled={waBusy}
+                onClick={() => kirimWa(date)}
+                className="text-success border-success/40 hover:bg-success/10">
+                {waBusy ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <MessageCircle className="w-4 h-4 mr-1" />}
+                Kirim Rekap WA
+              </Button>
+            )}
             {isOwner && (
               <Button data-testid="closing-submit" disabled={busy} onClick={tutupBuku}>
                 {busy ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <BookCheck className="w-4 h-4 mr-1" />}
@@ -388,6 +499,10 @@ export default function Closing() {
                         <Button variant="ghost" size="sm" data-testid={`closing-view-${c.date}`} onClick={() => openDetail(c.id)}>
                           <Eye className="w-4 h-4" />
                         </Button>
+                        <Button variant="ghost" size="sm" title="Kirim rekap ke WhatsApp"
+                          data-testid={`closing-wa-${c.date}`} onClick={() => kirimWa(c.id)}>
+                          <MessageCircle className="w-4 h-4 text-success" />
+                        </Button>
                         <PdfButton path={`/daily-closing/${c.id}/pdf`} testid={`closing-pdf-${c.date}`} label="PDF" />
                       </div>
                     </td>
@@ -412,6 +527,8 @@ export default function Closing() {
           </DialogContent>
         </Dialog>
       )}
+
+      <WaDialog data={wa} onClose={() => setWa(null)} />
     </div>
   );
 }

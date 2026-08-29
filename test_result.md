@@ -105,6 +105,44 @@
 user_problem_statement: "Hubungkan ke repository GitHub saya (Project1), cek commit terakhir, install dependencies, dan jalankan app di live preview Emergent. Lanjut: 4 fitur — (1) Mode Offline POS, (2) Realtime WebSocket, (3) Harga khusus pelanggan per produk, (4) Laporan PDF. Dikerjakan satu per satu."
 
 backend:
+  - task: "Rekap WhatsApp tutup buku: modul whatsapp.py (teks rekap + wa.me + Meta Cloud API), endpoint /api/whatsapp/settings, POST /api/daily-closing/{cid}/whatsapp, penjadwal tutup buku otomatis"
+    implemented: true
+    working: "NA"
+    file: "backend/whatsapp.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PENTING: user BELUM memberikan kredensial WhatsApp Business (META_PHONE_NUMBER_ID / META_ACCESS_TOKEN),
+          jadi pengiriman OTOMATIS PENUH tidak bisa diuji dan memang belum aktif. Sistem dirancang dua mode:
+          - MODE 1-TAP (aktif sekarang, tanpa kredensial): backend menyusun teks rekap lengkap + tautan wa.me
+            per penerima, frontend menampilkan tombol "Kirim". mode = "manual".
+          - MODE OTOMATIS (aktif sendiri begitu env terisi): whatsapp.send_closing() memanggil Meta Cloud API
+            (template bila WA_TEMPLATE_NAME diisi, kalau tidak pesan teks biasa untuk jendela 24 jam).
+            mode = "auto". Semua exception ditelan supaya tutup buku tidak pernah gagal.
+          Modul backend/whatsapp.py: normalize_number (08xx/8xx/+62xx -> 62xx), e164, build_closing_text
+          (format WhatsApp *tebal*, berisi omzet/HPP/laba kotor/beban/laba bersih, uang masuk per metode,
+          terjual kg-ekor-pcs, 6 stok terbesar, nilai stok, pembelian, piutang & hutang, catatan),
+          wa_me_link, provider_info, send_text, send_template, send_closing.
+          Endpoint baru:
+          - GET  /api/whatsapp/settings (owner/admin) -> {recipients, auto_enabled, auto_time, provider}
+          - PUT  /api/whatsapp/settings (OWNER saja) -> validasi nomor (min 10 digit setelah normalisasi)
+                 dan jam HH:MM 24 jam; nomor disimpan ternormalisasi 62xxx.
+          - POST /api/daily-closing/{cid}/whatsapp (owner/admin) -> {text, provider, results[], sent_count, mode};
+                 cid boleh id ATAU tanggal.
+          POST /api/daily-closing sekarang juga mengembalikan field "whatsapp" (hasil dispatch).
+          Refactor: _save_closing(date, notes, actor) dipakai endpoint + penjadwal.
+          Penjadwal: asyncio task auto_closing_worker() cek tiap 30 detik, bila jam WIB == wa_auto_time
+          dan hari itu belum terkirim -> _save_closing(actor "Sistem (Otomatis)") + dispatch WhatsApp.
+          Default setting saat startup: wa_recipients = [{Owner, 6281289478221}], wa_auto_enabled true, wa_auto_time 21:00.
+          UJI: GET/PUT settings (termasuk penolakan nomor & jam tidak valid, dan kasir/admin tidak boleh PUT),
+          normalisasi 081289478221 -> 6281289478221, POST whatsapp untuk arsip yang ada -> mode "manual",
+          results[].link berisi https://wa.me/62...?text=... dan text memuat "REKAP TUTUP BUKU",
+          POST /api/daily-closing tetap sukses dan menyertakan field whatsapp.
+
   - task: "HPP per ekor dari berat rata-rata: akumulator cum_ekor_in/cum_weight_in, avg_weight_ekor, avg_weight_override, hpp_ekor = hpp_kg x berat efektif"
     implemented: true
     working: true
@@ -1345,9 +1383,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "HPP per ekor dari berat rata-rata: akumulator cum_ekor_in/cum_weight_in, avg_weight_ekor, avg_weight_override, hpp_ekor = hpp_kg x berat efektif"
-    - "Tutup Buku Harian: GET /api/daily-closing/preview, POST /api/daily-closing, GET list, GET detail, GET pdf"
-    - "Realtime WebSocket /api/ws + broadcast topik dari add_activity/add_notification/apply_stock"
+    - "Rekap WhatsApp tutup buku: modul whatsapp.py (teks rekap + wa.me + Meta Cloud API), endpoint /api/whatsapp/settings, POST /api/daily-closing/{cid}/whatsapp, penjadwal tutup buku otomatis"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -1958,3 +1994,36 @@ agent_communication:
       penjualan per ekor terlihat 100% laba. Owner perlu meninjau harga jual per ekor atau berat perkiraannya.
       Ayam Kampung & Ayam Pejantan hpp_ekor masih 0 (belum pernah dibeli per ekor) -> ditandai badge "isi berat".
       Main agent sengaja TIDAK mengarang angka berat untuk kedua produk ini.
+    -agent: "main"
+    -message: |
+      FITUR BARU: REKAP WHATSAPP TUTUP BUKU. MOHON UJI BACKEND SAJA.
+
+      KONTEKS PENTING: user belum memberi kredensial WhatsApp Business, jadi provider BELUM dikonfigurasi.
+      Yang benar untuk kondisi sekarang adalah mode "manual" (1-tap wa.me). JANGAN laporkan ini sebagai bug.
+      JANGAN mencoba mengirim WhatsApp sungguhan dan JANGAN menambahkan kredensial apa pun.
+
+      Yang harus diuji:
+      1. GET /api/whatsapp/settings sebagai owner & admin -> 200, berisi recipients (default [{name:"Owner",
+         number:"6281289478221"}]), auto_enabled, auto_time ("21:00"), provider.configured == false, provider.mode == "manual".
+         Sebagai kasir -> 403.
+      2. PUT /api/whatsapp/settings sebagai OWNER dengan recipients
+         [{"name":"Owner","number":"081289478221"},{"name":"Manajer","number":"+628123456789"}],
+         auto_enabled true, auto_time "20:30" -> 200 dan nomor tersimpan TERNORMALISASI menjadi
+         "6281289478221" dan "628123456789". Ambil ulang via GET untuk memastikan tersimpan.
+      3. PUT dengan nomor tidak valid (mis. "123") -> 400. PUT dengan auto_time "25:00" atau "9pm" -> 400.
+         PUT sebagai admin -> 403.
+      4. Kembalikan setting ke recipients [{"name":"Owner","number":"081289478221"}] dan auto_time "21:00" setelah selesai.
+      5. POST /api/daily-closing/{cid}/whatsapp (owner) memakai id arsip tutup buku yang ada, DAN juga memakai
+         tanggal (mis. hari ini) sebagai cid -> keduanya 200. Verifikasi:
+         - field "mode" == "manual" (karena provider belum dikonfigurasi)
+         - "sent_count" == 0
+         - "text" memuat "REKAP TUTUP BUKU" dan "LABA BERSIH"
+         - results[] panjangnya sama dengan jumlah penerima, tiap item punya link yang dimulai
+           "https://wa.me/62" dan berisi "?text="
+         - cid tidak dikenal -> 404. Kasir -> 403.
+      6. POST /api/daily-closing (owner) sekarang harus tetap 200 dan responsnya menyertakan field "whatsapp"
+         dengan struktur di atas. Pastikan proses tutup buku TIDAK gagal walau WhatsApp tidak terkirim.
+      7. Cek log backend: harus ada "Penjadwal tutup buku otomatis aktif (jam ... WIB)" dan TIDAK ada traceback
+         berulang dari auto_closing_worker.
+      8. REGRESI singkat: login 3 role, GET /api/dashboard, GET /api/products, POST /api/sales (per kg) + idempotency
+         txn_id, GET /api/daily-closing/preview, GET /api/daily-closing/{id}/pdf (%PDF-), WS /api/ws hello.
