@@ -157,5 +157,15 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - **Temuan PALSU (diverifikasi, tidak ada yang perlu diubah)**: (a) "20 pemakaian `is` untuk membandingkan nilai" → nyatanya **0**; semua adalah `is None`/`is not None`/`is False` yang justru benar secara Python. (b) "console statement bocor di produksi" → ketiganya sudah dibungkus `process.env.NODE_ENV !== "production"` (`lib/log.js`, `hooks.js`, `OwnerDashboard.js`). (c) "hook dependency hilang" → build CRA (eslint `react-hooks/exhaustive-deps`) **0 warning**; dependensi yang disebut (`WebSocket`, `FLUSH_MS`, `api`, `apiError`, `e`) adalah konstanta modul/import/variabel `catch` yang memang TIDAK boleh masuk dep array.
 - **Sengaja TIDAK diubah (dengan alasan)**: token di `localStorage` (wajib agar kasir tetap bisa transaksi offline & untuk auth WebSocket; httpOnly cookie akan mematikan mode offline — perubahan arsitektur auth harus dengan persetujuan owner). `random` di `seed.py` hanya membuat data demo, bukan rahasia keamanan. Refactor `pdf_reports.py`, `seed_demo()`, `Layout.js`, `RealtimeContext.js`, `PendingSales.js` ditunda: kode berjalan & teruji, tanpa manfaat yang terlihat owner, sedangkan risiko regresinya nyata.
 
+## Environment restore (2026-08-29, sesi lanjutan #3)
+- Repo `shezrofenia18-ship-it/Project1` tersambung (remote `origin` sudah ada). Branch aktif `conflict_290826_1811` = **8 commit di depan `origin/main`** dan hanya 1 commit di belakang (`90b9033`, auto-generated file infra). Jadi SELURUH pekerjaan terbaru ada di workspace: Grafik Bulanan + Struk Termal 58mm + Perbaikan Sinkronisasi Data (`3b30688`) dan Tindak Lanjut Code Review / refactor `reconcile.audit()` (`4519406`).
+- Dependencies diinstall ulang: pip `requirements.txt` (reportlab 5.0.1, exit 0) + `yarn install` (945 paket, exit 0 — `node_modules` sebelumnya kosong).
+- backend & frontend RUNNING via supervisor (mongodb RUNNING). Frontend "Compiled successfully", 0 error konsol.
+- Rekonsiliasi otomatis di startup terbukti idempoten: startup ke-1 memperbaiki 5 hal (piutang_tanpa_tagihan=3, pembelian_tanpa_pengeluaran=1, saldo_supplier=1), startup ke-2 = 0 perbaikan.
+- Verifikasi live preview: login owner → Dashboard Owner tampil data nyata (omzet Rp 3.743.030 · 14 transaksi · 65,51 kg · laba kotor Rp 713.595 · margin 19,06% · Uang Bersih Kas Rp 3.427.038), badge ONLINE + LIVE aktif, toggle `7 Hari / Bulanan` ada, grafik & aktivitas terisi.
+- DB utuh: 5 user, 14 produk, 73 penjualan, 1 pembelian, 5 pelanggan, 3 supplier, 29 pengeluaran.
+- `memory/test_credentials.md` dibuat ulang (5 akun: 2 owner, 1 admin, 2 kasir).
+- CATATAN KEAMANAN: user kembali menempel GitHub PAT di chat → PAT tersebut harus DI-REVOKE.
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

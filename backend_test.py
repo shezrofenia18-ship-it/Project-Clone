@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 # Base URL from frontend/.env
-BASE_URL = "https://commit-checker-live-1.preview.emergentagent.com/api"
+BASE_URL = "https://github-auto-deploy-3.preview.emergentagent.com/api"
 
 # Test credentials
 CREDENTIALS = {

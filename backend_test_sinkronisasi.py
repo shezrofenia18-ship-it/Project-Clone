@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import time
 
 # Backend URL dari frontend/.env
-BASE_URL = "https://commit-checker-live-1.preview.emergentagent.com/api"
+BASE_URL = "https://github-auto-deploy-3.preview.emergentagent.com/api"
 
 # Kredensial dari /app/memory/test_credentials.md
 CREDENTIALS = {

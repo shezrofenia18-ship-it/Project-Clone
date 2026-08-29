@@ -6,7 +6,7 @@ import requests
 import json
 from datetime import datetime, timezone, timedelta
 
-BASE_URL = "https://commit-checker-live-1.preview.emergentagent.com/api"
+BASE_URL = "https://github-auto-deploy-3.preview.emergentagent.com/api"
 OWNER_EMAIL = "shezrofenia18@gmail.com"
 OWNER_PASSWORD = "berkahayam1"
 ADMIN_EMAIL = "admin@berkahayam.com"
