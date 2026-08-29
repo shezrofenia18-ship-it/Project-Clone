@@ -152,5 +152,10 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 ### Teruji
 - Backend **58/58 PASS**, `issue_count = 0` sebelum & sesudah seluruh rangkaian uji. Frontend **29/30 PASS**; satu sisa (cetak otomatis pasca-transaksi) diverifikasi manual oleh main agent. Transaksi uji dibatalkan, saklar cetak otomatis dikembalikan MATI.
 
+### Tindak lanjut code review (2026-08-29, ronde 3)
+- **Diterapkan**: `reconcile.audit()` dipecah (kompleksitas 65 → maks **9**, 198 → maks **25 baris**, nesting 5 → 2) memakai kelas `_Audit` + 7 fungsi pemeriksa + tuple `CHECKS`; perilaku identik, dibuktikan dengan uji perusakan data untuk **12/12** jenis temuan (23/23 tes lolos). `lib/receipt.js`: 2 `catch` tidak lagi menelan error (devWarn + toast "Cetak struk gagal").
+- **Temuan PALSU (diverifikasi, tidak ada yang perlu diubah)**: (a) "20 pemakaian `is` untuk membandingkan nilai" → nyatanya **0**; semua adalah `is None`/`is not None`/`is False` yang justru benar secara Python. (b) "console statement bocor di produksi" → ketiganya sudah dibungkus `process.env.NODE_ENV !== "production"` (`lib/log.js`, `hooks.js`, `OwnerDashboard.js`). (c) "hook dependency hilang" → build CRA (eslint `react-hooks/exhaustive-deps`) **0 warning**; dependensi yang disebut (`WebSocket`, `FLUSH_MS`, `api`, `apiError`, `e`) adalah konstanta modul/import/variabel `catch` yang memang TIDAK boleh masuk dep array.
+- **Sengaja TIDAK diubah (dengan alasan)**: token di `localStorage` (wajib agar kasir tetap bisa transaksi offline & untuk auth WebSocket; httpOnly cookie akan mematikan mode offline — perubahan arsitektur auth harus dengan persetujuan owner). `random` di `seed.py` hanya membuat data demo, bukan rahasia keamanan. Refactor `pdf_reports.py`, `seed_demo()`, `Layout.js`, `RealtimeContext.js`, `PendingSales.js` ditunda: kode berjalan & teruji, tanpa manfaat yang terlihat owner, sedangkan risiko regresinya nyata.
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

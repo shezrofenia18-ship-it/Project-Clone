@@ -186,6 +186,180 @@ backend:
           PASS (9/9 bagian C). issue_count = 0 sebelum & sesudah reconcile; jalan ke-2 fixed_count = 0
           (idempoten) dan angka dashboard tidak berubah. RBAC: hanya owner boleh POST (admin & kasir 403).
           Pemeriksaan akhir setelah SELURUH rangkaian uji: issue_count = 0.
+        -working: true
+        -agent: "main"
+        -comment: |
+          REFACTOR (tindak lanjut code review): audit() dipecah dari 1 fungsi raksasa
+          (kompleksitas siklomatik 65, 198 baris, 33 variabel lokal, nesting 5 level) menjadi
+          kelas _Audit (pemuat data + pencatat temuan) + 7 fungsi pemeriksa kecil yang dijalankan
+          lewat tuple CHECKS. Hasil radon: kompleksitas MAKS 9 (rata-rata A/4.0), fungsi terpanjang
+          25 baris, nesting maks 2 — memenuhi target review (<10 kompleksitas, <50 baris).
+          Nesting dikurangi dengan guard clause + `continue`. Perilaku sengaja TIDAK diubah.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          PASS (23/23) setelah refactor. Diuji dengan MERUSAK data secara sengaja untuk setiap jenis
+          temuan (agar tidak ada pemeriksa yang hilang tanpa terasa): SELURUH 12 kind terbukti masih
+          terdeteksi DAN diperbaiki -> pembelian_tanpa_pengeluaran, pengeluaran_pembelian_tidak_cocok,
+          kas_keluar_belum_ditandai, status_transaksi_tertinggal, piutang_tanpa_tagihan, piutang_hantu,
+          pemasukan_hilang, pemasukan_dobel, pemasukan_yatim, pemasukan_tidak_cocok, saldo_pelanggan,
+          saldo_supplier. RBAC tetap (kasir 403, admin tidak boleh POST), idempoten (2x = 0 perbaikan),
+          auto-repair saat startup tetap jalan (data dirusak -> restart -> pulih dalam 15 detik).
+          Regresi rumus keuangan: dashboard/profit-loss/closing tetap identik (omzet Rp 3.743.030,
+          laba bersih Rp 443.595). Data owner dipulihkan, issue_count akhir = 0.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ REFACTOR VERIFICATION COMPLETE - ALL 23 TESTS PASSED (23/23)
+          
+          KONTEKS: backend/reconcile.py DIREFACTOR TOTAL (kompleksitas siklomatik 65→9, 198 baris→25 baris/fungsi,
+          nesting 5→2 level). Struktur baru: kelas _Audit + 7 fungsi pemeriksa kecil via tuple CHECKS.
+          PERILAKU HARUS TETAP SAMA - tidak ada perubahan endpoint, field, atau logika bisnis.
+          
+          === TEST RESULTS ===
+          
+          1. RBAC (6/6 PASS) ✅
+             - GET /api/maintenance/consistency: Owner 200, Admin 200, Kasir 403 ✅
+             - POST /api/maintenance/reconcile: Owner 200, Admin 403, Kasir 403 ✅
+          
+          2. IDEMPOTENCY (1/1 PASS) ✅
+             - Run 1: fixed_count=0 (data sudah bersih)
+             - Run 2: fixed_count=0 (tidak ada perubahan)
+             - Dashboard omzet tidak berubah setelah 2x reconcile ✅
+          
+          3. DETECTION CAPABILITY - 12 KINDS (12/12 PASS) ✅
+             Setiap kind diuji dengan siklus: RUSAK → DETEKSI → PERBAIKI → VERIFIKASI
+             
+             a. pembelian_tanpa_pengeluaran ✅
+                - Dihapus: expense untuk purchase
+                - Terdeteksi: 1 temuan di by_kind
+                - Diperbaiki: expense dibuat ulang dengan amount=total_modal, cash_amount=paid
+                - Verifikasi: issue_count=0 setelah reconcile
+             
+             b. pengeluaran_pembelian_tidak_cocok ✅
+                - Dirusak: expense amount → 1 (seharusnya 4,640,000)
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: amount dikembalikan ke total_modal
+                - Verifikasi: issue_count=0
+             
+             c. kas_keluar_belum_ditandai ✅
+                - Dibuat: pembelian kredit + bayar hutang
+                - Dirusak: expense "Pembayaran Hutang" cash_amount di-unset
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: cash_amount diisi dengan amount
+                - Verifikasi: issue_count=0
+             
+             d. status_transaksi_tertinggal ✅
+                - Dirusak: sale.receivable → 32,000 (seharusnya 22,000)
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: sale.receivable disinkronkan dengan receivable.remaining
+                - Verifikasi: issue_count=0
+             
+             e. piutang_tanpa_tagihan ✅
+                - Dihapus: receivable untuk sale piutang
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: receivable dibuat ulang
+                - Verifikasi: issue_count=0
+             
+             f. piutang_hantu ✅
+                - Dibuat: penjualan piutang → dibatalkan
+                - Dirusak: receivable status → belum_lunas, remaining → 5000
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: receivable status → batal, remaining → 0
+                - Verifikasi: issue_count=0
+             
+             g. pemasukan_hilang ✅
+                - Dihapus: income pos untuk sale aktif
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: income dibuat ulang dengan amount=sale.paid
+                - Verifikasi: issue_count=0
+             
+             h. pemasukan_dobel ✅
+                - Diduplikat: income pos dengan id baru
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: duplikat dihapus
+                - Verifikasi: issue_count=0
+             
+             i. pemasukan_yatim ✅
+                - Dibuat: income pos dengan ref id acak (tidak ada sale)
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: income yatim dihapus
+                - Verifikasi: issue_count=0
+             
+             j. pemasukan_tidak_cocok ✅
+                - Dirusak: income amount → 58,000 (seharusnya 48,000)
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: amount disinkronkan dengan sale.paid
+                - Verifikasi: issue_count=0
+             
+             k. saldo_pelanggan ✅
+                - Dirusak: customer receivable → 999,999, total_purchase → 888,888
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: saldo dihitung ulang dari transaksi
+                - Verifikasi: issue_count=0
+             
+             l. saldo_supplier ✅
+                - Dirusak: supplier payable → 777,777, total_purchase → 666,666
+                - Terdeteksi: 1 temuan
+                - Diperbaiki: saldo dihitung ulang dari pembelian
+                - Verifikasi: issue_count=0
+          
+          4. AUTO-REPAIR SAAT STARTUP (1/1 PASS) ✅
+             - Dirusak: customer receivable → 555,555
+             - Backend direstart (sudo supervisorctl restart backend)
+             - Tunggu 15 detik
+             - Verifikasi: issue_count=0 TANPA menekan tombol (auto-repair bekerja)
+          
+          5. REGRESI RUMUS KEUANGAN (2/2 PASS) ✅
+             - GET /api/dashboard, /api/reports/profit-loss, /api/daily-closing/preview
+             - Konsistensi angka IDENTIK (toleransi Rp 1):
+               * Omzet: Rp 3,743,030 ✅
+               * HPP: Rp 3,029,435 ✅
+               * Laba Kotor: Rp 713,595 ✅
+               * Opex: Rp 270,000 ✅
+               * Laba Bersih: Rp 443,595 ✅
+               * Net Cash: Rp 2,650,038 ✅
+             - Rumus terverifikasi:
+               * net_profit = laba_kotor - opex ✅
+               * net_cash = cash_in - cash_out ✅
+             - GET /api/dashboard/monthly?months=12: 12 item ✅
+          
+          6. PEMERIKSAAN AKHIR (1/1 PASS) ✅
+             - POST /api/maintenance/reconcile (final cleanup)
+             - GET /api/maintenance/consistency: issue_count=0 ✅
+             - Dashboard akhir:
+               * Omzet: Rp 3,743,030
+               * Laba Kotor: Rp 713,595
+               * Opex: Rp 270,000
+               * Laba Bersih: Rp 443,595
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ SEMUA 12 JENIS DETEKSI BEKERJA SEMPURNA
+          - Tidak ada pemeriksa yang hilang dalam refactor
+          - Setiap kind terdeteksi dengan benar di by_kind/findings
+          - Setiap kind diperbaiki dengan benar oleh reconcile
+          - issue_count kembali ke 0 setelah setiap perbaikan
+          
+          ✅ TIDAK ADA REGRESI
+          - RBAC tetap bekerja (owner/admin/kasir)
+          - Idempotency tetap terjaga (run 2x = 0 fixes)
+          - Auto-repair startup tetap aktif
+          - Rumus keuangan tetap konsisten antar 3 endpoint
+          - Dashboard angka tidak berubah setelah reconcile
+          
+          ✅ DATA OWNER AMAN
+          - Semua kerusakan yang dibuat untuk testing telah dipulihkan
+          - Final consistency check: issue_count=0
+          - Dashboard menampilkan angka yang benar
+          
+          === CONCLUSION ===
+          
+          REFACTOR BERHASIL TANPA MENGUBAH PERILAKU. Kompleksitas berkurang drastis
+          (65→9, 198→25 baris, nesting 5→2) TANPA menghilangkan satupun pemeriksa.
+          Semua 12 jenis deteksi kerusakan data bekerja sempurna. Tidak ada regresi.
+          
+          Backend reconcile.py PRODUCTION-READY setelah refactor.
 
   - task: "Perbaikan sinkronisasi penjualan/piutang/hutang: cancel_sale membatalkan tagihan piutang + mengoreksi saldo pelanggan; setiap kekurangan bayar selalu membuat tagihan (termasuk pembeli Umum); pay_receivable memperbarui dokumen penjualan; validasi jumlah bayar; rt_emit lengkap"
     implemented: true
@@ -1081,6 +1255,15 @@ frontend:
           Bayar/Kembali, promo), catatan dialog berbunyi "Struk otomatis dikirim ke printer termal 58mm",
           dan iframe dibersihkan otomatis (0 iframe setelah 1,5 detik = tidak ada kebocoran DOM).
           Setelah uji: saklar dikembalikan MATI & transaksi uji dibatalkan; issue_count tetap 0.
+        -working: true
+        -agent: "main"
+        -comment: |
+          Tindak lanjut code review: 2 catch di lib/receipt.js tidak lagi menelan error diam-diam.
+          printReceipt: kegagalan iframe dicatat lewat devWarn lalu jatuh ke window.open.
+          printViaIframe: kegagalan win.print() dicatat + toast "Cetak struk gagal — silakan tekan
+          tombol Cetak lagi" supaya kasir tahu strukya tidak keluar (sebelumnya diam total).
+          Diverifikasi ulang setelah perubahan: tombol Tes Cetak tetap menghasilkan 1 iframe
+          (width 219.203px = 58mm, berisi "TOTAL"), 0 error konsol.
 
   - task: "Sinkronisasi realtime lintas halaman: Keuangan, Riwayat Transaksi, Pembelian, Laporan, Pelanggan, Supplier ikut ter-update otomatis + kartu 'Sinkronisasi Data' di Pengaturan + arus kas di Laporan & Tutup Buku"
     implemented: true
@@ -2087,6 +2270,59 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "main"
+    -message: |
+      REFACTOR (tindak lanjut code review) — UJI BACKEND SAJA, JANGAN UJI FRONTEND.
+      Kredensial: /app/memory/test_credentials.md (owner shezrofenia18@gmail.com / berkahayam1,
+      admin admin@berkahayam.com / admin123, kasir kasir@berkahayam.com / kasir123).
+
+      YANG DIUBAH: backend/reconcile.py DIREFACTOR TOTAL (perilaku HARUS tetap sama).
+      Dulu satu fungsi audit() raksasa (kompleksitas siklomatik 65, 198 baris, nesting 5 level).
+      Sekarang: kelas _Audit (pemuat data + pencatat temuan) + 7 fungsi pemeriksa kecil yang
+      dijalankan lewat tuple CHECKS. Hasil radon: kompleksitas maksimum 9, fungsi terpanjang 25 baris.
+      TIDAK ADA perubahan pada endpoint, nama field, atau logika bisnis yang dimaksudkan.
+      Juga diperbaiki: frontend/src/lib/receipt.js catch kosong -> sekarang mencatat error (tidak diuji di sini).
+
+      FOKUS UJI (regresi + kemampuan deteksi):
+      1. GET /api/maintenance/consistency (owner & admin 200, kasir 403) -> issue_count == 0.
+      2. POST /api/maintenance/reconcile (owner 200; admin & kasir 403) -> fixed_count == 0,
+         dijalankan 2x tetap 0 (idempoten) dan angka /api/dashboard TIDAK berubah.
+      3. UJI KEMAMPUAN DETEKSI (PALING PENTING — refactor mudah menghilangkan pemeriksa tanpa terasa).
+         Silakan pakai MongoDB langsung (mongodb://localhost:27017, database dari MONGO_URL/DB_NAME
+         di /app/backend/.env) untuk MERUSAK data secara sengaja, lalu buktikan audit mendeteksi &
+         memperbaikinya. Untuk setiap kasus: rusak -> GET consistency (harus muncul `kind` yang sesuai
+         di by_kind/findings) -> POST reconcile -> GET consistency (harus 0 lagi).
+         Rusak SATU per satu dan pulihkan lewat reconcile sebelum kasus berikutnya:
+         a. kind "pembelian_tanpa_pengeluaran": hapus dokumen expenses dengan category "Pembelian Ayam"
+            (simpan dulu isinya). Setelah reconcile, dokumen pengeluaran harus dibuat ulang dengan
+            amount == purchase.total_modal dan cash_amount == purchase.paid.
+         b. kind "pengeluaran_pembelian_tidak_cocok": ubah amount pengeluaran pembelian jadi 1.
+         c. kind "kas_keluar_belum_ditandai": unset field cash_amount pada 1 pengeluaran
+            berkategori "Pembayaran Hutang" (buat dulu 1 pembelian kredit + bayar hutang lewat API).
+         d. kind "status_transaksi_tertinggal": pada 1 penjualan piutang, set sales.receivable
+            berbeda dari receivables.remaining.
+         e. kind "piutang_tanpa_tagihan": hapus dokumen receivables milik 1 penjualan piutang
+            (sales.receivable tetap > 0).
+         f. kind "piutang_hantu": batalkan 1 penjualan piutang lewat API, lalu paksa dokumen
+            receivables-nya kembali ke status "belum_lunas" dengan remaining > 0.
+         g. kind "pemasukan_hilang": hapus dokumen incomes (source "pos") milik 1 penjualan aktif.
+         h. kind "pemasukan_dobel": duplikat dokumen incomes pos milik 1 penjualan (id baru).
+         i. kind "pemasukan_yatim": tambah dokumen incomes source "pos" dengan ref id acak.
+         j. kind "pemasukan_tidak_cocok": ubah amount incomes pos jadi berbeda dari sales.paid.
+         k. kind "saldo_pelanggan": ubah customers.receivable / total_purchase jadi angka ngawur.
+         l. kind "saldo_supplier": ubah suppliers.payable / total_purchase jadi angka ngawur.
+         LAPORKAN kasus mana yang TIDAK terdeteksi atau TIDAK diperbaiki — itu berarti refactor
+         menghilangkan pemeriksa dan saya harus memperbaikinya.
+      4. Pastikan perbaikan otomatis saat startup masih jalan: rusak 1 data (mis. kasus k),
+         lalu `sudo supervisorctl restart backend`, tunggu ~15 detik, dan GET consistency
+         harus 0 tanpa menekan tombol apa pun.
+      5. REGRESI singkat rumus keuangan: GET /api/dashboard, /api/reports/profit-loss (hari ini),
+         /api/daily-closing/preview -> omzet/hpp/laba kotor/opex/net_profit/cash_out/net_cash tetap
+         identik antar ketiganya; dan GET /api/dashboard/monthly?months=12 tetap 12 item.
+      6. WAJIB di akhir: kembalikan data ke kondisi sinkron (jalankan reconcile) dan pastikan
+         GET consistency == 0. Jangan menghapus data demo owner secara permanen — setiap kerusakan
+         yang Anda buat harus bisa dipulihkan oleh reconcile atau Anda pulihkan sendiri.
+
     -agent: "main"
     -message: |
       UJI FRONTEND — DIIZINKAN OLEH USER (user setuju transaksi uji dibuat).
@@ -3842,3 +4078,208 @@ agent_communication:
       Test file: /app/backend_test_sinkronisasi.py
       
       NO BACKEND ISSUES FOUND. Ready for production.
+
+    -agent: "testing"
+    -message: |
+      ✅ REFACTOR RECONCILE.PY - BACKEND TESTING COMPLETE - ALL 23 TESTS PASSED
+      
+      Uji BACKEND SAJA untuk memverifikasi hasil REFACTOR modul rekonsiliasi data pada aplikasi
+      POS "Berkah Ayam Mili" (FastAPI + MongoDB, route prefix /api).
+      
+      KONTEKS REFACTOR:
+      - File: backend/reconcile.py
+      - Sebelum: Satu fungsi audit() raksasa (kompleksitas siklomatik 65, 198 baris, nesting 5 level)
+      - Sesudah: Kelas _Audit + 7 fungsi pemeriksa kecil via tuple CHECKS (kompleksitas maks 9, 
+        fungsi terpanjang 25 baris, nesting 2 level)
+      - Tujuan: Meningkatkan maintainability TANPA mengubah perilaku
+      - TIDAK ADA perubahan endpoint, nama field, atau logika bisnis yang dimaksudkan
+      
+      === TEST EXECUTION ===
+      
+      Test file: /app/backend_test_reconcile.py
+      Kredensial: /app/memory/test_credentials.md
+      MongoDB: mongodb://localhost:27017/test_database
+      
+      === TEST RESULTS (23/23 PASSED) ===
+      
+      1. RBAC (6/6 PASS) ✅
+         - GET /api/maintenance/consistency:
+           * Owner: 200, issue_count=0 ✅
+           * Admin: 200, issue_count=0 ✅
+           * Kasir: 403 (correctly rejected) ✅
+         - POST /api/maintenance/reconcile:
+           * Owner: 200, fixed_count=0 ✅
+           * Admin: 403 (correctly rejected) ✅
+           * Kasir: 403 (correctly rejected) ✅
+      
+      2. IDEMPOTENCY (1/1 PASS) ✅
+         - Run 1: fixed_count=0 (data sudah bersih)
+         - Run 2: fixed_count=0 (tidak ada perubahan)
+         - Dashboard omzet tidak berubah setelah 2x reconcile ✅
+      
+      3. DETECTION CAPABILITY - 12 KINDS (12/12 PASS) ✅
+         
+         Setiap kind diuji dengan siklus: RUSAK DATA → DETEKSI → PERBAIKI → VERIFIKASI
+         
+         a. pembelian_tanpa_pengeluaran ✅
+            - Dihapus: expense untuk purchase d71952f6
+            - Terdeteksi: 1 temuan di by_kind
+            - Diperbaiki: expense dibuat ulang dengan amount=total_modal, cash_amount=paid
+            - Verifikasi: issue_count=0 setelah reconcile
+         
+         b. pengeluaran_pembelian_tidak_cocok ✅
+            - Dirusak: expense amount → 1 (seharusnya Rp 4,640,000)
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: amount dikembalikan ke total_modal
+            - Verifikasi: issue_count=0
+         
+         c. kas_keluar_belum_ditandai ✅
+            - Dibuat: pembelian kredit Rp 500,000 (bayar Rp 200,000, sisa Rp 300,000)
+            - Bayar hutang: Rp 50,000
+            - Dirusak: expense "Pembayaran Hutang" cash_amount di-unset
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: cash_amount diisi dengan amount
+            - Verifikasi: issue_count=0
+         
+         d. status_transaksi_tertinggal ✅
+            - Dirusak: sale.receivable → Rp 32,000 (seharusnya Rp 22,000)
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: sale.receivable disinkronkan dengan receivable.remaining
+            - Verifikasi: issue_count=0
+         
+         e. piutang_tanpa_tagihan ✅
+            - Dihapus: receivable untuk sale piutang
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: receivable dibuat ulang
+            - Verifikasi: issue_count=0
+         
+         f. piutang_hantu ✅
+            - Dibuat: penjualan piutang → dibatalkan via API
+            - Dirusak: receivable status → belum_lunas, remaining → Rp 5,000
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: receivable status → batal, remaining → 0
+            - Verifikasi: issue_count=0
+         
+         g. pemasukan_hilang ✅
+            - Dihapus: income pos untuk sale aktif
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: income dibuat ulang dengan amount=sale.paid
+            - Verifikasi: issue_count=0
+         
+         h. pemasukan_dobel ✅
+            - Diduplikat: income pos dengan id baru
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: duplikat dihapus
+            - Verifikasi: issue_count=0
+         
+         i. pemasukan_yatim ✅
+            - Dibuat: income pos dengan ref id acak (tidak ada sale)
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: income yatim dihapus
+            - Verifikasi: issue_count=0
+         
+         j. pemasukan_tidak_cocok ✅
+            - Dirusak: income amount → Rp 58,000 (seharusnya Rp 48,000)
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: amount disinkronkan dengan sale.paid
+            - Verifikasi: issue_count=0
+         
+         k. saldo_pelanggan ✅
+            - Dirusak: customer receivable → Rp 999,999, total_purchase → Rp 888,888
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: saldo dihitung ulang dari transaksi
+            - Verifikasi: issue_count=0
+         
+         l. saldo_supplier ✅
+            - Dirusak: supplier payable → Rp 777,777, total_purchase → Rp 666,666
+            - Terdeteksi: 1 temuan
+            - Diperbaiki: saldo dihitung ulang dari pembelian
+            - Verifikasi: issue_count=0
+      
+      4. AUTO-REPAIR SAAT STARTUP (1/1 PASS) ✅
+         - Dirusak: customer receivable → Rp 555,555
+         - Backend direstart: sudo supervisorctl restart backend
+         - Tunggu 15 detik
+         - Verifikasi: issue_count=0 TANPA menekan tombol (auto-repair bekerja) ✅
+      
+      5. REGRESI RUMUS KEUANGAN (2/2 PASS) ✅
+         - GET /api/dashboard, /api/reports/profit-loss, /api/daily-closing/preview
+         - Konsistensi angka IDENTIK (toleransi Rp 1):
+           * Omzet: Rp 3,743,030 ✅
+           * HPP: Rp 3,029,435 ✅
+           * Laba Kotor: Rp 713,595 ✅
+           * Opex: Rp 270,000 ✅
+           * Laba Bersih: Rp 443,595 ✅
+           * Net Cash: Rp 2,650,038 ✅
+         - Rumus terverifikasi:
+           * net_profit = laba_kotor - opex ✅
+           * net_cash = cash_in - cash_out ✅
+         - GET /api/dashboard/monthly?months=12: 12 item ✅
+      
+      6. PEMERIKSAAN AKHIR (1/1 PASS) ✅
+         - POST /api/maintenance/reconcile (final cleanup)
+         - GET /api/maintenance/consistency: issue_count=0 ✅
+         - Dashboard akhir:
+           * Omzet: Rp 3,743,030
+           * Laba Kotor: Rp 713,595
+           * Opex: Rp 270,000
+           * Laba Bersih: Rp 443,595
+      
+      === CRITICAL FINDINGS ===
+      
+      ✅ SEMUA 12 JENIS DETEKSI BEKERJA SEMPURNA
+      - Tidak ada pemeriksa yang hilang dalam refactor
+      - Setiap kind terdeteksi dengan benar di by_kind/findings
+      - Setiap kind diperbaiki dengan benar oleh reconcile
+      - issue_count kembali ke 0 setelah setiap perbaikan
+      
+      ✅ TIDAK ADA REGRESI
+      - RBAC tetap bekerja (owner/admin/kasir)
+      - Idempotency tetap terjaga (run 2x = 0 fixes)
+      - Auto-repair startup tetap aktif
+      - Rumus keuangan tetap konsisten antar 3 endpoint
+      - Dashboard angka tidak berubah setelah reconcile
+      
+      ✅ DATA OWNER AMAN
+      - Semua kerusakan yang dibuat untuk testing telah dipulihkan
+      - Final consistency check: issue_count=0
+      - Dashboard menampilkan angka yang benar
+      
+      === VERIFICATION DETAILS ===
+      
+      Metode testing:
+      1. Akses MongoDB langsung (mongodb://localhost:27017/test_database)
+      2. Backup dokumen sebelum dirusak
+      3. Rusak data secara sengaja sesuai skenario
+      4. GET /api/maintenance/consistency → verifikasi kind muncul di by_kind
+      5. POST /api/maintenance/reconcile → perbaiki
+      6. GET /api/maintenance/consistency → verifikasi issue_count=0
+      7. Restore manual jika reconcile gagal (tidak ada yang gagal)
+      
+      Siklus testing per kind:
+      - RUSAK → DETEKSI (by_kind) → PERBAIKI (reconcile) → VERIFIKASI (issue_count=0)
+      - Total 12 siklus untuk 12 kinds
+      - Semua siklus berhasil tanpa kegagalan
+      
+      === CONCLUSION ===
+      
+      REFACTOR BERHASIL TANPA MENGUBAH PERILAKU.
+      
+      Kompleksitas berkurang drastis:
+      - Siklomatik: 65 → 9 (86% reduction)
+      - Baris per fungsi: 198 → 25 (87% reduction)
+      - Nesting level: 5 → 2 (60% reduction)
+      
+      TANPA menghilangkan satupun pemeriksa:
+      - Semua 12 jenis deteksi kerusakan data bekerja sempurna
+      - Tidak ada regresi dalam RBAC, idempotency, atau auto-repair
+      - Rumus keuangan tetap konsisten
+      - Data owner tetap aman
+      
+      Backend reconcile.py PRODUCTION-READY setelah refactor.
+      
+      Test duration: ~45 seconds
+      Test file: /app/backend_test_reconcile.py
+      Total tests: 23/23 PASSED ✅
+      
+      NO BACKEND ISSUES FOUND. Refactor verified successfully.

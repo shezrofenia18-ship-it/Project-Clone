@@ -1,5 +1,6 @@
 import { formatRupiah, formatQtyUnit, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
 import { toast } from "sonner";
+import { devWarn } from "@/lib/log";
 
 const DEFAULT_STORE = { name: "Berkah Ayam Mili", tagline: "Ayam Potong & Fillet", address: "", phone: "" };
 
@@ -160,6 +161,9 @@ function printViaIframe(html) {
       win.focus();
       win.print();
     } catch (err) {
+      // dialog cetak ditolak browser -> beri tahu kasir, jangan gagal diam-diam
+      devWarn("receipt.print", err);
+      toast.error("Cetak struk gagal — silakan tekan tombol Cetak lagi");
       cleanup();
       return;
     }
@@ -192,7 +196,8 @@ export function printReceipt(sale, store) {
   try {
     if (printViaIframe(html)) return true;
   } catch (e) {
-    // lanjut ke cara kedua
+    // Iframe gagal (mis. browser membatasi document.write) -> catat lalu coba jendela baru.
+    devWarn("receipt.printViaIframe", e);
   }
   return printViaWindow(html);
 }
