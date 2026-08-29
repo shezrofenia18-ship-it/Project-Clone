@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timedelta
 
 # Base URL dari frontend/.env
-BASE_URL = "https://commit-inspector.preview.emergentagent.com/api"
+BASE_URL = "https://github-live-preview-6.preview.emergentagent.com/api"
 
 # Credentials dari /app/memory/test_credentials.md
 CREDENTIALS = {

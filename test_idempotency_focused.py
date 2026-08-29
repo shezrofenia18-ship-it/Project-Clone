@@ -6,7 +6,7 @@ import requests
 import json
 import uuid
 
-BASE_URL = "https://commit-inspector.preview.emergentagent.com/api"
+BASE_URL = "https://github-live-preview-6.preview.emergentagent.com/api"
 OWNER_EMAIL = "shezrofenia18@gmail.com"
 OWNER_PASSWORD = "berkahayam1"
 

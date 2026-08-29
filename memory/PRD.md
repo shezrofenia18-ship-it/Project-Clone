@@ -74,5 +74,12 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - P1: Harga khusus pelanggan per produk otomatis di POS — FASE 3, disetujui user (field `special_prices` sudah ada di backend, belum ada UI & belum dipakai POS).
 - P2: Multi-cabang (stores), integrasi timbangan digital, export Excel native.
 
+## Environment restore (2026-08-29, sesi lanjutan)
+- Repo `shezrofenia18-ship-it/Project1` tersambung; local `main` == `origin/main` (0 ahead / 0 behind, HEAD `493a07a`). Semua commit terakhir (realtime WS, tutup buku, HPP/ekor, offline POS, PDF) ada di workspace.
+- Dependencies diinstall ulang: pip requirements.txt (reportlab 5.0.1, `pdf_reports` import OK) + yarn install (945 paket).
+- backend & frontend RUNNING; live preview terverifikasi: login owner → Dashboard Owner tampil data nyata (omzet Rp 3.743.030, 14 transaksi, badge ONLINE + LIVE aktif).
+- `memory/test_credentials.md` dibuat ulang (owner/admin/kasir; password kasir Budi tidak diketahui).
+- CATATAN KEAMANAN: user menempel GitHub PAT di chat → harus di-revoke.
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.
