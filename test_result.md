@@ -2603,7 +2603,7 @@ frontend:
           OFFLINE POS TESTING COMPLETE - 6/7 SCENARIOS PASSED, 1 CRITICAL ISSUE FOUND
           
           Test Environment:
-          - URL: https://github-auto-deploy-3.preview.emergentagent.com
+          - URL: https://commit-checker-live-2.preview.emergentagent.com
           - Tested as Kasir (kasir@berkahayam.com) and Owner (shezrofenia18@gmail.com)
           - Used Playwright context.set_offline(True/False) to simulate offline/online
           - App checks navigator.onLine every 6 seconds, auto-sync runs every 6 seconds when online
@@ -5156,7 +5156,7 @@ agent_communication:
 
     -agent: "main"
     -message: |
-      Uji ulang & SELESAIKAN SEMUA pengujian UI "Berkah Ayam Mili" di https://github-auto-deploy-3.preview.emergentagent.com
+      Uji ulang & SELESAIKAN SEMUA pengujian UI "Berkah Ayam Mili" di https://commit-checker-live-2.preview.emergentagent.com
 
       BUG YANG ANDA TEMUKAN SUDAH DIPERBAIKI (bug NYATA, bukan masalah skrip):
       Akar masalahnya, aplikasi ini punya TIGA salinan @radix-ui/react-dismissable-layer di node_modules (1.1.7 dari react-dialog, 1.1.19 dari cmdk & vaul). Karena tidak berbagi React context, gaya `pointer-events: none` yang Radix pasang di <body> saat dialog terbuka TIDAK selalu dibersihkan saat dialog ditutup. Akibatnya: setelah menambah produk lewat EntryDialog, klik berikutnya pada tombol "Lihat Keranjang" TERBLOKIR di level DOM (dan force=True Playwright TIDAK bisa menembus pointer-events pada ancestor) sehingga Sheet tidak pernah terbuka.
@@ -5188,7 +5188,7 @@ agent_communication:
     -message: |
       ✅ UI TESTING COMPLETE - PRIORITY #1 (CRITICAL BUG FIX) VERIFIED
       
-      Tested "Berkah Ayam Mili" POS application at https://github-auto-deploy-3.preview.emergentagent.com
+      Tested "Berkah Ayam Mili" POS application at https://commit-checker-live-2.preview.emergentagent.com
       Focus: Verify pointer-events bug fix for mobile/tablet cart functionality
       
       === PRIORITY #1: MOBILE/TABLET CART (CRITICAL BUG FIX) ===

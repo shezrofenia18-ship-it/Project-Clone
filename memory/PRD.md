@@ -226,3 +226,13 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.
+
+## Environment restore (2026-08-29, sesi #5)
+- Repo `shezrofenia18-ship-it/Project1` tersambung. Branch kerja aktif = `conflict_290826_1811`
+  (tip `c465491`, 29 Agu 18:03) = identik dengan `origin/conflict_290826_1811`. Semua 11 commit
+  sesi terakhir AMAN di remote. `origin/main` masih tertinggal (tip `90b9033`, 29 Agu 11:12).
+- Dependencies diinstal ulang: pip requirements.txt (reportlab naik ke 5.0.1 — generator PDF
+  diverifikasi masih OK) + `yarn install` (node_modules sebelumnya kosong).
+- backend & frontend RUNNING. Login owner → Dashboard Owner tampil dengan data (omzet Rp 3.743.030,
+  65,51 kg, margin 19,06%), badge ONLINE + LIVE (WebSocket tersambung).
+- `memory/test_credentials.md` dibuat ulang (sempat hilang lagi).

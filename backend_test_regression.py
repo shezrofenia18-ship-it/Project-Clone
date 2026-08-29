@@ -24,7 +24,7 @@ from datetime import datetime
 import requests
 
 # Base URL from environment
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-auto-deploy-3.preview.emergentagent.com")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://commit-checker-live-2.preview.emergentagent.com")
 API_URL = f"{BASE_URL}/api"
 
 # Credentials
