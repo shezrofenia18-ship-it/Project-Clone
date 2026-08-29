@@ -5974,3 +5974,184 @@ agent_communication:
       MAIN AGENT: Please summarize and finish. Backend WhatsApp PDF attachment feature is PRODUCTION-READY.
       
       YOU MUST ASK USER BEFORE DOING FRONTEND TESTING
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      UJI BACKEND SAJA — VERIFIKASI TINDAK LANJUT CODE REVIEW (regresi-check).
+      Kredensial: /app/memory/test_credentials.md. Kredensial Meta MASIH SENGAJA KOSONG.
+
+      Dari 8 kategori temuan code review, hanya 2 yang valid dan sudah diterapkan; 6 lainnya
+      terbukti FALSE POSITIVE (diverifikasi, bukan asumsi):
+      - `is` vs `==` (23 temuan): SEMUA berbentuk `is None` / `is not None` / `is False`, yaitu
+        idiom yang BENAR menurut PEP 8. `grep` untuk `is "literal"` = 0 hasil. TIDAK diubah.
+      - React hook deps (34 temuan): dijalankan dengan eslint-plugin-react-hooks 5.2.0 asli
+        (rule exhaustive-deps + rules-of-hooks) pada 46 file src/ -> 0 warning, 0 error.
+      - console statements: semua sudah dipagari `process.env.NODE_ENV !== "production"`.
+      - seed.py random -> secrets: `random` hanya untuk variasi DATA DEMO, bukan token.
+      - localStorage -> httpOnly cookie: ditolak karena akan MERUSAK Mode Offline POS
+        (sesi kasir wajib bertahan saat offline/reload — bug yang sudah diperbaiki di FASE 1).
+      - Refactor kompleksitas create_sale/dashboard: ditunda (jalur uang, risiko regresi tinggi).
+
+      YANG DIUBAH DAN HARUS DIUJI ULANG (fokus regresi, bukan fitur baru):
+      1. server.py `create_wa_template` (POST /api/whatsapp/template): `res` kini
+         diinisialisasi `{}` sebelum try, ada guard isinstance, DAN ada `except Exception`
+         baru yang mengembalikan **502** ("Gagal menghubungi Meta") untuk error non-WaError.
+         WAJIB DIPASTIKAN: dengan kredensial kosong tetap **400** (bukan 500/502) dan pesan
+         Bahasa Indonesia soal kredensial, untuk with_document=true maupun false.
+         RBAC tetap: owner boleh, admin & kasir 403.
+      2. server.py `send_wa_test` (POST /api/whatsapp/test): `res: dict = {}` diinisialisasi
+         per penerima. WAJIB: tetap 200, mode="manual", sent_count=0, tiap hasil punya `link`
+         wa.me valid, tidak ada 500.
+      3. Frontend Settings.js: baris riwayat diekstrak ke komponen `WaLogRow` + useMemo
+         (tidak mengubah API apa pun) — cukup pastikan GET /api/whatsapp/log tetap
+         mengembalikan bentuk yang sama: id, kind, date, trigger, mode, sent_count,
+         configured, results[] (tanpa field `link`).
+
+      REGRESI WAJIB: GET /api/whatsapp/settings (ada attach_pdf + template_spec + template_spec_doc),
+      GET /api/whatsapp/diagnostics (pdf_ready=true, ready_for_auto=false), GET /api/whatsapp/template
+      (approved & approved_doc false), POST /api/daily-closing (whatsapp.pdf_url terisi + teks
+      memuat "*PDF Laporan Penjualan:*"), GET tautan publik /api/public/laporan/{token} TANPA auth
+      -> 200 %PDF, token ngawur -> 404. Semua PDF laporan (sales/profit-loss/stock/daily-closing)
+      -> 200 application/pdf. Login 4 role, GET /api/dashboard, GET /api/products,
+      POST /api/sales (1 ekor) + cancel (stok kembali), GET /api/stock. Webhook GET token salah
+      -> 403, POST statuses 2x -> idempoten.
+
+      PULIHKAN di akhir: recipients=[{name:"Owner",number:"081289478221"}], auto_time="15:00",
+      auto_enabled=true, attach_pdf=true. Jangan ubah backend/.env. Jangan hapus data demo.
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND CODE REVIEW VERIFICATION COMPLETE - ALL 55 TESTS PASSED (55/55)
+      
+      Test file: /app/backend_test_code_review.py
+      Backend URL: https://commit-checker-live-2.preview.emergentagent.com/api
+      
+      KONTEKS: Verifikasi tindak lanjut code review. Kredensial Meta WhatsApp MASIH SENGAJA KOSONG
+      (owner belum punya akun WhatsApp Business). Mode fallback "manual"/1-tap adalah perilaku BENAR.
+      
+      === CRITICAL CHANGES VERIFIED (NO REGRESSIONS) ===
+      
+      1. ✅ POST /api/whatsapp/template - Code Changes Verified
+         - Owner with_document=false: 400 (BUKAN 500, BUKAN 502) ✅
+         - Owner with_document=true: 400 (BUKAN 500, BUKAN 502) ✅
+         - Pesan Bahasa Indonesia: "Kredensial WhatsApp belum diisi. Isi META_PHONE_NUMBER_ID 
+           dan META_ACCESS_TOKEN di backend/.env terlebih dahulu." ✅
+         - Admin: 403 (correctly rejected) ✅
+         - Kasir: 403 (correctly rejected) ✅
+         - PERUBAHAN KODE (`res: dict = {}` sebelum try, isinstance guard, except Exception -> 502)
+           TIDAK MENYEBABKAN REGRESI. Dengan kredensial kosong tetap 400, BUKAN 502. ✅
+      
+      2. ✅ POST /api/whatsapp/test - Code Changes Verified
+         - Owner: 200, mode="manual", sent_count=0 ✅
+         - Results: 1 result dengan link wa.me valid ✅
+         - Link format: https://wa.me/6281289478221?text=... (URL-encoded) ✅
+         - BUKAN 500 (BENAR) ✅
+         - Admin: 403 (correctly rejected) ✅
+         - Kasir: 403 (correctly rejected) ✅
+         - PERUBAHAN KODE (`res: dict = {}` per penerima) TIDAK MENYEBABKAN REGRESI. ✅
+      
+      3. ✅ GET /api/whatsapp/log - Data Shape Unchanged
+         - Required fields present: id, kind, date, trigger, mode, sent_count, configured, results ✅
+         - Results do NOT contain 'link' field (privacy protection) ✅
+         - Results fields: name, number, sent, error, via (BENAR) ✅
+         - FRONTEND REFACTOR (WaLogRow + useMemo) TIDAK MENGUBAH API. ✅
+      
+      === REGRESSIONS TESTED (ALL PASSED) ===
+      
+      4. ✅ GET /api/whatsapp/settings (10/10)
+         - attach_pdf = True ✅
+         - template_spec: name="rekap_tutup_buku_harian", 4 params ✅
+         - template_spec_doc: name="rekap_tutup_buku_pdf", with_document=True ✅
+         - provider.api_version = "v26.0" ✅
+         - provider.missing = [META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID, META_APP_ID] ✅
+      
+      5. ✅ GET /api/whatsapp/diagnostics (4/4)
+         - pdf_ready = True ✅
+         - pdf_size = 6138 bytes (>1000) ✅
+         - ready_for_auto = False (BENAR, credentials empty) ✅
+         - public_base_url = "https://commit-checker-live-2.preview.emergentagent.com" (tidak kosong) ✅
+      
+      6. ✅ GET /api/whatsapp/template (4/4)
+         - approved = False (BENAR, credentials empty) ✅
+         - approved_doc = False (BENAR, credentials empty) ✅
+         - Has 'spec' ✅
+         - Has 'spec_doc' ✅
+      
+      7. ✅ POST /api/daily-closing (3/3)
+         - whatsapp.pdf_url filled: https://.../api/public/laporan/... ✅
+         - whatsapp.text contains "*PDF Laporan Penjualan:*" ✅
+         - whatsapp.template_values: 4 values (tanggal, omzet, laba_bersih, jumlah_transaksi) ✅
+      
+      8. ✅ Public PDF Link (2/2)
+         - GET pdf_url WITHOUT Authorization header: 200, application/pdf, %PDF ✅
+         - GET invalid token: 404 (BUKAN 500) ✅
+      
+      9. ✅ PDF Reports (4/4)
+         - GET /api/reports/sales/pdf: 200, application/pdf, 13907 bytes ✅
+         - GET /api/reports/profit-loss/pdf: 200, application/pdf, 3549 bytes ✅
+         - GET /api/reports/stock/pdf: 200, application/pdf, 4092 bytes ✅
+         - GET /api/daily-closing/2026-08-29/pdf: 200, application/pdf, 7265 bytes ✅
+      
+      10. ✅ Basic Operations (7/7)
+         - Login 4 roles (owner, admin, kasir): OK ✅
+         - GET /api/dashboard: 200 ✅
+         - GET /api/products: 200, 14 products ✅
+         - POST /api/sales (1 ekor Ayam Broiler): 200, stock decreased 119→118 ✅
+         - POST /api/sales/{id}/cancel: 200, stock restored 118→119 ✅
+         - GET /api/stock-movements: 200 ✅
+      
+      11. ✅ Webhook (5/5)
+         - GET /api/whatsapp/webhook with wrong token: 403 ✅
+         - GET /api/whatsapp/webhook with correct token: 200, body="123" ✅
+         - POST /api/whatsapp/webhook statuses (1st time): 200 ✅
+         - POST /api/whatsapp/webhook statuses (2nd time - idempotent): 200 ✅
+         - Only 1 entry in /api/whatsapp/statuses (idempotency works) ✅
+      
+      12. ✅ RBAC (6/6)
+         - Kasir GET /whatsapp/settings: 403 ✅
+         - Kasir GET /whatsapp/diagnostics: 403 ✅
+         - Kasir GET /whatsapp/template: 403 ✅
+         - Kasir POST /whatsapp/test: 403 ✅
+         - Kasir GET /whatsapp/log: 403 ✅
+         - Kasir GET /api/daily-closing/preview: 403 ✅
+      
+      13. ✅ Settings Restored (2/2)
+         - recipients = [{name:"Owner", number:"6281289478221"}] ✅
+         - auto_time = "15:00" ✅
+         - auto_enabled = True ✅
+         - attach_pdf = True ✅
+      
+      === CRITICAL FINDINGS ===
+      
+      ✅ TIDAK ADA REGRESI DITEMUKAN
+      - Perubahan kode di create_wa_template (res initialization, isinstance guard, except Exception)
+        TIDAK menyebabkan perubahan perilaku. Dengan kredensial kosong tetap 400, BUKAN 502.
+      - Perubahan kode di send_wa_test (res initialization per recipient) TIDAK menyebabkan regresi.
+      - Frontend refactor (WaLogRow + useMemo) TIDAK mengubah API response shape.
+      - Semua endpoint mengembalikan status code yang benar (400 untuk credentials empty, BUKAN 500/502)
+      - Mode "manual"/1-tap (wa.me) adalah perilaku yang BENAR saat kredensial kosong
+      - Semua validasi bekerja (RBAC, invalid token, PDF generation)
+      - Webhook idempoten (upsert per message_id)
+      - PDF generation tidak regresi (semua PDF reports valid)
+      - Public link accessible without auth (by design)
+      - Settings restored to original values
+      
+      ✅ TIDAK ADA BUG DITEMUKAN
+      - Semua 55 tests passed
+      - Tidak ada HTTP 500 di endpoint mana pun
+      - Tidak ada HTTP 502 di endpoint mana pun (kecuali bila benar-benar gagal hubungi Meta, 
+        yang tidak terjadi karena credentials empty langsung return 400 sebelum try block)
+      - Semua field wajib ada dan berisi nilai yang benar
+      - RBAC enforced dengan benar
+      - Idempotency bekerja
+      - End-to-end flow lengkap
+      
+      === CONCLUSION ===
+      
+      CODE REVIEW CHANGES VERIFIED - NO REGRESSIONS FOUND.
+      Semua 55 test scenarios passed. Perubahan kode di create_wa_template dan send_wa_test
+      TIDAK menyebabkan regresi. Dengan kredensial kosong tetap 400 (BUKAN 500/502) dengan
+      pesan Bahasa Indonesia yang benar. Frontend refactor tidak mengubah API. Semua endpoint
+      bekerja sempurna dalam mode fallback "manual"/1-tap.
+      
+      Backend WhatsApp feature PRODUCTION-READY setelah code review changes.

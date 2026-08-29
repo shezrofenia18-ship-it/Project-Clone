@@ -2016,11 +2016,18 @@ async def create_wa_template(with_document: bool = False,
             sample = await _sales_pdf_for_date(today_str())
         except Exception as e:
             raise HTTPException(500, f"Gagal membuat contoh PDF laporan penjualan: {str(e)[:200]}")
+    # `res` diinisialisasi lebih dulu supaya tidak ada jalur eksekusi yang bisa
+    # memakainya sebelum ditugaskan (dan agar analisis statis tidak ambigu).
+    res: dict = {}
     try:
         res = await whatsapp.create_template(with_document=with_document, sample_pdf=sample)
     except whatsapp.WaError as e:
         d = e.as_dict()
         raise HTTPException(400, f"{d['message']}{(' — ' + d['hint']) if d['hint'] else ''}")
+    except Exception as e:
+        raise HTTPException(502, f"Gagal menghubungi Meta: {str(e)[:200]}")
+    if not isinstance(res, dict):
+        res = {}
     spec = whatsapp.template_spec(with_document=with_document)
     await log_audit(user, "create", "whatsapp_template", str(res.get("id") or "-"), None,
                     {"name": spec["name"], "with_document": with_document,
@@ -2166,6 +2173,7 @@ async def send_wa_test(user: dict = Depends(require_roles("owner"))):
         item = {"name": rec["name"], "number": rec["number"],
                 "link": whatsapp.wa_me_link(rec["number"], text), "sent": False,
                 "error": None, "via": None}
+        res: dict = {}
         if configured:
             try:
                 res = await whatsapp.send_template(rec["number"], test_values)

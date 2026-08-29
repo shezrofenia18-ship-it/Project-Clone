@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import api, { apiError } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
@@ -89,6 +89,37 @@ const WA_STATUS_LABEL = {
   accepted: "diterima server", sent: "terkirim", delivered: "sampai",
   read: "dibaca", failed: "gagal",
 };
+
+// Satu baris riwayat pengiriman. Dipisah jadi komponen sendiri + useMemo supaya
+// penyaringan status & pencarian error TIDAK dihitung ulang di dalam JSX pada
+// setiap render induk (panel ini ikut render tiap kali form pengaturan diubah).
+function WaLogRow({ row }) {
+  const { statuses, failure } = useMemo(() => {
+    const res = row.results || [];
+    const failed = res.find((r) => r.error);
+    return {
+      statuses: res.filter((r) => r.status && r.status !== "manual").slice(0, 3),
+      failure: failed ? (failed.hint || (failed.error || "").slice(0, 60)) : "",
+    };
+  }, [row.results]);
+
+  return (
+    <div className="text-[11px] text-muted-foreground flex items-center gap-2">
+      <span className="tabular">{(row.created_at || "").slice(0, 16).replace("T", " ")}</span>
+      <Badge variant="secondary" className="text-[10px]">{row.trigger}</Badge>
+      <span>{row.kind === "test" ? "uji coba" : `rekap ${row.date}`}</span>
+      <span className={row.sent_count > 0 ? "text-success" : "text-warning"}>
+        {row.sent_count > 0 ? `terkirim ${row.sent_count} nomor` : "disiapkan (mode 1-tap)"}
+      </span>
+      {statuses.map((r, i) => (
+        <Badge key={`st-${row.id}-${i}`} variant="outline" className="text-[10px]">
+          {r.name}: {WA_STATUS_LABEL[r.status] || r.status}
+        </Badge>
+      ))}
+      {failure && <span className="text-destructive">gagal: {failure}</span>}
+    </div>
+  );
+}
 
 // Baris checklist kesiapan. Didefinisikan di luar komponen agar React tidak
 // membongkar-ulang subtree tiap render.
@@ -428,26 +459,7 @@ function WhatsAppSettings() {
         <div className="pt-2" data-testid="wa-log">
           <p className="text-xs font-semibold mb-1.5">Riwayat pengiriman terakhir</p>
           <div className="space-y-1">
-            {log.map((l) => (
-              <div key={l.id} className="text-[11px] text-muted-foreground flex items-center gap-2">
-                <span className="tabular">{(l.created_at || "").slice(0, 16).replace("T", " ")}</span>
-                <Badge variant="secondary" className="text-[10px]">{l.trigger}</Badge>
-                <span>{l.kind === "test" ? "uji coba" : `rekap ${l.date}`}</span>
-                <span className={l.sent_count > 0 ? "text-success" : "text-warning"}>
-                  {l.sent_count > 0 ? `terkirim ${l.sent_count} nomor` : "disiapkan (mode 1-tap)"}
-                </span>
-                {(l.results || []).filter((r) => r.status && r.status !== "manual").slice(0, 3).map((r, i) => (
-                  <Badge key={`st-${l.id}-${i}`} variant="outline" className="text-[10px]">
-                    {r.name}: {WA_STATUS_LABEL[r.status] || r.status}
-                  </Badge>
-                ))}
-                {(l.results || []).some((r) => r.error) && (
-                  <span className="text-destructive">
-                    gagal: {(l.results.find((r) => r.error)?.hint) || (l.results.find((r) => r.error)?.error || "").slice(0, 60)}
-                  </span>
-                )}
-              </div>
-            ))}
+            {log.map((l) => <WaLogRow key={l.id} row={l} />)}
           </div>
         </div>
       )}

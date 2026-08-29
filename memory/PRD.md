@@ -309,3 +309,37 @@ kirim -> lampiran wajib template TERPISAH berheader DOCUMENT + contoh media saat
   attach_pdf=false -> pdf_url kosong. Tidak ada regresi PDF/dashboard/penjualan.
   Diverifikasi visual: dialog Tutup Buku menampilkan baris PDF + tautan ada di teks rekap.
 - SISA UNTUK AKTIF PENUH: META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID, META_APP_ID.
+
+## Tindak lanjut Code Review (2026-08-30)
+Dari 8 kategori temuan, **2 valid (diterapkan)** dan **6 FALSE POSITIVE (dibuktikan, tidak diubah)**:
+
+DITERAPKAN:
+1. `server.py` — pola `res` dibuat tak-ambigu: `create_wa_template()` menginisialisasi
+   `res: dict = {}` sebelum try + guard `isinstance` + `except Exception` -> 502 khusus
+   kegagalan menghubungi Meta (kredensial kosong TETAP 400). `send_wa_test()` juga
+   menginisialisasi `res: dict = {}` per penerima.
+2. `frontend/src/pages/Settings.js` — baris riwayat pengiriman diekstrak ke komponen
+   `WaLogRow` + `useMemo` (penyaringan status & pencarian error tidak lagi dihitung di JSX
+   setiap render induk). Bentuk respons API tidak berubah.
+
+FALSE POSITIVE (bukti, bukan asumsi):
+- `is` vs `==` (23 temuan): SEMUA berbentuk `is None` / `is not None` / `is False` = idiom
+  BENAR menurut PEP 8. `grep "is \"literal\""` = 0 hasil. Mengubahnya justru regresi.
+- React hook deps (34 temuan): dijalankan dengan eslint-plugin-react-hooks 5.2.0 asli
+  (exhaustive-deps + rules-of-hooks) atas 46 file `src/` -> **0 warning, 0 error**. Daftar
+  "dependensi hilang" berisi nilai STABIL (import `api`/`apiError`, global `WebSocket`,
+  setter `setPrice`) yang bila dimasukkan ke deps akan memicu loop render/reconnect.
+- Console statements: seluruhnya sudah dipagari `process.env.NODE_ENV !== "production"`
+  (lib/log.js, lib/hooks.js, RealtimeContext.js, Layout.js, SalesTrendCard.js).
+- `seed.py` random -> secrets: `random` hanya untuk variasi DATA DEMO, bukan token/ID rahasia.
+  Randomness sensitif satu-satunya (token tautan PDF) memang sudah `secrets.token_urlsafe(32)`.
+- localStorage -> httpOnly cookie: DITOLAK karena akan merusak Mode Offline POS (sesi kasir
+  wajib bertahan saat offline & reload — bug yang sudah diperbaiki di FASE 1). Selain itu
+  aplikasi TIDAK punya sink XSS (`dangerouslySetInnerHTML`/`innerHTML`/`eval` = 0 hasil).
+- Refactor kompleksitas `create_sale()` (38) & `dashboard()` (23): DITUNDA. Keduanya jalur uang
+  & angka bisnis yang butuh berkali-kali sesi untuk benar; refactor demi metrik tanpa manfaat
+  terlihat berisiko regresi. Ditawarkan ke owner sebagai tugas terpisah dengan uji penuh.
+
+Teruji: backend **55/55 PASS** (termasuk pemastian kredensial kosong tetap 400 bukan 500/502,
+bentuk data /whatsapp/log tidak berubah, tautan PDF publik, semua PDF, penjualan+pembatalan,
+webhook idempoten, RBAC). Artefak uji dibersihkan; setting dipulihkan (15:00, attach_pdf ON).
