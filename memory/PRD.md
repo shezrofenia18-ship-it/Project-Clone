@@ -236,3 +236,76 @@ Lihat `/app/memory/test_credentials.md`.
 - backend & frontend RUNNING. Login owner → Dashboard Owner tampil dengan data (omzet Rp 3.743.030,
   65,51 kg, margin 19,06%), badge ONLINE + LIVE (WebSocket tersambung).
 - `memory/test_credentials.md` dibuat ulang (sempat hilang lagi).
+
+## Implemented (2026-08-30 — Rekap Tutup Buku Otomatis ke WhatsApp, Meta Cloud API)
+Keputusan owner: provider **Meta WhatsApp Cloud API**, isi pesan **RINGKAS lewat template**
+(omzet, laba bersih, jumlah transaksi) + PDF lengkap tetap diunduh di app. Penerima
+081289478221 (fitur tambah nomor tetap ada), jam kirim **15:00 WIB**.
+Kredensial Meta BELUM ADA (owner masih membuat akun WhatsApp Business) -> semua jalur wajib
+tetap hidup dalam mode fallback wa.me 1-tap.
+
+- `backend/whatsapp.py`: Graph API di-PIN **v26.0** (dari v25.0). Template UTILITY
+  `rekap_tutup_buku_harian` (lang id, `parameter_format` NAMED) 4 parameter named:
+  tanggal, omzet, laba_bersih, jumlah_transaksi. `send_template()` memakai `parameter_name`
+  + `recipient_type: individual`; mendukung positional lewat env WA_TEMPLATE_PARAM_FORMAT.
+- Kelas `WaError` + klasifikasi kode Meta: PERMANENT (131026, 132000, 132001, 132015, 132016,
+  190, 0, …) TIDAK di-retry; TRANSIENT (130429, 131056, 5xx) di-retry 2x backoff 1.5s->3.75s.
+  `ERROR_HINTS` menjelaskan tiap error dalam Bahasa Indonesia. Token tidak pernah masuk log.
+- `send_closing()` berlapis: template -> teks biasa (bila template belum disetujui) -> wa.me
+  1-tap. Tidak pernah melempar exception, jadi tutup buku tak bisa gagal karena WhatsApp.
+- Fungsi baru: `create_template()`, `list_templates()`, `phone_status()`, `template_spec()`,
+  `template_values()`.
+- `backend/server.py` endpoint baru: `GET/POST /api/whatsapp/template`,
+  `GET /api/whatsapp/diagnostics` (checklist 5 syarat + `ready_for_auto`),
+  `GET/POST /api/whatsapp/webhook` (status sent/delivered/read/failed, upsert idempoten ke
+  `wa_statuses`, cermin ke `wa_logs.results.$.status`, selalu 200), `GET /api/whatsapp/statuses`.
+  `GET /api/whatsapp/settings` kini mengembalikan `template_spec`. `POST /api/whatsapp/test`
+  menguji jalur template lebih dulu (jalur yang sama dengan rekap malam).
+- **BUG DIPERBAIKI** pada `auto_closing_worker`: dulu `now.strftime("%H:%M") != target -> continue`,
+  jadi rekap HILANG bila backend restart tepat di menit target. Sekarang "sudah melewati jam
+  target" + catch-up, anti-dobel via `last_done` & `wa_sent_at`/`wa_attempt_at`.
+- `backend/.env` menerima kunci baru (kosong, menunggu owner): META_PHONE_NUMBER_ID,
+  META_ACCESS_TOKEN, META_WABA_ID, META_API_VERSION=v26.0, WA_TEMPLATE_NAME,
+  WA_TEMPLATE_LANG, WA_TEMPLATE_PARAM_FORMAT, WA_WEBHOOK_VERIFY_TOKEN (dibuat acak).
+- Frontend `pages/Settings.js`: komponen `WhatsAppActivation` — checklist 5 syarat berwarna,
+  badge "Siap otomatis / Belum siap", tombol Periksa Kesiapan, **Buat Template di Meta** (1 klik
+  submit ke Meta), panduan 5 langkah, pratinjau + copy isi template & payload JSON, URL webhook
+  + copy. Riwayat pengiriman kini menampilkan status per nomor (terkirim/sampai/dibaca/gagal)
+  beserta saran perbaikan. `pages/Closing.js`: pratinjau isi template ringkas + label jalur
+  kirim (template/teks) per penerima.
+- Teruji: backend **9/9 PASS** (fallback manual, RBAC, normalisasi nomor, multi nomor, validasi
+  jam, webhook idempoten & 403 token salah, PDF tidak regresi). Penjadwal diuji nyata dengan
+  menggeser jam ke +1 menit: log "Tutup buku otomatis dijalankan (jadwal 01:34 WIB)", snapshot
+  benar (omzet 3.743.030, laba bersih 443.595, 14 transaksi). Artefak uji dihapus, jam
+  dipulihkan ke 15:00.
+- SISA UNTUK AKTIF PENUH (butuh owner): META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID
+  lalu tekan "Buat Template di Meta" dan tunggu status APPROVED.
+
+## Implemented (2026-08-30 — Lampiran PDF Laporan Penjualan pada rekap WhatsApp)
+Permintaan owner: "kirimkan saja beserta PDF Laporan penjualan".
+Kendala aturan Meta: template body-only yang sudah dibuat TIDAK bisa diberi lampiran saat
+kirim -> lampiran wajib template TERPISAH berheader DOCUMENT + contoh media saat pembuatan.
+
+- Template kedua `rekap_tutup_buku_pdf` (HEADER DOCUMENT + 4 parameter body yang sama).
+  Contoh media diunggah lewat Resumable Upload API (`/{META_APP_ID}/uploads` lalu
+  `/upload:<sesi>` header `file_offset`, skema Authorization "OAuth").
+- PDF aktual diunggah ke `POST /{phone_id}/media` (media ID berlaku 30 hari, dipakai ulang
+  untuk semua penerima) lalu dikirim sebagai header dokumen `{id, filename}` (tanpa caption).
+- `send_closing()` berlapis 5: template+PDF -> template ringkas -> dokumen+caption -> teks ->
+  wa.me 1-tap. Error permanen (131026/190/0) memutus percobaan lanjutan.
+- Karena wa.me tidak bisa melampirkan file, dibuat TAUTAN PDF PUBLIK ber-token:
+  koleksi `share_links` (token 43 karakter, kedaluwarsa 30 hari, penghitung hits) +
+  `GET /api/public/laporan/{token}` tanpa auth (404 token salah, 410 kedaluwarsa). Tautan ini
+  otomatis disisipkan di teks rekap: blok "*PDF Laporan Penjualan:*".
+- URL publik TIDAK di-hardcode: middleware `capture_public_base` merekam skema+host dari
+  header x-forwarded-* permintaan pertama ke `settings.public_base_url`; `_public_base_url()`
+  berurutan env PUBLIC_BASE_URL -> settings -> REACT_APP_BACKEND_URL di frontend/.env.
+- Setting `wa_attach_pdf` (default ON) bisa dimatikan owner dari Pengaturan.
+- UI: sakelar "Lampirkan PDF Laporan Penjualan", 2 baris checklist baru (template berlampiran +
+  PDF siap), tombol "Buat Template Ringkas" & "Buat Template + PDF", copy payload versi PDF.
+  Dialog Tutup Buku: baris "PDF Laporan Penjualan" + tombol Buka PDF, label jalur kirim.
+- Teruji: backend **10/10 PASS**. PDF laporan penjualan 4.845–5.947 byte, tautan publik
+  terbukti bisa diunduh TANPA login (200, application/pdf, header %PDF), token ngawur -> 404,
+  attach_pdf=false -> pdf_url kosong. Tidak ada regresi PDF/dashboard/penjualan.
+  Diverifikasi visual: dialog Tutup Buku menampilkan baris PDF + tautan ada di teks rekap.
+- SISA UNTUK AKTIF PENUH: META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID, META_APP_ID.

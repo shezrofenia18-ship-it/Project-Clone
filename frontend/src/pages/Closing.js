@@ -330,6 +330,44 @@ function WaDialog({ data, onClose }) {
           </div>
         )}
 
+        {data.template_values && data.provider?.configured && (
+          <div className="rounded-lg bg-muted/40 p-2.5 space-y-1" data-testid="wa-template-values">
+            <p className="text-xs font-semibold">Isi pesan WhatsApp (ringkas, sesuai template Meta)</p>
+            <p className="text-[11px] text-muted-foreground">
+              Rekap tutup buku {data.template_values.tanggal}. Omzet {data.template_values.omzet},
+              laba bersih {data.template_values.laba_bersih}, {data.template_values.jumlah_transaksi} transaksi.
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              Rincian lengkap ada di pratinjau bawah &amp; tombol <b>PDF</b> tutup buku.
+            </p>
+          </div>
+        )}
+
+        {data.pdf_url && (
+          <div className="rounded-lg border border-border p-2.5 flex items-center justify-between gap-2"
+            data-testid="wa-pdf-row">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">PDF Laporan Penjualan</p>
+              <p className="text-[11px] text-muted-foreground">
+                {data.results?.some((r) => r.pdf_attached)
+                  ? "Terlampir langsung di pesan WhatsApp."
+                  : "Tautannya sudah ikut di dalam teks rekap (berlaku 30 hari)."}
+              </p>
+            </div>
+            <Button size="sm" variant="outline" data-testid="wa-open-pdf"
+              onClick={() => window.open(data.pdf_url, "_blank", "noopener")}>
+              Buka PDF
+            </Button>
+          </div>
+        )}
+
+        {data.pdf_error && (
+          <p className="text-[11px] text-warning">
+            Lampiran PDF gagal diunggah ke WhatsApp: {data.pdf_error.hint || data.pdf_error.message}.
+            Rekap tetap dikirim tanpa lampiran.
+          </p>
+        )}
+
         {results.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             Belum ada nomor penerima. Tambahkan di <b>Pengaturan → Rekap WhatsApp</b>.
@@ -341,7 +379,14 @@ function WaDialog({ data, onClose }) {
                 <div className="min-w-0">
                   <p className="text-sm font-semibold truncate">{r.name}</p>
                   <p className="text-xs text-muted-foreground tabular">+{r.number}</p>
+                  {r.via && <p className="text-[11px] text-muted-foreground">
+                    lewat {r.via === "template_pdf" ? "template + PDF"
+                      : r.via === "template" ? "template resmi"
+                      : r.via === "document" ? "dokumen PDF" : "pesan teks"}
+                    {r.pdf_attached ? " · PDF terlampir" : ""}
+                  </p>}
                   {r.error && <p className="text-[11px] text-destructive mt-0.5 break-all">{r.error}</p>}
+                  {r.hint && <p className="text-[11px] text-warning mt-0.5">{r.hint}</p>}
                 </div>
                 {r.sent ? (
                   <Badge className="bg-success/15 text-success hover:bg-success/15 shrink-0">terkirim</Badge>

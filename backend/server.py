@@ -8,13 +8,15 @@ load_dotenv(ROOT_DIR / ".env")
 import uuid
 import asyncio
 import re
+import secrets
 import logging
 import requests
 from datetime import timedelta
 from typing import List, Optional, Any, Dict
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket
-from fastapi.responses import Response
+from fastapi import (FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form,
+                     WebSocket, Request, Query)
+from fastapi.responses import Response, PlainTextResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -1569,6 +1571,53 @@ async def report_stock_pdf(user: dict = Depends(require_roles("owner", "admin"))
     return _pdf_response(pdf, f"nilai-stok_{today_str()}.pdf")
 
 
+# ------------------------- Tautan PDF publik (untuk lampiran WhatsApp) -------------------------
+# WhatsApp mode 1-tap (wa.me) TIDAK bisa melampirkan file, jadi PDF dibagikan
+# sebagai URL ber-token acak: panjang 43 karakter, kedaluwarsa, dan hanya
+# mengizinkan SATU laporan tertentu. Tidak ada data sensitif di dalam URL.
+async def _create_share_link(kind: str, ref: str, days: int = 30) -> str:
+    token = secrets.token_urlsafe(32)
+    now = now_jkt()
+    await db.share_links.insert_one({
+        "id": new_id(), "token": token, "kind": kind, "ref": ref,
+        "created_at": now.isoformat(), "expires_at": (now + timedelta(days=days)).isoformat(),
+        "hits": 0,
+    })
+    return token
+
+
+async def _sales_pdf_for_date(date: str) -> bytes:
+    """PDF Laporan Penjualan untuk satu tanggal (dipakai lampiran rekap WhatsApp)."""
+    data = await report_sales(date, date, {"name": "Sistem (Otomatis)", "role": "owner"})
+    store = await _store_info()
+    return await run_in_threadpool(pdf_reports.sales_pdf, data, store, date, date,
+                                  "Sistem (Otomatis)")
+
+
+@api.get("/public/laporan/{token}")
+async def public_report_pdf(token: str):
+    """Unduh PDF laporan lewat tautan ber-token. TANPA login (dibuka dari WhatsApp)."""
+    row = await db.share_links.find_one({"token": token})
+    if not row:
+        raise HTTPException(404, "Tautan tidak ditemukan atau sudah dicabut")
+    if str(row.get("expires_at") or "") < iso_now():
+        raise HTTPException(410, "Tautan sudah kedaluwarsa. Minta tautan baru dari aplikasi.")
+    if row.get("kind") != "sales":
+        raise HTTPException(404, "Jenis laporan tidak dikenal")
+    date = str(row.get("ref") or "")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        raise HTTPException(404, "Tanggal laporan tidak valid")
+    await db.share_links.update_one({"token": token},
+                                    {"$inc": {"hits": 1}, "$set": {"last_hit_at": iso_now()}})
+    pdf = await _sales_pdf_for_date(date)
+    return Response(content=pdf, media_type="application/pdf", headers={
+        # inline supaya langsung terbaca di WhatsApp/browser HP
+        "Content-Disposition": f'inline; filename="laporan-penjualan_{date}.pdf"',
+        "Content-Length": str(len(pdf)),
+        "Cache-Control": "no-store",
+    })
+
+
 # ------------------------- Tutup Buku Harian -------------------------
 # Rumus laba & kas ada di finance.py (satu sumber untuk semua halaman).
 
@@ -1805,23 +1854,43 @@ async def _wa_recipients() -> List[dict]:
 
 
 async def _dispatch_closing_whatsapp(closing: dict, notes: str = "", trigger: str = "manual") -> dict:
-    """Kirim rekap tutup buku ke WhatsApp. Tidak boleh menggagalkan tutup buku."""
+    """Kirim rekap tutup buku + PDF Laporan Penjualan. Tidak boleh menggagalkan tutup buku."""
     try:
         recipients = await _wa_recipients()
         store = await _store_info()
+        date = str(closing.get("date") or today_str())
+
+        # PDF Laporan Penjualan hari itu. Dibuat sekali: dipakai sebagai lampiran
+        # (media Meta) DAN sebagai tautan publik untuk mode 1-tap.
+        pdf, pdf_url, pdf_name = None, "", f"laporan-penjualan_{date}.pdf"
+        if bool(await get_setting("wa_attach_pdf", True)):
+            try:
+                pdf = await _sales_pdf_for_date(date)
+                base = await _public_base_url()
+                token = await _create_share_link("sales", date)
+                if base:
+                    pdf_url = f"{base}/api/public/laporan/{token}"
+            except Exception as e:
+                logger.warning("PDF laporan penjualan %s gagal dibuat: %s", date, e)
+                pdf, pdf_url = None, ""
+
         if not recipients:
             await add_notification("whatsapp", "Nomor WhatsApp Belum Diisi",
                                    "Tambahkan nomor penerima rekap di Pengaturan → Rekap WhatsApp", "warning")
-            return {"text": whatsapp.build_closing_text(clean(closing), store, notes),
-                    "provider": whatsapp.provider_info(), "results": [], "sent_count": 0, "mode": "manual"}
-        out = await whatsapp.send_closing(clean(closing), store, recipients, notes)
-        upd = {"wa_status": out["mode"], "wa_results": out["results"], "wa_attempt_at": iso_now()}
+            return {"text": whatsapp.build_closing_text(clean(closing), store, notes, pdf_url=pdf_url),
+                    "provider": whatsapp.provider_info(), "results": [], "sent_count": 0,
+                    "mode": "manual", "pdf_url": pdf_url}
+        out = await whatsapp.send_closing(clean(closing), store, recipients, notes,
+                                          pdf=pdf, pdf_filename=pdf_name, pdf_url=pdf_url)
+        upd = {"wa_status": out["mode"], "wa_results": out["results"], "wa_attempt_at": iso_now(),
+               "wa_pdf_url": out.get("pdf_url") or ""}
         if out["sent_count"]:
             upd["wa_sent_at"] = iso_now()
         await db.daily_closings.update_one({"date": closing["date"]}, {"$set": upd})
         if out["sent_count"]:
+            lampiran = " + PDF" if any(r.get("pdf_attached") for r in out["results"]) else ""
             await add_notification("whatsapp", "Rekap WhatsApp Terkirim",
-                                   f"{closing['date']} · terkirim ke {out['sent_count']} nomor", "success")
+                                   f"{closing['date']} · terkirim ke {out['sent_count']} nomor{lampiran}", "success")
         else:
             await add_notification("whatsapp", "Rekap WhatsApp Siap Dikirim",
                                    f"{closing['date']} · tekan tombol Kirim ke WhatsApp di halaman Tutup Buku", "info")
@@ -1854,6 +1923,7 @@ class WaSettingsBody(BaseModel):
     recipients: List[Dict[str, str]] = []
     auto_enabled: bool = True
     auto_time: str = "21:00"
+    attach_pdf: bool = True
 
 
 @api.get("/whatsapp/settings")
@@ -1862,7 +1932,11 @@ async def get_wa_settings(user: dict = Depends(require_roles("owner", "admin")))
         "recipients": await _wa_recipients(),
         "auto_enabled": bool(await get_setting("wa_auto_enabled", True)),
         "auto_time": str(await get_setting("wa_auto_time", "21:00"))[:5],
+        "attach_pdf": bool(await get_setting("wa_attach_pdf", True)),
         "provider": whatsapp.provider_info(),
+        # Spesifikasi template siap dicopy owner ke Meta (atau disubmit 1 klik).
+        "template_spec": whatsapp.template_spec(),
+        "template_spec_doc": whatsapp.template_spec(with_document=True),
     }
 
 
@@ -1881,8 +1955,10 @@ async def put_wa_settings(body: WaSettingsBody, user: dict = Depends(require_rol
     await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": recs}}, upsert=True)
     await db.settings.update_one({"key": "wa_auto_enabled"}, {"$set": {"value": bool(body.auto_enabled)}}, upsert=True)
     await db.settings.update_one({"key": "wa_auto_time"}, {"$set": {"value": body.auto_time}}, upsert=True)
+    await db.settings.update_one({"key": "wa_attach_pdf"}, {"$set": {"value": bool(body.attach_pdf)}}, upsert=True)
     await log_audit(user, "update", "whatsapp_settings", "wa", None,
-                    {"count": len(recs), "auto_enabled": body.auto_enabled, "auto_time": body.auto_time})
+                    {"count": len(recs), "auto_enabled": body.auto_enabled,
+                     "auto_time": body.auto_time, "attach_pdf": body.attach_pdf})
     return await get_wa_settings(user)
 
 
@@ -1890,6 +1966,175 @@ async def put_wa_settings(body: WaSettingsBody, user: dict = Depends(require_rol
 async def get_wa_log(limit: int = 30, user: dict = Depends(require_roles("owner", "admin"))):
     """Riwayat upaya pengiriman rekap (otomatis maupun manual)."""
     rows = await db.wa_logs.find().sort("created_at", -1).to_list(max(min(limit, 100), 1))
+    return [clean(r) for r in rows]
+
+
+# ------------------------- Aktivasi provider (template & diagnostik) -------------------------
+@api.get("/whatsapp/template")
+async def get_wa_template(user: dict = Depends(require_roles("owner", "admin"))):
+    """Spesifikasi template + statusnya di akun WhatsApp Business.
+
+    Selalu 200: bila kredensial belum ada, `remote` kosong dan owner tetap bisa
+    menyalin spesifikasi template untuk disubmit manual di Meta Business Manager.
+    """
+    spec = whatsapp.template_spec()
+    spec_doc = whatsapp.template_spec(with_document=True)
+    out = {"spec": spec, "spec_doc": spec_doc, "provider": whatsapp.provider_info(),
+           "remote": [], "approved": False, "approved_doc": False, "error": None}
+    if whatsapp.is_configured() and whatsapp.provider_info()["waba_configured"]:
+        try:
+            rows = await whatsapp.list_templates()
+            out["remote"] = rows
+            out["approved"] = any(
+                (t.get("name") == spec["name"]) and (t.get("status") == "APPROVED")
+                for t in rows)
+            out["approved_doc"] = any(
+                (t.get("name") == spec_doc["name"]) and (t.get("status") == "APPROVED")
+                for t in rows)
+        except whatsapp.WaError as e:
+            out["error"] = e.as_dict()
+        except Exception as e:
+            out["error"] = {"message": str(e)[:300]}
+    return out
+
+
+@api.post("/whatsapp/template")
+async def create_wa_template(with_document: bool = False,
+                             user: dict = Depends(require_roles("owner"))):
+    """Submit template rekap ke Meta sekali klik (butuh META_WABA_ID + token).
+
+    `with_document=true` membuat template BERLAMPIRAN PDF (header DOCUMENT);
+    Meta mewajibkan contoh PDF, jadi laporan penjualan hari ini diunggah sebagai
+    contoh lewat Resumable Upload API (butuh META_APP_ID).
+    """
+    if not whatsapp.is_configured():
+        raise HTTPException(400, "Kredensial WhatsApp belum diisi. Isi META_PHONE_NUMBER_ID "
+                                 "dan META_ACCESS_TOKEN di backend/.env terlebih dahulu.")
+    sample = None
+    if with_document:
+        try:
+            sample = await _sales_pdf_for_date(today_str())
+        except Exception as e:
+            raise HTTPException(500, f"Gagal membuat contoh PDF laporan penjualan: {str(e)[:200]}")
+    try:
+        res = await whatsapp.create_template(with_document=with_document, sample_pdf=sample)
+    except whatsapp.WaError as e:
+        d = e.as_dict()
+        raise HTTPException(400, f"{d['message']}{(' — ' + d['hint']) if d['hint'] else ''}")
+    spec = whatsapp.template_spec(with_document=with_document)
+    await log_audit(user, "create", "whatsapp_template", str(res.get("id") or "-"), None,
+                    {"name": spec["name"], "with_document": with_document,
+                     "status": res.get("status")})
+    return {"ok": True, "result": res, "spec": spec}
+
+
+@api.get("/whatsapp/diagnostics")
+async def wa_diagnostics(user: dict = Depends(require_roles("owner", "admin"))):
+    """Cek kesiapan: kredensial, nomor bisnis, template disetujui, penerima, jadwal."""
+    prov = whatsapp.provider_info()
+    recipients = await _wa_recipients()
+    out = {
+        "provider": prov,
+        "recipients": len(recipients),
+        "auto_enabled": bool(await get_setting("wa_auto_enabled", True)),
+        "auto_time": str(await get_setting("wa_auto_time", "21:00"))[:5],
+        "attach_pdf": bool(await get_setting("wa_attach_pdf", True)),
+        "public_base_url": await _public_base_url(),
+        "webhook_url": "/api/whatsapp/webhook",
+        "webhook_verify_configured": bool((os.environ.get("WA_WEBHOOK_VERIFY_TOKEN") or "").strip()),
+        "phone": None, "template_approved": False, "template_doc_approved": False, "errors": [],
+    }
+    # PDF laporan penjualan harus benar-benar bisa dibuat, bukan sekadar diasumsikan.
+    try:
+        pdf = await _sales_pdf_for_date(today_str())
+        out["pdf_ready"] = bool(pdf and pdf[:4] == b"%PDF")
+        out["pdf_size"] = len(pdf or b"")
+    except Exception as e:
+        out["pdf_ready"] = False
+        out["errors"].append({"step": "pdf_laporan", "message": str(e)[:250]})
+    if prov["configured"]:
+        try:
+            out["phone"] = await whatsapp.phone_status()
+        except Exception as e:
+            out["errors"].append({"step": "nomor_bisnis", "message": str(e)[:250]})
+        if prov["waba_configured"]:
+            try:
+                spec = whatsapp.template_spec()
+                spec_doc = whatsapp.template_spec(with_document=True)
+                rows = await whatsapp.list_templates()
+                out["template_approved"] = any(
+                    t.get("name") == spec["name"] and t.get("status") == "APPROVED" for t in rows)
+                out["template_doc_approved"] = any(
+                    t.get("name") == spec_doc["name"] and t.get("status") == "APPROVED" for t in rows)
+                out["templates"] = [{"name": t.get("name"), "status": t.get("status"),
+                                     "language": t.get("language")} for t in rows][:20]
+            except Exception as e:
+                out["errors"].append({"step": "template", "message": str(e)[:250]})
+    # Siap otomatis bila minimal template ringkas disetujui; lampiran PDF butuh
+    # template dokumen (kalau owner mengaktifkan lampiran).
+    ready = bool(prov["configured"] and out["recipients"] and out["auto_enabled"]
+                 and (out["template_doc_approved"] if out["attach_pdf"] else out["template_approved"]))
+    out["ready_for_auto"] = ready
+    return out
+
+
+# ------------------------- Webhook status pengiriman -------------------------
+# Dipanggil oleh Meta (tanpa auth aplikasi) -> diverifikasi lewat WA_WEBHOOK_VERIFY_TOKEN.
+@api.get("/whatsapp/webhook")
+async def verify_wa_webhook(
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_verify_token: str = Query("", alias="hub.verify_token"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+):
+    expected = (os.environ.get("WA_WEBHOOK_VERIFY_TOKEN") or "").strip()
+    if hub_mode == "subscribe" and expected and hub_verify_token == expected:
+        return PlainTextResponse(hub_challenge)
+    raise HTTPException(403, "Verifikasi webhook gagal")
+
+
+@api.post("/whatsapp/webhook")
+async def receive_wa_webhook(request: Request):
+    """Simpan status pengiriman (sent/delivered/read/failed) per message_id.
+
+    Idempoten (upsert per message_id) karena Meta melakukan retry sampai 7 hari
+    bila respons bukan 2xx. Selalu balas 200 supaya tidak memicu retry beruntun.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": True}
+    try:
+        touched = 0
+        for entry in (body.get("entry") or []):
+            for change in (entry.get("changes") or []):
+                value = (change.get("value") or {})
+                for st in (value.get("statuses") or []):
+                    wamid = st.get("id")
+                    if not wamid:
+                        continue
+                    doc = {"status": st.get("status"), "recipient": st.get("recipient_id"),
+                           "timestamp": st.get("timestamp"), "errors": st.get("errors") or [],
+                           "updated_at": iso_now()}
+                    await db.wa_statuses.update_one(
+                        {"message_id": wamid},
+                        {"$set": doc, "$setOnInsert": {"message_id": wamid, "created_at": iso_now()}},
+                        upsert=True)
+                    # Cerminkan status ke baris log agar owner lihat "dibaca/gagal".
+                    await db.wa_logs.update_one(
+                        {"results.message_id": wamid},
+                        {"$set": {"results.$.status": st.get("status"),
+                                  "results.$.status_at": iso_now()}})
+                    touched += 1
+        if touched:
+            await rt_emit(["whatsapp"])
+    except Exception as e:
+        logger.warning("Webhook WhatsApp gagal diproses: %s", e)
+    return {"ok": True}
+
+
+@api.get("/whatsapp/statuses")
+async def get_wa_statuses(limit: int = 50, user: dict = Depends(require_roles("owner", "admin"))):
+    rows = await db.wa_statuses.find().sort("updated_at", -1).to_list(max(min(limit, 200), 1))
     return [clean(r) for r in rows]
 
 
@@ -1912,16 +2157,41 @@ async def send_wa_test(user: dict = Depends(require_roles("owner"))):
             "_Dikirim oleh sistem Berkah Ayam Mili_")
     results = []
     configured = whatsapp.is_configured()
+    # Nilai uji untuk template (template = jalur yang dipakai rekap malam otomatis,
+    # jadi uji coba harus melewati jalur yang SAMA agar benar-benar membuktikan).
+    test_values = {"tanggal": whatsapp.tanggal_panjang(today_str()),
+                   "omzet": "(uji coba)", "laba_bersih": "(uji coba)",
+                   "jumlah_transaksi": "0"}
     for rec in recipients:
         item = {"name": rec["name"], "number": rec["number"],
-                "link": whatsapp.wa_me_link(rec["number"], text), "sent": False, "error": None}
+                "link": whatsapp.wa_me_link(rec["number"], text), "sent": False,
+                "error": None, "via": None}
         if configured:
             try:
-                res = await whatsapp.send_text(rec["number"], text)
-                item["sent"] = True
-                item["message_id"] = (res.get("messages") or [{}])[0].get("id")
+                res = await whatsapp.send_template(rec["number"], test_values)
+                item["via"] = "template"
+            except whatsapp.WaError as e:
+                item["error_detail"] = e.as_dict()
+                if e.code in (132000, 132001, 132015, 132016, None):
+                    try:
+                        res = await whatsapp.send_text(rec["number"], text)
+                        item["via"] = "text"
+                    except Exception as e2:
+                        item["error"] = f"{e}; teks biasa juga gagal: {e2}"[:400]
+                        item["hint"] = e.hint
+                        results.append(item)
+                        continue
+                else:
+                    item["error"] = str(e)[:300]
+                    item["hint"] = e.hint
+                    results.append(item)
+                    continue
             except Exception as e:
                 item["error"] = str(e)[:300]
+                results.append(item)
+                continue
+            item["sent"] = True
+            item["message_id"] = (res.get("messages") or [{}])[0].get("id")
         results.append(item)
     sent = sum(1 for r in results if r["sent"])
     out = {"text": text, "provider": whatsapp.provider_info(), "results": results,
@@ -1940,7 +2210,14 @@ async def send_closing_whatsapp(cid: str, user: dict = Depends(require_roles("ow
 
 
 async def auto_closing_worker():
-    """Tutup buku + kirim rekap otomatis pada jam yang diatur owner (WIB)."""
+    """Tutup buku + kirim rekap otomatis pada jam yang diatur owner (WIB).
+
+    Memakai perbandingan "sudah melewati jam target" (bukan cocok HH:MM persis)
+    supaya rekap TIDAK HILANG bila backend sempat restart tepat di menit itu —
+    saat backend hidup kembali, rekap hari itu langsung dikejar (catch-up).
+    Anti-dobel: `last_done` per proses + `wa_sent_at`/`wa_attempt_at` di dokumen
+    tutup buku hari tersebut.
+    """
     await asyncio.sleep(20)
     last_done = None
     while True:
@@ -1949,19 +2226,24 @@ async def auto_closing_worker():
             if not bool(await get_setting("wa_auto_enabled", True)):
                 continue
             target = str(await get_setting("wa_auto_time", "21:00"))[:5]
+            if not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", target):
+                target = "21:00"
             now = now_jkt()
-            if now.strftime("%H:%M") != target:
-                continue
+            th, tm = int(target[:2]), int(target[3:5])
+            if (now.hour * 60 + now.minute) < (th * 60 + tm):
+                continue  # belum waktunya hari ini
             d = now.strftime("%Y-%m-%d")
             if last_done == d:
                 continue
             existing = await db.daily_closings.find_one({"date": d})
-            if existing and existing.get("wa_sent_at"):
-                last_done = d
+            if existing and (existing.get("wa_sent_at") or existing.get("wa_attempt_at")):
+                last_done = d  # sudah pernah dikirim/dicoba hari ini
                 continue
-            logger.info("Tutup buku otomatis dijalankan untuk %s", d)
+            logger.info("Tutup buku otomatis dijalankan untuk %s (jadwal %s WIB)", d, target)
             doc = await _save_closing(d, "", "Sistem (Otomatis)")
-            await _dispatch_closing_whatsapp(doc, trigger="otomatis")
+            out = await _dispatch_closing_whatsapp(doc, trigger="otomatis")
+            logger.info("Rekap otomatis %s: mode=%s terkirim=%s", d,
+                        out.get("mode"), out.get("sent_count"))
             last_done = d
         except asyncio.CancelledError:
             break
@@ -2045,6 +2327,53 @@ async def serve_file(fid: str):
 # ------------------------- wiring -------------------------
 app.include_router(auth_router)
 app.include_router(api)
+
+
+# URL publik backend TIDAK di-hardcode: direkam sekali dari header permintaan
+# pertama yang masuk (lewat ingress), lalu disimpan agar penjadwal malam —
+# yang tidak punya objek Request — bisa membuat tautan PDF yang bisa dibuka HP.
+_public_base = {"url": (os.environ.get("PUBLIC_BASE_URL") or "").strip()}
+
+
+@app.middleware("http")
+async def capture_public_base(request: Request, call_next):
+    try:
+        if not _public_base["url"]:
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+            proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+            if host and not any(h in host for h in ("localhost", "127.0.0.1", "0.0.0.0")):
+                _public_base["url"] = f"{proto}://{host.split(',')[0].strip()}"
+                await db.settings.update_one({"key": "public_base_url"},
+                                             {"$set": {"value": _public_base["url"]}}, upsert=True)
+                logger.info("URL publik terdeteksi: %s", _public_base["url"])
+    except Exception as e:  # pragma: no cover
+        logger.warning("Gagal merekam URL publik: %s", e)
+    return await call_next(request)
+
+
+async def _public_base_url() -> str:
+    """URL publik backend, dicari berurutan tanpa hardcoding:
+    1) env PUBLIC_BASE_URL, 2) hasil rekaman dari header permintaan (settings),
+    3) REACT_APP_BACKEND_URL pada frontend/.env (sumber kebenaran URL app ini).
+    """
+    if _public_base["url"]:
+        return _public_base["url"]
+    saved = await get_setting("public_base_url", "")
+    if saved:
+        _public_base["url"] = str(saved)
+        return _public_base["url"]
+    try:
+        fe = Path(__file__).resolve().parent.parent / "frontend" / ".env"
+        if fe.exists():
+            for line in fe.read_text().splitlines():
+                if line.strip().startswith("REACT_APP_BACKEND_URL"):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if val.startswith("http"):
+                        _public_base["url"] = val.rstrip("/")
+                        break
+    except Exception as e:  # pragma: no cover
+        logger.warning("Gagal membaca URL publik dari frontend/.env: %s", e)
+    return _public_base["url"]
 
 app.add_middleware(
     CORSMiddleware,

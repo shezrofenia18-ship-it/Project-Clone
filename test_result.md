@@ -105,6 +105,392 @@
 user_problem_statement: "Hubungkan ke repository GitHub saya (Project1), cek commit terakhir, install dependencies, dan jalankan app di live preview Emergent. Lanjut: 4 fitur — (1) Mode Offline POS, (2) Realtime WebSocket, (3) Harga khusus pelanggan per produk, (4) Laporan PDF. Dikerjakan satu per satu."
 
 backend:
+  - task: "Rekap tutup buku otomatis ke WhatsApp (Meta Cloud API v26.0) — template UTILITY 4 parameter, penjadwal tahan-restart, webhook status, endpoint aktivasi"
+    implemented: true
+    working: true
+    file: "backend/whatsapp.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PERMINTAAN OWNER: "kirim ringkasan tutup buku harian langsung ke WhatsApp owner tiap malam".
+          Owner memilih provider Meta WhatsApp Cloud API, isi pesan RINGKAS lewat template
+          (omzet, laba bersih, jumlah transaksi) + PDF lengkap tetap diunduh di app.
+          Nomor penerima 081289478221, jam kirim 15:00 WIB, fitur tambah nomor tetap ada.
+
+          PENTING: kredensial Meta BELUM ADA (owner masih membuat akun WhatsApp Business), jadi
+          env META_PHONE_NUMBER_ID/META_ACCESS_TOKEN/META_WABA_ID sengaja KOSONG di backend/.env.
+          Semua endpoint WAJIB tetap 200/berfungsi dalam mode fallback 1-tap (wa.me), TIDAK boleh 500.
+
+          YANG DIUBAH (mengikuti playbook integration_playbook_expert_v2):
+          1. backend/whatsapp.py — Graph API di-pin v26.0 (dulu v25.0). Template UTILITY
+             `rekap_tutup_buku_harian` (bahasa id, parameter_format NAMED) dengan 4 parameter
+             named: tanggal, omzet, laba_bersih, jumlah_transaksi. send_template() kini memakai
+             `parameter_name` + recipient_type individual, mendukung mode positional via env
+             WA_TEMPLATE_PARAM_FORMAT.
+          2. Kelas WaError + klasifikasi kode error Meta: PERMANENT_CODES (131026, 132000, 132001,
+             132015, 132016, 190, 0, ...) TIDAK di-retry; TRANSIENT_CODES (130429, 131056, 5xx)
+             di-retry 2x dengan backoff 1.5s -> 3.75s. ERROR_HINTS memberi penjelasan Bahasa
+             Indonesia. Token TIDAK PERNAH masuk log/response.
+          3. send_closing() berlapis: template -> (bila 132000/132001/132015/132016) teks biasa ->
+             tautan wa.me 1-tap. Tidak pernah melempar exception (tutup buku tak boleh gagal).
+             Mengembalikan field baru `template_values` + per-penerima `via`, `status`, `hint`.
+          4. Fungsi baru: create_template(), list_templates(), phone_status(), template_spec(),
+             template_values(), _template_create_payload().
+          5. backend/server.py endpoint BARU:
+             - GET /api/whatsapp/template (spec + status template di WABA, selalu 200)
+             - POST /api/whatsapp/template (submit template ke Meta; 400 bila kredensial kosong)
+             - GET /api/whatsapp/diagnostics (checklist 5 syarat + ready_for_auto)
+             - GET /api/whatsapp/webhook (verifikasi hub.challenge, 403 bila token salah)
+             - POST /api/whatsapp/webhook (status sent/delivered/read/failed, upsert idempoten
+               ke db.wa_statuses + cermin ke wa_logs.results.$.status, SELALU balas 200)
+             - GET /api/whatsapp/statuses
+          6. GET /api/whatsapp/settings kini menyertakan `template_spec`.
+          7. POST /api/whatsapp/test kini menguji jalur template dulu (jalur yang sama dengan
+             rekap malam), baru fallback teks/1-tap.
+          8. auto_closing_worker() DIPERBAIKI: dulu `now.strftime("%H:%M") != target -> continue`
+             sehingga rekap HILANG bila backend restart tepat di menit itu. Sekarang memakai
+             perbandingan "sudah melewati jam target" + catch-up, anti-dobel lewat last_done dan
+             wa_sent_at/wa_attempt_at.
+
+          SUDAH DIVERIFIKASI MANUAL OLEH MAIN AGENT: penjadwal disetel ke 1 menit ke depan ->
+          log "Tutup buku otomatis dijalankan untuk 2026-08-30 (jadwal 01:34 WIB)" +
+          "Rekap otomatis: mode=manual terkirim=0", snapshot benar (omzet 3.743.030,
+          laba bersih 443.595, 14 transaksi), wa_logs + notifikasi terbentuk. Artefak uji sudah
+          dihapus dan jam dipulihkan ke 15:00.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (9/9)
+          
+          Test file: /app/backend_test_whatsapp.py
+          Backend URL: https://commit-checker-live-2.preview.emergentagent.com/api
+          
+          KONTEKS PENTING: Kredensial Meta WhatsApp SENGAJA KOSONG (owner belum punya akun
+          WhatsApp Business). Mode fallback "manual"/1-tap (wa.me) adalah perilaku yang BENAR.
+          TIDAK ADA HTTP 500 di endpoint mana pun.
+          
+          === TEST RESULTS ===
+          
+          1. GET /api/whatsapp/settings ✅
+             - Owner & Admin: 200, template_spec lengkap
+             - template_spec.name = "rekap_tutup_buku_harian" ✅
+             - template_spec.language = "id" ✅
+             - template_spec.category = "UTILITY" ✅
+             - template_spec.parameter_format = "NAMED" ✅
+             - template_spec.params = [tanggal, omzet, laba_bersih, jumlah_transaksi] ✅
+             - payload.components[0].example.body_text_named_params: 4 params ✅
+             - provider.api_version = "v26.0" ✅
+             - provider.configured = False (BENAR, kredensial kosong) ✅
+             - provider.missing = [META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID] ✅
+             - Kasir: 403 (correctly rejected) ✅
+          
+          2. GET /api/whatsapp/diagnostics ✅
+             - 200, ready_for_auto = False (BENAR, kredensial kosong) ✅
+             - recipients = 1 ✅
+             - auto_time = "15:00" ✅
+             - auto_enabled = True ✅
+             - webhook_verify_configured = True ✅
+             - webhook_url = "/api/whatsapp/webhook" ✅
+          
+          3. GET /api/whatsapp/template ✅
+             - 200, approved = False (BENAR, kredensial kosong) ✅
+             - remote = [] (BENAR, tidak ada koneksi ke Meta) ✅
+          
+          4. POST /api/whatsapp/template ✅
+             - Owner: 400 dengan pesan Indonesia "Kredensial WhatsApp belum diisi. Isi 
+               META_PHONE_NUMBER_ID dan META_ACCESS_TOKEN di backend/.env terlebih dahulu." ✅
+             - BUKAN 500 (BENAR) ✅
+             - Admin: 403 (correctly rejected, owner only) ✅
+             - Kasir: 403 (correctly rejected, owner only) ✅
+          
+          5. PUT /api/whatsapp/settings ✅
+             - Normalisasi nomor:
+               * "081289478221" → "6281289478221" ✅
+               * "+62 812-8947-8221" → "6281289478221" ✅
+               * "81289478221" → "6281289478221" ✅
+             - Multi nomor: 3 recipients tersimpan utuh ✅
+             - Validasi auto_time:
+               * "25:00" → 400 (correctly rejected) ✅
+               * "9:5" → 400 (correctly rejected) ✅
+               * "abc" → 400 (correctly rejected) ✅
+               * "15:00" → 200 ✅
+             - Settings dipulihkan ke awal: recipients=[{name:"Owner",number:"081289478221"}],
+               auto_time="15:00", auto_enabled=true ✅
+          
+          6. POST /api/whatsapp/test ✅
+             - Owner: 200, mode="manual", sent_count=0 (BENAR, kredensial kosong) ✅
+             - Results: 1 result dengan link wa.me valid ✅
+             - Link format: https://wa.me/6281289478221?text=... (URL-encoded) ✅
+             - BUKAN 500 (BENAR) ✅
+          
+          7. Webhook ✅
+             a. GET /api/whatsapp/webhook
+                - Token SALAH: 403 (correctly rejected) ✅
+                - Token BENAR (WA_WEBHOOK_VERIFY_TOKEN dari backend/.env): 200, body persis "123" ✅
+             
+             b. POST /api/whatsapp/webhook (tanpa auth)
+                - Payload status Meta: 200 {"ok":true} ✅
+                - Kirim DUA KALI (uji idempoten): 200 kedua kali ✅
+                - GET /api/whatsapp/statuses: hanya SATU baris wamid.TEST1 status="delivered" ✅
+                - Idempotency BEKERJA (upsert per message_id) ✅
+             
+             c. POST payload garbage/bukan JSON
+                - Tetap 200, BUKAN 500 (BENAR, supaya Meta tidak retry) ✅
+          
+          8. End-to-End Daily Closing + WhatsApp ✅
+             a. POST /api/daily-closing (owner, tanggal hari ini)
+                - 200 dengan field "whatsapp" ✅
+                - whatsapp.mode = "manual" (BENAR, kredensial kosong) ✅
+                - whatsapp.template_values: 4 nilai ✅
+                  * tanggal: "Sabtu, 29 Agustus 20..." (Bahasa Indonesia) ✅
+                  * omzet: "Rp 1.528.960" (format Rp) ✅
+                  * laba_bersih: "Rp -11.020" (format Rp) ✅
+                  * jumlah_transaksi: "8" (angka) ✅
+                - whatsapp.text: tidak kosong ✅
+             
+             b. GET /api/daily-closing/{date}/pdf
+                - 200 application/pdf, 7166 bytes ✅
+                - PDF header: %PDF- ✅
+             
+             c. PDF Reports (regresi reportlab 5.0.1)
+                - GET /api/reports/profit-loss/pdf: 200 application/pdf, 3464 bytes ✅
+                - GET /api/reports/sales/pdf: 200 application/pdf, 13742 bytes ✅
+                - GET /api/reports/stock/pdf: 200 application/pdf, 4000 bytes ✅
+                - TIDAK ADA REGRESI ✅
+             
+             d. POST /api/daily-closing/{id}/whatsapp
+                - 200, mode="manual" ✅
+             
+             e. GET /api/whatsapp/log
+                - Baris terbaru: kind="closing" ✅
+                - results[].number: ternormalisasi (62xxx) ✅
+                - TANPA field "link" (privasi, link tidak disimpan) ✅
+             
+             f. RBAC
+                - Kasir GET /api/daily-closing/preview: 403 ✅
+                - Kasir GET /api/whatsapp/log: 403 ✅
+          
+          9. Regresi Singkat ✅
+             - Login 4 role: owner, admin, kasir ✅
+             - GET /api/dashboard: 200 ✅
+             - GET /api/products: 200, 14 products ✅
+             - POST /api/sales (1 ekor Ayam Broiler): 200 ✅
+             - Stok ekor berkurang: 120 → 119 ✅
+             - POST /api/sales/{id}/cancel: 200 ✅
+             - Stok ekor kembali: 119 → 120 ✅
+             - GET /api/stock-movements: 200 ✅
+             - WebSocket endpoint /api/ws: tersedia ✅
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ SEMUA ENDPOINT BEKERJA SEMPURNA DALAM MODE FALLBACK
+          - Tidak ada HTTP 500 di endpoint mana pun
+          - Mode "manual"/1-tap (wa.me) adalah perilaku yang BENAR saat kredensial kosong
+          - Semua validasi bekerja (nomor, auto_time, RBAC)
+          - Template spec lengkap dan siap disubmit ke Meta
+          - Webhook idempoten (upsert per message_id)
+          - PDF generation tidak regresi (reportlab 5.0.1)
+          
+          ✅ TIDAK ADA BUG DITEMUKAN
+          - Semua endpoint mengembalikan status code yang benar
+          - Semua field wajib ada dan berisi nilai yang benar
+          - RBAC enforced dengan benar (kasir 403, admin 403 untuk owner-only)
+          - Normalisasi nomor bekerja sempurna
+          - Multi nomor tersimpan utuh
+          - Idempotency webhook bekerja
+          - End-to-end flow lengkap dari daily-closing sampai log
+          
+          === CONCLUSION ===
+          
+          FITUR REKAP WHATSAPP FULLY WORKING dalam mode fallback "manual"/1-tap.
+          Semua 9 test scenarios passed. Tidak ada regresi. Siap untuk aktivasi
+          penuh begitu owner mengisi kredensial Meta WhatsApp Business.
+          
+          Backend WhatsApp auto-recap feature PRODUCTION-READY.
+
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          TAMBAHAN PERMINTAAN OWNER (sesi sama): "kirimkan saja beserta PDF Laporan penjualan".
+
+          Aturan Meta yang memaksa desain ini: template body-only yang sudah dibuat TIDAK BISA
+          diberi lampiran saat pengiriman -> lampiran wajib berupa template TERPISAH dengan
+          header DOCUMENT, dan Meta minta contoh media (asset handle) saat template dibuat.
+
+          YANG DIUBAH:
+          1. whatsapp.py: DEFAULT_TEMPLATE_DOC_NAME="rekap_tutup_buku_pdf", MAX_PDF_BYTES 95MB.
+             _cfg() menambah app_id (META_APP_ID) & template_doc. template_spec(with_document=True)
+             + _template_create_payload(with_document, header_handle) menghasilkan komponen
+             HEADER/DOCUMENT dengan example.header_handle.
+          2. Fungsi baru: upload_media_pdf() (POST /{phone_id}/media multipart, media ID dipakai
+             ulang untuk semua penerima), upload_sample_handle() (Resumable Upload API 2 langkah:
+             POST /{app_id}/uploads lalu POST /upload:<sesi> dengan header file_offset, skema
+             Authorization "OAuth"), send_document() (dokumen + caption),
+             send_template(..., media_id, filename) memakai header document {id, filename}
+             (tanpa caption sesuai aturan Meta), create_template(with_document, sample_pdf).
+          3. send_closing() berlapis 5 tingkat: template+PDF -> template ringkas -> dokumen+caption
+             -> teks -> wa.me 1-tap. PDF diunggah SEKALI. Error permanen (131026/190/0) memutus
+             percobaan lanjutan. Balasan menambah pdf_url, pdf_size, pdf_media_id, pdf_error, dan
+             per-penerima `pdf_attached` + `via`.
+          4. build_closing_text(..., pdf_url) menambahkan blok "*PDF Laporan Penjualan:*" + tautan
+             (wa.me tidak bisa melampirkan file).
+          5. server.py: TAUTAN PDF PUBLIK ber-token — koleksi `share_links` (token
+             secrets.token_urlsafe(32), kedaluwarsa 30 hari, penghitung hits) +
+             GET /api/public/laporan/{token} TANPA AUTH -> PDF laporan penjualan tanggal itu
+             (404 token salah, 410 kedaluwarsa). `_sales_pdf_for_date()` memakai ulang
+             report_sales + pdf_reports.sales_pdf.
+          6. URL publik TIDAK di-hardcode: middleware `capture_public_base` merekam skema+host dari
+             header x-forwarded-* permintaan pertama ke settings; `_public_base_url()` berurutan
+             env PUBLIC_BASE_URL -> settings -> REACT_APP_BACKEND_URL di frontend/.env.
+          7. Setting baru `wa_attach_pdf` (default true) pada GET/PUT /api/whatsapp/settings (field
+             `attach_pdf`); GET juga mengembalikan `template_spec_doc`.
+             POST /api/whatsapp/template menerima query `with_document=true`.
+             GET /api/whatsapp/diagnostics menambah attach_pdf, public_base_url, pdf_ready,
+             pdf_size, template_doc_approved; ready_for_auto menuntut template dokumen bila
+             lampiran diaktifkan.
+          8. Frontend Settings.js: sakelar "Lampirkan PDF Laporan Penjualan", baris checklist
+             "Template + lampiran PDF" & "PDF Laporan Penjualan", tombol "Buat Template Ringkas" +
+             "Buat Template + PDF", copy payload versi PDF. Closing.js: baris "PDF Laporan
+             Penjualan" + tombol Buka PDF, label jalur kirim, peringatan bila unggah lampiran gagal.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (10/10)
+          
+          Test file: /app/backend_test_whatsapp_pdf.py
+          Backend URL: https://commit-checker-live-2.preview.emergentagent.com/api
+          
+          KONTEKS PENTING: Kredensial Meta WhatsApp MASIH SENGAJA KOSONG (owner belum punya akun
+          WhatsApp Business). Lampiran nyata ke WhatsApp belum bisa diuji; yang diuji adalah jalur
+          fallback: PDF laporan penjualan dibuat lalu TAUTAN PUBLIK ber-token disisipkan ke teks rekap.
+          TIDAK ADA HTTP 500 di endpoint mana pun.
+          
+          === TEST RESULTS ===
+          
+          1. GET /api/whatsapp/settings ✅
+             - attach_pdf = True ✅
+             - template_spec (compact) tetap ada: name="rekap_tutup_buku_harian", 4 params ✅
+             - template_spec_doc (with document) ada: name="rekap_tutup_buku_pdf", with_document=True ✅
+             - payload.components[0]: type=HEADER, format=DOCUMENT ✅
+             - components[0].example.header_handle: ['<handle-contoh-pdf>'] ✅
+             - provider.missing kini memuat META_APP_ID: [META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID, META_APP_ID] ✅
+             - Admin: 200 ✅
+             - Kasir: 403 (correctly rejected) ✅
+          
+          2. GET /api/whatsapp/diagnostics ✅
+             - pdf_ready = True ✅
+             - pdf_size = 5947 bytes (>1000) ✅
+             - attach_pdf = True ✅
+             - public_base_url = "https://commit-checker-live-2.preview.emergentagent.com" (tidak kosong) ✅
+             - template_doc_approved = False (BENAR, credentials empty) ✅
+             - ready_for_auto = False (BENAR, credentials empty) ✅
+          
+          3. GET /api/whatsapp/template ✅
+             - spec_doc exists: name="rekap_tutup_buku_pdf" ✅
+             - approved_doc = False (BENAR, credentials empty) ✅
+             - Status 200 (BUKAN 500) ✅
+          
+          4. POST /api/whatsapp/template ✅
+             - Owner with_document=true: 400 dengan pesan Indonesia "Kredensial WhatsApp belum diisi..." ✅
+             - BUKAN 500 (BENAR) ✅
+             - Owner with_document=false: 400 (BUKAN 500) ✅
+             - Admin: 403 (correctly rejected) ✅
+             - Kasir: 403 (correctly rejected) ✅
+          
+          5. PUT /api/whatsapp/settings - attach_pdf toggle ✅
+             - PUT attach_pdf=false: 200, read back = False ✅
+             - PUT attach_pdf=true: 200, read back = True ✅
+             - RESTORED: recipients=[{name:"Owner",number:"081289478221"}], auto_time="15:00", 
+               auto_enabled=true, attach_pdf=true ✅
+          
+          6. POST /api/daily-closing - pdf_url in whatsapp field ✅
+             - whatsapp.pdf_url TIDAK KOSONG: 
+               "https://commit-checker-live-2.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw" ✅
+             - Pattern benar: <base>/api/public/laporan/<token> ✅
+             - Token length = 43 chars (>30) ✅
+             - whatsapp.text memuat baris "*PDF Laporan Penjualan:*" beserta pdf_url ✅
+             - whatsapp.results[].link (wa.me) memuat pdf_url ter-encode ✅
+          
+          7. GET /api/public/laporan/{token} - TAUTAN PUBLIK (PALING PENTING) ✅
+             - GET pdf_url TANPA header Authorization: 200 ✅
+             - Content-Type: application/pdf ✅
+             - First 4 bytes: b'%PDF' (valid PDF) ✅
+             - PDF size: 4845 bytes ✅
+             - Content-Disposition: inline; filename="laporan-penjualan_2026-08-29.pdf" ✅
+             - GET 2nd time: 200 (hits counter incremented, tidak error) ✅
+             - GET /api/public/laporan/token-ngawur: 404 (BUKAN 500) ✅
+          
+          8. With attach_pdf=false ✅
+             - POST /api/daily-closing/{id}/whatsapp: pdf_url KOSONG ✅
+             - text TIDAK memuat baris "*PDF Laporan Penjualan:*" ✅
+             - RESTORED: attach_pdf=true ✅
+          
+          9. REGRESI ✅
+             - /api/reports/sales/pdf: 200, 13740 bytes, %PDF- ✅
+             - /api/reports/profit-loss/pdf: 200, 3463 bytes, %PDF- ✅
+             - /api/reports/stock/pdf: 200, 3998 bytes, %PDF- ✅
+             - /api/daily-closing/2026-08-29/pdf: 200, 7170 bytes, %PDF- ✅
+             - GET /api/dashboard: 200 ✅
+             - GET /api/products: 200, 14 products ✅
+             - POST /api/sales (1 ekor Ayam Broiler): 200, stock decreased 120→119 ✅
+             - POST /api/sales/{id}/cancel: 200, stock restored 119→120 ✅
+             - GET /api/stock-movements: 200 ✅
+             - Login 4 roles (owner, admin, kasir, operator): OK ✅
+             - Webhook GET with wrong token: 403 ✅
+             - Webhook POST statuses 2x: 200 (idempotent) ✅
+          
+          10. RBAC ✅
+             - Kasir GET /api/whatsapp/settings: 403 ✅
+             - Kasir GET /api/whatsapp/diagnostics: 403 ✅
+             - Kasir GET /api/whatsapp/template: 403 ✅
+             - Kasir POST /api/whatsapp/test: 403 ✅
+             - Kasir GET /api/daily-closing/preview: 403 ✅
+             - Kasir POST /api/daily-closing: 403 ✅
+             - /api/public/laporan/{token} accessible WITHOUT auth: 200 (public access works) ✅
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ SEMUA ENDPOINT BEKERJA SEMPURNA DALAM MODE FALLBACK
+          - Tidak ada HTTP 500 di endpoint mana pun
+          - PDF laporan penjualan berhasil dibuat: 4845 bytes
+          - Tautan publik ber-token berhasil dibuat dan bisa diakses tanpa auth
+          - PDF URL pattern benar: <base>/api/public/laporan/<token> dengan token >30 chars
+          - Teks rekap memuat baris "*PDF Laporan Penjualan:*" + URL
+          - Link wa.me memuat URL ter-encode
+          - attach_pdf toggle bekerja sempurna (false = tidak ada pdf_url, true = ada pdf_url)
+          - Template spec_doc lengkap: name="rekap_tutup_buku_pdf", with_document=true,
+            components[0] type=HEADER format=DOCUMENT dengan example.header_handle
+          - provider.missing kini memuat META_APP_ID
+          - Diagnostics menampilkan pdf_ready=true, pdf_size=5947, attach_pdf=true, 
+            public_base_url tidak kosong, template_doc_approved=false, ready_for_auto=false
+          - RBAC enforced: kasir 403 di semua endpoint whatsapp & daily-closing
+          - Public endpoint /api/public/laporan/{token} MEMANG bisa diakses tanpa login (by design)
+          - Semua PDF reports tidak regresi (sales, profit-loss, stock, daily-closing)
+          - Webhook idempoten, login 4 roles OK, sales & cancel OK
+          
+          ✅ TIDAK ADA BUG DITEMUKAN
+          - Semua endpoint mengembalikan status code yang benar
+          - Semua field wajib ada dan berisi nilai yang benar
+          - PDF berhasil diunduh tanpa auth (public link works)
+          - Token length >30 chars (secure)
+          - Content-Type, Content-Disposition, PDF header semua benar
+          - Invalid token → 404 (bukan 500)
+          - attach_pdf=false → tidak ada pdf_url (benar)
+          - attach_pdf=true → ada pdf_url (benar)
+          
+          === CONCLUSION ===
+          
+          FITUR LAMPIRAN PDF LAPORAN PENJUALAN FULLY WORKING dalam mode fallback.
+          Semua 10 test scenarios passed. PDF berhasil dibuat (4845 bytes), tautan publik
+          ber-token berhasil dibuat dan bisa diakses tanpa auth. Tidak ada regresi.
+          Siap untuk aktivasi penuh begitu owner mengisi kredensial Meta WhatsApp Business.
+          
+          Backend WhatsApp PDF attachment feature PRODUCTION-READY.
+
   - task: "Penjualan per ekor memotong stok KG (berat rata-rata/ekor) + ayam utuh dilarang dijual per kg"
     implemented: true
     working: true
@@ -2826,10 +3212,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Penjualan per ekor memotong stok KG (berat rata-rata/ekor) + ayam utuh dilarang dijual per kg"
-    - "Metode pembayaran (tunai/transfer/QRIS/debit/e-wallet) untuk pelunasan piutang & hutang + rincian per metode di Tutup Buku"
-    - "Upload foto bukti pengeluaran (kasir, admin, owner) — POST /api/upload folder=proofs + field proof_url pada expense"
-    - "Penyesuaian stok: jenis 'Ayam Mati' diganti 'Salah Potong' + whitelist ADJUST_TYPES"
+    - "Rekap tutup buku otomatis ke WhatsApp (Meta Cloud API v26.0) — template UTILITY 4 parameter, penjadwal tahan-restart, webhook status, endpoint aktivasi"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -5370,3 +5753,224 @@ agent_communication:
       Screenshots: 5 files captured
       Test data: Minimal (1 sale, 1 payment, 1 expense, 1 adjustment)
 
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      UJI BACKEND SAJA (jangan uji frontend). Fokus: rekap tutup buku otomatis ke WhatsApp.
+      Kredensial: /app/memory/test_credentials.md (owner shezrofenia18@gmail.com / berkahayam1,
+      admin admin@berkahayam.com / admin123, kasir kasir@berkahayam.com / kasir123).
+
+      KONTEKS PALING PENTING: kredensial Meta SENGAJA KOSONG (owner belum punya akun WhatsApp
+      Business). Jadi hasil yang BENAR adalah mode fallback "manual"/1-tap, BUKAN error.
+      TIDAK BOLEH ADA 500 di endpoint mana pun. Jangan mencoba "memperbaiki" dengan mengisi
+      kredensial palsu.
+
+      YANG HARUS DIUJI:
+      1. GET /api/whatsapp/settings (owner & admin 200; kasir harus 403). Pastikan ada field
+         `template_spec` dengan name=rekap_tutup_buku_harian, language=id, category=UTILITY,
+         parameter_format=NAMED, params=[tanggal, omzet, laba_bersih, jumlah_transaksi],
+         dan payload.components[0].example.body_text_named_params berisi 4 param.
+         Pastikan `provider.api_version` = v26.0, `provider.configured` = false,
+         `provider.missing` memuat META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID.
+      2. GET /api/whatsapp/diagnostics -> 200, ready_for_auto=false, recipients>=1,
+         auto_time="15:00", auto_enabled=true, webhook_verify_configured=true,
+         webhook_url="/api/whatsapp/webhook". Tidak boleh 500.
+      3. GET /api/whatsapp/template -> 200, approved=false, remote=[] (karena kredensial kosong).
+      4. POST /api/whatsapp/template -> harus 400 dengan pesan Indonesia yang menyebut
+         META_PHONE_NUMBER_ID / kredensial belum diisi (BUKAN 500). Kasir/admin -> 403 (owner only).
+      5. PUT /api/whatsapp/settings (owner):
+         - Normalisasi nomor: kirim "081289478221" -> tersimpan "6281289478221"; coba juga
+           "+62 812-8947-8221" dan "81289478221" -> hasil sama.
+         - MULTI NOMOR wajib jalan: simpan 2-3 penerima, pastikan semuanya kembali utuh.
+         - auto_time salah format ("25:00", "9:5", "abc") -> 400. auto_time "15:00" -> 200.
+         - PENTING: SETELAH SELESAI, PULIHKAN ke recipients=[{name:"Owner",number:"081289478221"}]
+           dan auto_time="15:00", auto_enabled=true.
+      6. POST /api/whatsapp/test (owner) -> 200, mode="manual", sent_count=0, setiap hasil punya
+         `link` wa.me yang valid berisi teks uji ter-URL-encode. Tidak boleh 500.
+      7. Webhook:
+         - GET /api/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=SALAH&hub.challenge=123 -> 403.
+         - Ambil token benar dari backend/.env (WA_WEBHOOK_VERIFY_TOKEN), lalu GET dengan token
+           benar -> 200 dan body persis "123" (plain text).
+         - POST /api/whatsapp/webhook (tanpa auth) dengan payload status Meta:
+           {"entry":[{"changes":[{"value":{"statuses":[{"id":"wamid.TEST1","status":"delivered",
+           "timestamp":"1788000000","recipient_id":"6281289478221"}]}}]}] -> 200 {"ok":true}.
+           Kirim DUA KALI (uji idempoten) lalu GET /api/whatsapp/statuses -> hanya SATU baris
+           untuk wamid.TEST1 dengan status "delivered".
+         - POST payload sampah / bukan JSON -> tetap 200 (tidak boleh 500, supaya Meta tidak retry).
+      8. Alur rekap end-to-end:
+         - POST /api/daily-closing (owner) untuk tanggal hari ini -> 200, response punya
+           `whatsapp` dengan mode="manual", `template_values` berisi 4 nilai (tanggal berbahasa
+           Indonesia, omzet & laba_bersih format "Rp ...", jumlah_transaksi angka), dan
+           `text` (rekap panjang) tidak kosong.
+         - GET /api/daily-closing/{date}/pdf -> 200 application/pdf (reportlab baru 5.0.1,
+           pastikan tidak regresi). Cek juga /api/reports/profit-loss/pdf, /api/reports/sales/pdf,
+           /api/reports/stock/pdf -> 200 PDF.
+         - POST /api/daily-closing/{id}/whatsapp -> 200 mode="manual" (kirim ulang).
+         - GET /api/whatsapp/log -> baris terbaru punya kind="closing", results[].number
+           ter-normalisasi, tanpa field `link` (link sengaja tidak disimpan).
+         - RBAC: kasir tidak boleh akses daily-closing maupun endpoint whatsapp (403).
+      9. REGRESI SINGKAT (jangan sampai rusak karena perubahan import FastAPI Request/Query dan
+         PlainTextResponse): login 4 role, GET /api/dashboard, GET /api/products, POST /api/sales
+         (1 transaksi kecil per ekor) lalu batalkan, GET /api/stock, WS /api/ws?token=... tersambung.
+
+      CATATAN: jangan mengubah backend/.env. Jangan menghapus data demo. Bila menemukan bug,
+      laporkan akar masalahnya, JANGAN memperbaiki file frontend.
+
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - WhatsApp Auto-Recap Feature FULLY WORKING
+      
+      Test file: /app/backend_test_whatsapp.py
+      Test results: ALL 9 TESTS PASSED (9/9)
+      
+      === SUMMARY ===
+      
+      ✅ GET /api/whatsapp/settings - template_spec lengkap, provider.configured=False, RBAC OK
+      ✅ GET /api/whatsapp/diagnostics - ready_for_auto=False, recipients=1, auto_time=15:00, webhook OK
+      ✅ GET /api/whatsapp/template - approved=False, remote=[]
+      ✅ POST /api/whatsapp/template - 400 dengan pesan Indonesia (BUKAN 500), RBAC OK
+      ✅ PUT /api/whatsapp/settings - normalisasi nomor OK, multi nomor OK, validasi auto_time OK
+      ✅ POST /api/whatsapp/test - mode=manual, sent_count=0, link wa.me valid
+      ✅ Webhook - verifikasi token OK, POST idempoten OK, garbage handling OK (200 bukan 500)
+      ✅ End-to-end - daily-closing + whatsapp field + PDF + log, RBAC OK
+      ✅ Regresi - login, dashboard, products, sales, stock, WS OK
+      
+      === CRITICAL FINDINGS ===
+      
+      ✅ TIDAK ADA BUG DITEMUKAN
+      - Semua endpoint bekerja sempurna dalam mode fallback "manual"/1-tap (wa.me)
+      - Tidak ada HTTP 500 di endpoint mana pun
+      - Template spec lengkap: name=rekap_tutup_buku_harian, language=id, category=UTILITY,
+        parameter_format=NAMED, 4 params (tanggal, omzet, laba_bersih, jumlah_transaksi)
+      - Provider.api_version = v26.0 (di-pin, bukan "terbaru")
+      - Provider.configured = False (BENAR, kredensial Meta sengaja kosong)
+      - Provider.missing = [META_PHONE_NUMBER_ID, META_ACCESS_TOKEN, META_WABA_ID]
+      - Normalisasi nomor bekerja sempurna (081xxx, +62xxx, 81xxx → 62xxx)
+      - Multi nomor tersimpan utuh (tested dengan 3 recipients)
+      - Validasi auto_time bekerja (25:00, 9:5, abc → 400; 15:00 → 200)
+      - Webhook idempoten (upsert per message_id, kirim 2x hanya 1 baris di DB)
+      - Webhook garbage handling (POST bukan JSON → 200, bukan 500)
+      - Daily-closing whatsapp field lengkap (mode, template_values, text)
+      - Template_values format benar (tanggal Bahasa Indonesia, omzet/laba_bersih "Rp ...", jumlah_transaksi angka)
+      - PDF generation tidak regresi (reportlab 5.0.1): daily-closing, profit-loss, sales, stock semua OK
+      - WhatsApp log: kind=closing, results[].number ternormalisasi, TANPA field 'link' (privasi)
+      - RBAC enforced: kasir 403 untuk whatsapp settings/log/test/template, admin 403 untuk template create
+      - Regresi: login 4 role, dashboard, products, sales (jual 1 ekor + cancel), stock, WS semua OK
+      
+      === CONCLUSION ===
+      
+      FITUR REKAP WHATSAPP FULLY WORKING dalam mode fallback "manual"/1-tap.
+      Siap untuk aktivasi penuh begitu owner mengisi kredensial Meta WhatsApp Business.
+      
+      Backend WhatsApp auto-recap feature PRODUCTION-READY.
+      
+      === ACTION ITEMS FOR MAIN AGENT ===
+      
+      - ✅ Backend testing complete, NO BUGS FOUND
+      - ✅ All endpoints working correctly in fallback mode
+      - ✅ All validations working (nomor, auto_time, RBAC)
+      - ✅ Webhook idempotency working
+      - ✅ PDF generation not regressed
+      - ✅ End-to-end flow complete
+      
+      MAIN AGENT: Please summarize and finish. Backend WhatsApp feature is PRODUCTION-READY.
+      
+      YOU MUST ASK USER BEFORE DOING FRONTEND TESTING
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      UJI BACKEND SAJA — LANJUTAN: lampiran PDF Laporan Penjualan pada rekap WhatsApp.
+      Kredensial: /app/memory/test_credentials.md.
+
+      KONTEKS: kredensial Meta MASIH SENGAJA KOSONG. Jadi lampiran nyata ke WhatsApp belum
+      bisa diuji; yang HARUS diuji adalah jalur fallback: PDF dibuat + TAUTAN PUBLIK ber-token
+      masuk ke teks rekap. TIDAK BOLEH ADA 500. Jangan mengisi kredensial palsu, jangan ubah .env.
+
+      YANG HARUS DIUJI:
+      1. GET /api/whatsapp/settings -> ada `attach_pdf` (true) dan `template_spec_doc` dengan
+         name="rekap_tutup_buku_pdf", with_document=true, dan payload.components[0] bertipe
+         HEADER format DOCUMENT + example.header_handle. `template_spec` (ringkas) tetap ada.
+         provider.missing kini juga memuat META_APP_ID.
+      2. GET /api/whatsapp/diagnostics -> `pdf_ready`=true, `pdf_size`>1000, `attach_pdf`=true,
+         `public_base_url` tidak kosong, `template_doc_approved`=false, ready_for_auto=false.
+      3. GET /api/whatsapp/template -> ada `spec_doc` + `approved_doc`=false, tetap 200.
+      4. POST /api/whatsapp/template?with_document=true -> 400 (kredensial kosong), BUKAN 500.
+         POST /api/whatsapp/template?with_document=false -> 400 juga. Kasir/admin 403.
+      5. PUT /api/whatsapp/settings dengan attach_pdf=false lalu true -> tersimpan & terbaca
+         kembali. PULIHKAN ke attach_pdf=true, recipients=[{name:"Owner",number:"081289478221"}],
+         auto_time="15:00", auto_enabled=true di akhir.
+      6. ALUR UTAMA: POST /api/daily-closing (owner, tanggal hari ini) ->
+         - response.whatsapp.pdf_url TIDAK KOSONG dan berpola
+           "<base>/api/public/laporan/<token>" dengan token panjang (>30 karakter).
+         - response.whatsapp.text MEMUAT baris "*PDF Laporan Penjualan:*" beserta pdf_url.
+         - response.whatsapp.results[].link (wa.me) juga memuat pdf_url ter-encode.
+      7. TAUTAN PUBLIK (paling penting):
+         - GET pdf_url TANPA header Authorization -> 200, Content-Type application/pdf,
+           4 byte pertama "%PDF", Content-Disposition inline.
+         - Panggil 2x -> tetap 200 (hits bertambah, tidak error).
+         - GET /api/public/laporan/token-ngawur -> 404 (bukan 500).
+      8. Dengan attach_pdf=false: POST /api/daily-closing (hapus dulu tutup buku hari itu agar
+         bisa dibuat lagi, atau pakai POST /api/daily-closing/{id}/whatsapp) -> pdf_url KOSONG
+         dan teks TIDAK memuat baris PDF.
+      9. REGRESI: /api/reports/sales/pdf, /api/reports/profit-loss/pdf, /api/reports/stock/pdf,
+         /api/daily-closing/{date}/pdf semua 200 application/pdf. GET /api/dashboard,
+         GET /api/products, POST /api/sales (1 ekor) + cancel, GET /api/stock tetap normal.
+         Login 4 role tetap jalan. Webhook GET token salah -> 403, POST statuses -> 200 idempoten.
+      10. RBAC: kasir 403 di semua endpoint whatsapp & daily-closing. Endpoint publik
+          /api/public/laporan/{token} HARUS bisa diakses tanpa login (itu memang tujuannya).
+
+      CATATAN: setelah selesai, sebutkan di laporan berapa byte PDF yang dihasilkan dan apakah
+      pdf_url berhasil diunduh tanpa auth. Jangan menghapus data demo produk/penjualan.
+
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - LAMPIRAN PDF LAPORAN PENJUALAN FULLY WORKING
+      
+      Test file: /app/backend_test_whatsapp_pdf.py
+      Test duration: ~3 minutes
+      All 10 test scenarios PASSED (10/10)
+      
+      === HASIL PENGUJIAN ===
+      
+      ✅ PDF berhasil dibuat: 4845 bytes
+      ✅ Tautan publik ber-token berhasil dibuat: 
+         https://commit-checker-live-2.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw
+      ✅ Token length: 43 chars (>30, secure)
+      ✅ PDF berhasil diunduh TANPA auth: YES (200, application/pdf, %PDF header valid)
+      ✅ Content-Disposition: inline; filename="laporan-penjualan_2026-08-29.pdf"
+      ✅ Panggil 2x tetap 200 (hits counter works)
+      ✅ Invalid token → 404 (bukan 500)
+      ✅ Tidak ada HTTP 500 di endpoint mana pun
+      
+      === FITUR YANG DIVERIFIKASI ===
+      
+      1. ✅ GET /api/whatsapp/settings - attach_pdf=true, template_spec_doc lengkap
+      2. ✅ GET /api/whatsapp/diagnostics - pdf_ready=true, pdf_size=5947, attach_pdf=true
+      3. ✅ GET /api/whatsapp/template - spec_doc & approved_doc=false
+      4. ✅ POST /api/whatsapp/template - 400 (bukan 500) untuk both with_document=true/false
+      5. ✅ PUT /api/whatsapp/settings - attach_pdf toggle works, settings restored
+      6. ✅ POST /api/daily-closing - pdf_url tidak kosong, pattern benar, text memuat PDF line
+      7. ✅ GET /api/public/laporan/{token} - public access tanpa auth works perfectly
+      8. ✅ attach_pdf=false - pdf_url kosong, text tidak memuat PDF line
+      9. ✅ REGRESI - semua PDF reports OK, dashboard OK, sales+cancel OK, login 4 roles OK, webhook OK
+      10. ✅ RBAC - kasir 403 di whatsapp & daily-closing, public endpoint accessible tanpa login
+      
+      === TIDAK ADA BUG DITEMUKAN ===
+      
+      Semua endpoint bekerja sempurna dalam mode fallback. PDF laporan penjualan berhasil
+      dibuat dan tautan publik ber-token bisa diakses tanpa auth. Semua validasi bekerja.
+      Tidak ada regresi. PRODUCTION-READY.
+      
+      === ACTION ITEMS FOR MAIN AGENT ===
+      
+      - ✅ Backend testing complete, NO BUGS FOUND
+      - ✅ PDF attachment feature fully working in fallback mode
+      - ✅ Public link with token works perfectly (accessible without auth)
+      - ✅ All validations working (attach_pdf toggle, RBAC, invalid token)
+      - ✅ No regressions (PDF reports, dashboard, sales, webhook all OK)
+      
+      MAIN AGENT: Please summarize and finish. Backend WhatsApp PDF attachment feature is PRODUCTION-READY.
+      
+      YOU MUST ASK USER BEFORE DOING FRONTEND TESTING

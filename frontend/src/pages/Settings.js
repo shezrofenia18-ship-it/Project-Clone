@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { formatRupiah } from "@/lib/format";
-import { MessageCircle, Plus, Trash2, Loader2, Send, Printer, RefreshCw, ShieldCheck, AlertTriangle } from "lucide-react";
+import { MessageCircle, Plus, Trash2, Loader2, Send, Printer, RefreshCw, ShieldCheck, AlertTriangle, FileText } from "lucide-react";
 import { printReceipt, sampleSale, RECEIPT_PAPER_MM } from "@/lib/receipt";
 
 // Pemeriksaan & perbaikan sinkronisasi data antar modul (penjualan, pembelian,
@@ -84,6 +84,190 @@ function DataSyncSettings() {
   );
 }
 
+// Label status pengiriman dari webhook Meta -> bahasa sehari-hari.
+const WA_STATUS_LABEL = {
+  accepted: "diterima server", sent: "terkirim", delivered: "sampai",
+  read: "dibaca", failed: "gagal",
+};
+
+// Baris checklist kesiapan. Didefinisikan di luar komponen agar React tidak
+// membongkar-ulang subtree tiap render.
+function WaCheckRow({ ok, label, detail }) {
+  return (
+    <div className="flex items-start gap-2 text-[11px]">
+      {ok
+        ? <ShieldCheck className="w-3.5 h-3.5 text-success mt-0.5 shrink-0" />
+        : <AlertTriangle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />}
+      <span className={ok ? "text-foreground" : "text-muted-foreground"}>
+        <b>{label}</b>{detail ? ` — ${detail}` : ""}
+      </span>
+    </div>
+  );
+}
+
+// Panel aktivasi pengiriman OTOMATIS PENUH (Meta WhatsApp Cloud API).
+// Meta melarang pesan bebas yang dimulai bisnis di luar jendela 24 jam, jadi rekap
+// malam wajib lewat template yang disetujui. Panel ini menuntun owner sampai siap.
+function WhatsAppActivation({ provider, spec, specDoc, attachPdf, onChanged }) {
+  const [diag, setDiag] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [open, setOpen] = useState(false);
+  const webhookUrl = `${process.env.REACT_APP_BACKEND_URL || ""}/api/whatsapp/webhook`;
+
+  const loadDiag = () => api.get("/whatsapp/diagnostics").then((r) => setDiag(r.data)).catch(() => {});
+  useEffect(() => { loadDiag(); }, []);
+
+  const copy = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} disalin`);
+    } catch {
+      toast.error("Gagal menyalin — silakan blok teksnya lalu copy manual");
+    }
+  };
+
+  const buatTemplate = async (withDoc) => {
+    setBusy(withDoc ? "template_doc" : "template");
+    try {
+      const { data } = await api.post(`/whatsapp/template?with_document=${withDoc ? "true" : "false"}`);
+      toast.success(`Template "${data.spec?.name}" dikirim ke Meta — tunggu status DISETUJUI`);
+      loadDiag();
+      onChanged?.();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
+  };
+
+  const refresh = async () => { setBusy("refresh"); await loadDiag(); setBusy(""); };
+
+  const missing = provider?.missing || [];
+  const ready = !!diag?.ready_for_auto;
+
+  return (
+    <div className="rounded-xl border border-border p-3 space-y-3" data-testid="wa-activation">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-semibold">Aktivasi Pengiriman Otomatis</p>
+          <p className="text-[11px] text-muted-foreground">
+            5 syarat di bawah harus hijau agar rekap terkirim sendiri tanpa Anda tekan apa pun.
+          </p>
+        </div>
+        <Badge className={ready
+          ? "bg-success/15 text-success hover:bg-success/15 shrink-0"
+          : "bg-warning/20 text-warning hover:bg-warning/20 shrink-0"}
+          data-testid="wa-ready-badge">
+          {ready ? "Siap otomatis" : "Belum siap"}
+        </Badge>
+      </div>
+
+      <div className="space-y-1.5" data-testid="wa-checklist">
+        <WaCheckRow ok={!!provider?.configured} label="Kredensial Meta"
+          detail={provider?.configured ? "terisi" : `belum: ${missing.join(", ") || "META_*"}`} />
+        <WaCheckRow ok={!!diag?.phone} label="Nomor bisnis terhubung"
+          detail={diag?.phone
+            ? `${diag.phone.display_phone_number || ""} ${diag.phone.verified_name || ""}`.trim()
+            : "belum bisa diperiksa"} />
+        <WaCheckRow ok={!!diag?.template_approved} label="Template ringkas disetujui"
+          detail={diag?.template_approved ? spec?.name : `"${spec?.name || "-"}" belum disetujui`} />
+        {diag?.attach_pdf && (
+          <WaCheckRow ok={!!diag?.template_doc_approved} label="Template + lampiran PDF disetujui"
+            detail={diag?.template_doc_approved ? specDoc?.name : `"${specDoc?.name || "-"}" belum disetujui`} />
+        )}
+        <WaCheckRow ok={!!diag?.pdf_ready} label="PDF Laporan Penjualan"
+          detail={diag?.pdf_ready
+            ? `siap (${Math.max(1, Math.round((diag?.pdf_size || 0) / 1024))} KB)`
+            : "gagal dibuat"} />
+        <WaCheckRow ok={(diag?.recipients || 0) > 0} label="Nomor penerima"
+          detail={`${diag?.recipients || 0} nomor`} />
+        <WaCheckRow ok={!!diag?.auto_enabled} label="Jadwal otomatis"
+          detail={diag?.auto_enabled ? `setiap hari ${diag?.auto_time} WIB` : "dimatikan"} />
+      </div>
+
+      {(diag?.errors || []).length > 0 && (
+        <div className="rounded-lg bg-warning/10 p-2 space-y-0.5">
+          {diag.errors.map((e, i) => (
+            <p key={`we-${i}`} className="text-[11px] text-warning">• {e.step}: {e.message}</p>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" data-testid="wa-diag-refresh" disabled={!!busy} onClick={refresh}>
+          {busy === "refresh" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+          Periksa Kesiapan
+        </Button>
+        <Button size="sm" data-testid="wa-create-template" disabled={!!busy || !provider?.configured}
+          onClick={() => buatTemplate(false)} title={provider?.configured ? "" : "Isi kredensial Meta dulu"}>
+          {busy === "template" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Send className="w-4 h-4 mr-1" />}
+          Buat Template Ringkas
+        </Button>
+        <Button size="sm" variant="outline" data-testid="wa-create-template-doc"
+          disabled={!!busy || !provider?.configured} onClick={() => buatTemplate(true)}
+          title={provider?.configured ? "Template dengan lampiran PDF" : "Isi kredensial Meta dulu"}>
+          {busy === "template_doc" ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileText className="w-4 h-4 mr-1" />}
+          Buat Template + PDF
+        </Button>
+        <Button variant="ghost" size="sm" data-testid="wa-guide-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? "Sembunyikan panduan" : "Lihat panduan aktivasi"}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="space-y-3 border-t border-border pt-3" data-testid="wa-guide">
+          <div className="space-y-1 text-[11px] text-muted-foreground leading-relaxed">
+            <p className="font-semibold text-foreground text-xs">Langkah aktivasi</p>
+            <p><b>1.</b> Buat akun di <b>developers.facebook.com</b> → App tipe <b>Business</b> → tambah produk <b>WhatsApp</b>, lalu selesaikan WhatsApp Business Account (WABA) dan daftarkan nomor bisnis toko.</p>
+            <p><b>2.</b> Business Settings → <b>System Users</b> → buat System User, beri akses App + WABA, lalu <i>Generate token</i> dengan izin <b>whatsapp_business_messaging</b>, <b>whatsapp_business_management</b>, <b>business_management</b>. Pakai token System User (bukan token 24 jam).</p>
+            <p><b>3.</b> Kirimkan 4 nilai ini ke saya untuk dimasukkan ke <b>backend/.env</b>: <b>META_PHONE_NUMBER_ID</b>, <b>META_ACCESS_TOKEN</b>, <b>META_WABA_ID</b>, dan <b>META_APP_ID</b> (yang terakhir khusus untuk template berlampiran PDF).</p>
+            <p><b>4.</b> Kembali ke halaman ini → tekan <b>Buat Template Ringkas</b> dan <b>Buat Template + PDF</b> → tunggu status <b>DISETUJUI</b> (biasanya beberapa menit sampai 1 jam).</p>
+            <p><b>5.</b> Selesai — rekap {attachPdf ? "beserta PDF Laporan Penjualan " : ""}terkirim sendiri setiap hari jam {diag?.auto_time || "15:00"} WIB.</p>
+          </div>
+
+          <div className="rounded-lg bg-muted/40 p-2.5 space-y-1.5">
+            <p className="text-xs font-semibold">Template rekap (kategori {spec?.category || "UTILITY"})</p>
+            <p className="text-[11px] text-muted-foreground">
+              Ringkas: <b>{spec?.name}</b> · Berlampiran PDF: <b>{specDoc?.name}</b> (header DOCUMENT)
+              · Bahasa: <b>{spec?.language}</b> · Parameter: <b>{spec?.parameter_format}</b>
+            </p>
+            <pre className="text-[11px] whitespace-pre-wrap bg-background rounded p-2 border border-border">{spec?.body}</pre>
+            <p className="text-[11px] text-muted-foreground">
+              Aturan Meta: template yang sudah jadi TIDAK bisa ditambah lampiran, jadi versi
+              berlampiran PDF adalah template terpisah. Rincian penuh (uang masuk per metode,
+              piutang, stok sisa) tetap ada di aplikasi &amp; PDF tutup buku.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" data-testid="wa-copy-body"
+                onClick={() => copy(spec?.body || "", "Isi template")}>Copy isi template</Button>
+              <Button variant="outline" size="sm" data-testid="wa-copy-payload"
+                onClick={() => copy(JSON.stringify(spec?.payload || {}, null, 2), "Payload template")}>
+                Copy payload JSON
+              </Button>
+              <Button variant="outline" size="sm" data-testid="wa-copy-payload-doc"
+                onClick={() => copy(JSON.stringify(specDoc?.payload || {}, null, 2), "Payload template + PDF")}>
+                Copy payload + PDF
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-muted/40 p-2.5 space-y-1.5">
+            <p className="text-xs font-semibold">Status pengiriman (opsional)</p>
+            <p className="text-[11px] text-muted-foreground">
+              Isi URL ini di Meta App → WhatsApp → Configuration → Webhook (subscribe field <b>messages</b>)
+              agar status <b>terkirim / dibaca / gagal</b> tercatat otomatis.
+            </p>
+            <code className="block text-[10px] break-all bg-background rounded p-2 border border-border">{webhookUrl}</code>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button variant="outline" size="sm" data-testid="wa-copy-webhook"
+                onClick={() => copy(webhookUrl, "URL webhook")}>Copy URL webhook</Button>
+              <span className="text-[11px] text-muted-foreground">
+                Verify token: {diag?.webhook_verify_configured ? "sudah dibuat sistem" : "belum ada"} (minta ke saya)
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Rekap tutup buku harian dikirim ke WhatsApp. Nomor bisa ditambah/diubah kapan saja.
 function WhatsAppSettings() {
   const [w, setW] = useState(null);
@@ -116,6 +300,7 @@ function WhatsAppSettings() {
         recipients: w.recipients.filter((r) => (r.number || "").trim()),
         auto_enabled: !!w.auto_enabled,
         auto_time: w.auto_time || "21:00",
+        attach_pdf: !!w.attach_pdf,
       };
       const r = await api.put("/whatsapp/settings", body);
       setW({ ...r.data, recipients: r.data.recipients?.length ? r.data.recipients : [{ name: "", number: "" }] });
@@ -167,9 +352,12 @@ function WhatsAppSettings() {
         <p className="text-[11px] text-muted-foreground leading-relaxed rounded-lg bg-muted/40 p-2.5">
           Pengiriman otomatis penuh belum aktif karena kredensial WhatsApp Business (Meta Cloud API) belum diisi.
           Sementara ini, setelah tutup buku akan muncul tombol <b>Kirim</b> yang membuka WhatsApp dengan teks rekap
-          sudah siap — tinggal ditekan sekali.
+          sudah siap — tinggal ditekan sekali. Ikuti panduan di panel bawah untuk mengaktifkan pengiriman penuh.
         </p>
       )}
+
+      <WhatsAppActivation provider={w.provider} spec={w.template_spec} specDoc={w.template_spec_doc}
+        attachPdf={!!w.attach_pdf} onChanged={loadLog} />
 
       <div className="space-y-2">
         {w.recipients.map((r, i) => (
@@ -214,6 +402,18 @@ function WhatsAppSettings() {
           onChange={(e) => setW((p) => ({ ...p, auto_time: e.target.value }))} />
       </div>
 
+      <div className="flex items-center justify-between pt-2">
+        <div className="pr-3">
+          <p className="font-semibold text-sm">Lampirkan PDF Laporan Penjualan</p>
+          <p className="text-xs text-muted-foreground">
+            PDF penjualan hari itu ikut dikirim ke WhatsApp. Selama kredensial Meta belum aktif,
+            yang dikirim adalah tautan unduh PDF (berlaku 30 hari) di dalam pesan.
+          </p>
+        </div>
+        <Switch data-testid="wa-attach-pdf" checked={!!w.attach_pdf}
+          onCheckedChange={(v) => setW((p) => ({ ...p, attach_pdf: v }))} />
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <Button data-testid="wa-save" disabled={busy} onClick={save}>
           {busy && <Loader2 className="w-4 h-4 mr-1 animate-spin" />} Simpan Pengaturan WhatsApp
@@ -236,6 +436,16 @@ function WhatsAppSettings() {
                 <span className={l.sent_count > 0 ? "text-success" : "text-warning"}>
                   {l.sent_count > 0 ? `terkirim ${l.sent_count} nomor` : "disiapkan (mode 1-tap)"}
                 </span>
+                {(l.results || []).filter((r) => r.status && r.status !== "manual").slice(0, 3).map((r, i) => (
+                  <Badge key={`st-${l.id}-${i}`} variant="outline" className="text-[10px]">
+                    {r.name}: {WA_STATUS_LABEL[r.status] || r.status}
+                  </Badge>
+                ))}
+                {(l.results || []).some((r) => r.error) && (
+                  <span className="text-destructive">
+                    gagal: {(l.results.find((r) => r.error)?.hint) || (l.results.find((r) => r.error)?.error || "").slice(0, 60)}
+                  </span>
+                )}
               </div>
             ))}
           </div>
