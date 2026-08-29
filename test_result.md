@@ -682,7 +682,7 @@ frontend:
           OFFLINE POS TESTING COMPLETE - 6/7 SCENARIOS PASSED, 1 CRITICAL ISSUE FOUND
           
           Test Environment:
-          - URL: https://project-web-viewer.preview.emergentagent.com
+          - URL: https://commit-inspector.preview.emergentagent.com
           - Tested as Kasir (kasir@berkahayam.com) and Owner (shezrofenia18@gmail.com)
           - Used Playwright context.set_offline(True/False) to simulate offline/online
           - App checks navigator.onLine every 6 seconds, auto-sync runs every 6 seconds when online

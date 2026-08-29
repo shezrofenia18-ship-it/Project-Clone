@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 # Configuration
-BASE_URL = "https://project-web-viewer.preview.emergentagent.com/api"
+BASE_URL = "https://commit-inspector.preview.emergentagent.com/api"
 OWNER_EMAIL = "shezrofenia18@gmail.com"
 OWNER_PASSWORD = "berkahayam1"
 
