@@ -111,5 +111,11 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - False positive yang dikonfirmasi: temuan "`is` vs `==`" semuanya `is None`/`is not None`/`is False` (pemakaian benar); temuan "missing hook deps" — build CRA menjalankan `react-hooks/exhaustive-deps` dan 25 kompilasi terakhir **0 warning**.
 - Teruji: backend **G1-G5 PASS** (4 PDF valid, payable_outstanding sama dengan total hutang, weight-guidance identik, regresi inti 11/11) + frontend **H1-H9 PASS** (harga kartu, label satuan, keranjang kg/ekor/pcs, transaksi tunai Rp 84.000, RBAC modal, panel berat, 0 error konsol).
 
+## Environment restore (2026-08-29, sesi lanjutan)
+- Repo `shezrofenia18-ship-it/Project1` sudah tersambung; branch lokal `conflict_290826_1811` = `origin/main` untuk seluruh kode (hanya beda 1 commit auto-generated `90b9033` yang mengubah file infra `.emergent/emergent.yml`, bukan kode aplikasi). Tidak ada perubahan kode yang hilang.
+- Dependencies diinstall ulang: pip `requirements.txt` (exit 0) + `yarn install` (exit 0). backend & frontend RUNNING via supervisor, mongodb RUNNING.
+- Verifikasi live preview: login owner → Dashboard Owner tampil dengan data nyata (omzet Rp 3.743.030, 14 transaksi, 65,51 kg, margin 19,06%), indikator ONLINE + LIVE (WebSocket) aktif, grafik 7 hari & aktivitas terisi. DB utuh: 14 produk, 73 penjualan, 5 user.
+- `memory/test_credentials.md` dibuat ulang (5 akun: owner/admin/kasir).
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.
