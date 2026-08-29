@@ -174,6 +174,42 @@ export function ClosingDetail({ d }) {
         </Section>
       )}
 
+      {!!((d.piutang_by_method || []).length + (d.hutang_by_method || []).length) && (
+        <Section title="Pelunasan Piutang & Hutang per Metode Bayar"
+          hint="Uang piutang/hutang yang bergerak hari ini, dipisah per cara bayarnya">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm" data-testid="closing-debt-methods">
+              <thead className="bg-muted/50 text-xs text-muted-foreground">
+                <tr className="text-left">
+                  <th className="px-3 py-2 font-semibold">Jenis</th>
+                  <th className="px-3 py-2 font-semibold">Metode</th>
+                  <th className="px-3 py-2 font-semibold text-right">Jumlah</th>
+                  <th className="px-3 py-2 font-semibold text-right">Nilai</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(d.piutang_by_method || []).map((m) => (
+                  <tr key={`r-${m.method}`} className="border-t border-border">
+                    <td className="px-3 py-2 text-success font-semibold">Piutang masuk</td>
+                    <td className="px-3 py-2">{PAYMENT_LABELS[m.method] || m.label || m.method}</td>
+                    <td className="px-3 py-2 text-right tabular">{formatNumber(m.count)}x</td>
+                    <td className="px-3 py-2 text-right tabular font-semibold text-success">{formatRupiah(m.amount)}</td>
+                  </tr>
+                ))}
+                {(d.hutang_by_method || []).map((m) => (
+                  <tr key={`p-${m.method}`} className="border-t border-border">
+                    <td className="px-3 py-2 text-destructive font-semibold">Hutang dibayar</td>
+                    <td className="px-3 py-2">{PAYMENT_LABELS[m.method] || m.label || m.method}</td>
+                    <td className="px-3 py-2 text-right tabular">{formatNumber(m.count)}x</td>
+                    <td className="px-3 py-2 text-right tabular font-semibold text-destructive">{formatRupiah(m.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
       {!!(d.top_products || []).length && (
         <Section title="Produk Terjual Hari Ini">
           <div className="overflow-x-auto">

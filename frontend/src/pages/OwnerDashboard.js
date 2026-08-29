@@ -172,7 +172,7 @@ export default function OwnerDashboard() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Stat testid="stat-omzet" icon={Wallet} label="Omzet Hari Ini" value={formatRupiah(d.omzet)} sub={`${d.txn_count} transaksi`} tone="primary" />
-        <Stat testid="stat-terjual" icon={Scale} label="Ayam Terjual" value={formatWeight(d.weight)} sub={`${formatNumber(d.ekor)} ekor`} tone="chart4" />
+        <Stat testid="stat-terjual" icon={Scale} label="Ayam Terjual" value={formatWeight(d.weight)} sub={`${formatNumber(d.ekor)} ekor · berat ekor sudah dihitung`} tone="chart4" />
         <Stat testid="stat-laba" icon={TrendingUp} label="Laba Kotor" value={formatRupiah(d.laba)} sub={`HPP ${formatRupiahShort(d.hpp)}`} tone="success" />
         <Stat testid="stat-margin" icon={Percent} label="Margin" value={formatPct(d.margin)} sub={`Laba bersih usaha ${formatRupiahShort(d.net_profit)}`} tone="warning" />
       </div>

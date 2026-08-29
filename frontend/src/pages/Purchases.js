@@ -95,15 +95,28 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
           <div className="space-y-2">
             <Label className="text-xs">Item Ayam</Label>
             {items.map((it, i) => (
-              <div key={it._k} className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-4"><Select value={it.product_id} onValueChange={(v) => setItem(i, "product_id", v)}>
-                  <SelectTrigger data-testid={`pur-item-${i}`}><SelectValue placeholder="Produk" /></SelectTrigger>
-                  <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-                </Select></div>
-                <div className="col-span-2"><Input placeholder="Ekor" type="number" value={it.ekor} onChange={(e) => setItem(i, "ekor", e.target.value)} className="tabular" /></div>
-                <div className="col-span-3"><Input placeholder="Berat kg" type="number" value={it.total_weight} onChange={(e) => setItem(i, "total_weight", e.target.value)} className="tabular" /></div>
-                <div className="col-span-2"><Input placeholder="Total Rp" type="number" value={it.total_price} onChange={(e) => setItem(i, "total_price", e.target.value)} className="tabular" /></div>
-                <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
+              <div key={it._k} className="space-y-1">
+                <div className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-4"><Select value={it.product_id} onValueChange={(v) => setItem(i, "product_id", v)}>
+                    <SelectTrigger data-testid={`pur-item-${i}`}><SelectValue placeholder="Produk" /></SelectTrigger>
+                    <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+                  </Select></div>
+                  <div className="col-span-2"><Input placeholder="Ekor" type="number" value={it.ekor} onChange={(e) => setItem(i, "ekor", e.target.value)} className="tabular" /></div>
+                  <div className="col-span-3"><Input placeholder="Berat kg" type="number" value={it.total_weight} onChange={(e) => setItem(i, "total_weight", e.target.value)} className="tabular" /></div>
+                  <div className="col-span-2"><Input placeholder="Total Rp" type="number" value={it.total_price} onChange={(e) => setItem(i, "total_price", e.target.value)} className="tabular" /></div>
+                  <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
+                </div>
+                {/* Kalkulasi otomatis berat 1 ekor: 15 ekor + 30 kg -> 2,00 kg/ekor.
+                    Angka inilah yang dipakai memotong stok kg saat kasir jual per ekor. */}
+                {Number(it.ekor) > 0 && Number(it.total_weight) > 0 && (
+                  <p data-testid={`pur-avg-${i}`} className="text-[11px] text-muted-foreground pl-1">
+                    Berat 1 ekor kiriman ini:{" "}
+                    <span className="font-semibold text-foreground tabular">
+                      {formatWeight(Number(it.total_weight) / Number(it.ekor), 2)}/ekor
+                    </span>
+                    {" — dipakai memotong stok kg tiap 1 ekor terjual"}
+                  </p>
+                )}
               </div>
             ))}
             <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
@@ -118,6 +131,14 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
             <div className="flex justify-between font-bold"><span>Total Modal</span><span className="tabular">{formatRupiah(totalModal)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Perkiraan Harga/kg (otomatis)</span><span className="tabular">{formatRupiah(totalWeight ? totalModal / totalWeight : 0)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Modal Efektif/ekor</span><span className="tabular">{formatRupiah(totalEkor ? totalModal / totalEkor : 0)}</span></div>
+            {totalEkor > 0 && totalWeight > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>Berat rata-rata/ekor kiriman ini</span>
+                <span className="tabular font-semibold text-foreground" data-testid="pur-avg-total">
+                  {formatWeight(totalWeight / totalEkor, 2)}/ekor
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-purchase" disabled={busy} onClick={save}>{busy ? "Menyimpan..." : "Simpan"}</Button></DialogFooter>

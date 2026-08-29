@@ -14,8 +14,10 @@ import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, formatTime, formatDate } from "@/lib/format";
 import { SlidersHorizontal } from "lucide-react";
 
-const MOVE_LABELS = { pembelian: "Pembelian", penjualan: "Penjualan", pemotongan: "Pemotongan", produksi: "Produksi", retur: "Retur", penyesuaian: "Penyesuaian", rusak: "Rusak", mati: "Mati", susut: "Susut" };
-const MOVE_TONE = { pembelian: "bg-success/15 text-success", produksi: "bg-success/15 text-success", penjualan: "bg-primary/10 text-primary", retur: "bg-chart-4/10 text-chart-4", pemotongan: "bg-warning/20 text-warning" };
+// "mati" hanya dipertahankan agar riwayat lama tetap terbaca; pilihan barunya
+// adalah "salah_potong" (permintaan owner).
+const MOVE_LABELS = { pembelian: "Pembelian", penjualan: "Penjualan", pemotongan: "Pemotongan", produksi: "Produksi", retur: "Retur", penyesuaian: "Penyesuaian", rusak: "Rusak", salah_potong: "Salah Potong", mati: "Mati", susut: "Susut" };
+const MOVE_TONE = { pembelian: "bg-success/15 text-success", produksi: "bg-success/15 text-success", penjualan: "bg-primary/10 text-primary", retur: "bg-chart-4/10 text-chart-4", pemotongan: "bg-warning/20 text-warning", salah_potong: "bg-destructive/10 text-destructive" };
 
 export default function Stock() {
   const { data: products, reload } = useFetch("/products");
@@ -110,10 +112,10 @@ function AdjustDialog({ products, onClose, onSaved }) {
           </div>
           <div><Label className="text-xs">Jenis</Label>
             <Select value={f.type} onValueChange={(v) => setF({ ...f, type: v })}>
-              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectTrigger data-testid="adj-type" className="mt-1"><SelectValue /></SelectTrigger>
               <SelectContent className="bg-popover">
                 <SelectItem value="penyesuaian">Penyesuaian</SelectItem><SelectItem value="rusak">Ayam Rusak</SelectItem>
-                <SelectItem value="mati">Ayam Mati</SelectItem><SelectItem value="susut">Susut</SelectItem>
+                <SelectItem value="salah_potong">Salah Potong</SelectItem><SelectItem value="susut">Susut</SelectItem>
               </SelectContent>
             </Select>
           </div>

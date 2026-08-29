@@ -12,12 +12,15 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+} from "@/components/ui/sheet";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp } from "lucide-react";
 
 // Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
 // ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
@@ -25,10 +28,29 @@ const UNIT_INPUT_LABEL = { kg: "Berat (kg)", ekor: "Jumlah (ekor)", pcs: "Jumlah
 const UNIT_BUTTON_LABEL = { kg: "Per Kg", ekor: "Per Ekor", pcs: "Per Pcs" };
 const priceOf = (p, u) => Number(({ kg: p.price_kg, ekor: p.price_ekor, pcs: p.price_pcs })[u] || 0);
 const modalOf = (p, u) => Number(({ kg: p.hpp_kg, ekor: p.hpp_ekor, pcs: p.hpp_pcs })[u] || 0);
+// Ayam utuh (produk yang punya satuan "ekor") HANYA boleh dijual per ekor.
+// Owner membeli ayam dengan ditimbang (mis. 15 ekor = 30 kg -> 2 kg/ekor), lalu
+// saat 1 ekor terjual stok kg otomatis berkurang 2 kg. Produk sampingan,
+// potongan, dan fillet TIDAK berubah: tetap boleh per kg dan/atau per pcs.
+const posUnits = (p) => {
+  const units = (p.units || []).length ? p.units : ["kg"];
+  return units.includes("ekor") ? ["ekor"] : units;
+};
 // Satuan utama yang dipakai untuk menampilkan harga di kartu produk.
-const primaryUnit = (p) => ["kg", "ekor", "pcs"].find((u) => (p.units || []).includes(u)) || "kg";
+const primaryUnit = (p) => posUnits(p)[0] || "kg";
 const qtyLabel = (unit, qty) => (unit === "kg" ? formatWeight(qty, 3) : `${qty} ${unit}`);
+// Stok ditampilkan dalam satuan yang memang dipakai produk itu.
+const stockLabel = (p) => {
+  const all = p.units || [];
+  const parts = [];
+  if (all.includes("ekor")) parts.push(`${formatNumber(p.stock_ekor || 0)} ekor`);
+  if (all.includes("kg")) parts.push(formatWeight(p.stock_kg || 0));
+  if (all.includes("pcs")) parts.push(`${formatNumber(p.stock_pcs || 0)} pcs`);
+  return `Stok ${parts.join(" · ") || "-"}`;
+};
 import PendingSales from "@/components/PendingSales";
+import PayMethodPicker from "@/components/PayMethodPicker";
+import useIsDesktop from "@/hooks/useIsDesktop";
 
 const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "potongan", "sampingan"];
 
@@ -48,6 +70,8 @@ export default function POS() {
   const [customerId, setCustomerId] = useState("umum");
   const [entry, setEntry] = useState(null); // product being added
   const [checkout, setCheckout] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const isDesktop = useIsDesktop();
   const [method, setMethod] = useState("cash");
   const [paid, setPaid] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,7 +124,7 @@ export default function POS() {
     };
     const finish = (sale, offline) => {
       setReceipt({ sale, phone: cust?.phone, offline });
-      setCart([]); setCheckout(false); setPaid(""); setMethod("cash"); setCustomerId("umum");
+      setCart([]); setCheckout(false); setCartOpen(false); setPaid(""); setMethod("cash"); setCustomerId("umum");
       setBusy(false);
     };
     // Snapshot for the pending-queue list (body only carries product ids).
@@ -175,7 +199,7 @@ export default function POS() {
           ))}
         </div>
         <div className="flex-1 overflow-y-auto no-scrollbar">
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 pb-24 lg:pb-0">
             {shown.map((p) => (
               <button key={p.id} data-testid={`pos-product-${p.id}`} onClick={() => setEntry(p)}
                 className="text-left bg-card border border-border rounded-xl overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
@@ -187,9 +211,7 @@ export default function POS() {
                   <p className="text-primary font-bold text-sm mt-1 tabular">
                     {`${formatRupiah(priceOf(p, primaryUnit(p)))}/${primaryUnit(p)}`}
                   </p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5 tabular">
-                    Stok{p.units.includes("kg") ? ` ${formatWeight(p.stock_kg)}` : ""}{p.stock_ekor ? ` · ${formatNumber(p.stock_ekor)} ekor` : ""}{p.stock_pcs ? ` · ${formatNumber(p.stock_pcs)} pcs` : ""}
-                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5 tabular">{stockLabel(p)}</p>
                 </div>
               </button>
             ))}
@@ -197,60 +219,76 @@ export default function POS() {
         </div>
       </div>
 
-      {/* cart */}
-      <div className="w-full lg:w-[380px] bg-card border-t lg:border-t-0 lg:border-l border-border flex flex-col min-h-0">
-        <div className="p-4 border-b border-border flex items-center gap-2">
-          <ShoppingCart className="w-5 h-5 text-primary" />
-          <h2 className="font-head font-bold">Keranjang</h2>
-          <Badge variant="secondary" className="ml-auto">{cart.length} item</Badge>
+      {/* keranjang dirender HANYA SATU KALI: sidebar (desktop) ATAU panel geser
+          (HP/Tablet). Ini mencegah data-testid & kontrol form ganda di DOM. */}
+      {isDesktop && (
+        <div className="w-[380px] bg-card border-l border-border flex flex-col min-h-0">
+          <CartPanel
+            cart={cart} removeItem={removeItem} customers={customers} customerId={customerId}
+            setCustomerId={setCustomerId} total={total}
+            onCheckout={() => { setPaid(""); setCheckout(true); }}
+            onPayDebt={() => setDebtOpen(true)}
+          />
         </div>
-        <div className="flex-1 overflow-y-auto no-scrollbar p-4 space-y-2" data-testid="pos-cart">
-          {cart.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-center text-muted-foreground py-12">
-              <ShoppingCart className="w-10 h-10 mb-2 opacity-40" />
-              <p className="text-sm">Pilih produk untuk memulai transaksi</p>
-            </div>
-          )}
-          {cart.map((i) => (
-            <div key={i.key} className="flex items-center gap-2 p-2.5 rounded-lg bg-accent/60">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold truncate">{i.name}</p>
-                <p className="text-xs text-muted-foreground tabular">
-                  {qtyLabel(i.unit, i.qty)} × {formatRupiah(i.price)}
-                </p>
-              </div>
-              <p className="text-sm font-bold tabular">{formatRupiah(i.qty * i.price)}</p>
-              <button data-testid={`cart-remove-${i.key}`} onClick={() => removeItem(i.key)} className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-        </div>
-        <div className="p-4 border-t border-border space-y-3">
-          <div>
-            <Label className="text-xs">Pelanggan</Label>
-            <Select value={customerId} onValueChange={setCustomerId}>
-              <SelectTrigger data-testid="pos-customer" className="mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent className="bg-popover">
-                <SelectItem value="umum">Umum</SelectItem>
-                {(customers || []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+      )}
+
+      {/* HP & Tablet: bar tetap di bawah supaya pilihan yang akan di-checkout
+          SELALU terlihat, lalu panel geser untuk melihat & mengubah keranjang. */}
+      {!isDesktop && (
+        <>
+          <div
+            data-testid="pos-mobile-bar"
+            className="fixed bottom-0 inset-x-0 z-30 bg-card border-t border-border px-3 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom))] flex items-center gap-3 shadow-[0_-4px_16px_rgba(0,0,0,0.08)]"
+          >
+            <button
+              data-testid="pos-mobile-cart-open" onClick={() => setCartOpen(true)}
+              className="flex items-center gap-2.5 min-w-0 flex-1 text-left"
+            >
+              <span className="relative shrink-0">
+                <ShoppingCart className="w-6 h-6 text-primary" />
+                <span className="absolute -top-1.5 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[11px] font-bold flex items-center justify-center">
+                  {cart.length}
+                </span>
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11px] text-muted-foreground leading-none">
+                  {cart.length === 0 ? "Keranjang kosong" : `${cart.length} item dipilih`}
+                </span>
+                <span className="block font-head font-extrabold text-xl tabular leading-tight" data-testid="pos-mobile-total">
+                  {formatRupiah(total)}
+                </span>
+              </span>
+              <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" />
+            </button>
+            <Button
+              data-testid="pos-mobile-review" onClick={() => setCartOpen(true)}
+              className="h-12 px-5 rounded-lg font-bold shrink-0"
+            >
+              Lihat Keranjang
+            </Button>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Total</span>
-            <span className="font-head font-extrabold text-2xl tabular" data-testid="pos-total">{formatRupiah(total)}</span>
-          </div>
-          <Button data-testid="pos-checkout" disabled={cart.length === 0} onClick={() => { setPaid(""); setCheckout(true); }}
-            className="w-full h-12 rounded-lg font-bold text-base">
-            Bayar
-          </Button>
-          <Button variant="outline" data-testid="pos-pay-debt" onClick={() => setDebtOpen(true)}
-            className="w-full h-10 rounded-lg font-semibold">
-            <Wallet className="w-4 h-4 mr-1.5" /> Bayar Piutang Pelanggan
-          </Button>
-        </div>
-      </div>
+
+          <Sheet open={cartOpen} onOpenChange={setCartOpen}>
+            <SheetContent
+              side="bottom" data-testid="pos-cart-sheet"
+              className="p-0 h-[85vh] max-h-[85vh] rounded-t-2xl flex flex-col bg-card"
+            >
+              <SheetHeader className="px-4 pt-4 pb-0 text-left shrink-0">
+                <SheetTitle className="font-head">Keranjang</SheetTitle>
+                <SheetDescription className="text-xs">
+                  Periksa pesanan sebelum dibayar. Ketuk ikon tong sampah untuk menghapus item.
+                </SheetDescription>
+              </SheetHeader>
+              <CartPanel
+                cart={cart} removeItem={removeItem} customers={customers} customerId={customerId}
+                setCustomerId={setCustomerId} total={total} compact
+                onCheckout={() => { setPaid(""); setCartOpen(false); setCheckout(true); }}
+                onPayDebt={() => { setCartOpen(false); setDebtOpen(true); }}
+              />
+            </SheetContent>
+          </Sheet>
+        </>
+      )}
 
       {entry && <EntryDialog product={entry} onClose={() => setEntry(null)} onAdd={addToCart} />}
 
@@ -303,17 +341,78 @@ export default function POS() {
   );
 }
 
+function CartPanel({ cart, removeItem, customers, customerId, setCustomerId, total, onCheckout, onPayDebt, compact = false }) {
+  return (
+    <>
+      {!compact && (
+        <div className="p-4 border-b border-border flex items-center gap-2">
+          <ShoppingCart className="w-5 h-5 text-primary" />
+          <h2 className="font-head font-bold">Keranjang</h2>
+          <Badge variant="secondary" className="ml-auto">{cart.length} item</Badge>
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar p-4 space-y-2" data-testid="pos-cart">
+        {cart.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-center text-muted-foreground py-12">
+            <ShoppingCart className="w-10 h-10 mb-2 opacity-40" />
+            <p className="text-sm">Pilih produk untuk memulai transaksi</p>
+          </div>
+        )}
+        {cart.map((i) => (
+          <div key={i.key} data-testid={`cart-item-${i.product_id}`} className="flex items-center gap-2 p-2.5 rounded-lg bg-accent/60">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold truncate">{i.name}</p>
+              <p className="text-xs text-muted-foreground tabular">
+                {qtyLabel(i.unit, i.qty)} × {formatRupiah(i.price)}
+              </p>
+            </div>
+            <p className="text-sm font-bold tabular">{formatRupiah(i.qty * i.price)}</p>
+            <button data-testid={`cart-remove-${i.key}`} onClick={() => removeItem(i.key)} className="p-2 rounded-md hover:bg-destructive/10 text-destructive">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="p-4 border-t border-border space-y-3 shrink-0">
+        <div>
+          <Label className="text-xs">Pelanggan</Label>
+          <Select value={customerId} onValueChange={setCustomerId}>
+            <SelectTrigger data-testid="pos-customer" className="mt-1"><SelectValue /></SelectTrigger>
+            <SelectContent className="bg-popover">
+              <SelectItem value="umum">Umum</SelectItem>
+              {(customers || []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">Total</span>
+          <span className="font-head font-extrabold text-2xl tabular" data-testid="pos-total">{formatRupiah(total)}</span>
+        </div>
+        <Button data-testid="pos-checkout" disabled={cart.length === 0} onClick={onCheckout}
+          className="w-full h-12 rounded-lg font-bold text-base">
+          Bayar
+        </Button>
+        <Button variant="outline" data-testid="pos-pay-debt" onClick={onPayDebt}
+          className="w-full h-10 rounded-lg font-semibold">
+          <Wallet className="w-4 h-4 mr-1.5" /> Bayar Piutang Pelanggan
+        </Button>
+      </div>
+    </>
+  );
+}
+
 function ReceivableDialog({ onClose }) {
   const { data, reload } = useFetch("/receivables");
   const outstanding = (data || []).filter((r) => r.status !== "lunas" && r.remaining > 0);
   const [pay, setPay] = useState(null);
   const [amt, setAmt] = useState("");
+  const [payMethod, setPayMethod] = useState("cash");
   const submit = async () => {
     if (!Number(amt)) return toast.error("Masukkan nominal pembayaran");
     try {
-      await api.post(`/receivables/${pay.id}/pay`, { amount: Number(amt) });
-      toast.success("Pembayaran piutang tercatat");
-      setPay(null); setAmt(""); reload();
+      await api.post(`/receivables/${pay.id}/pay`, { amount: Number(amt), method: payMethod });
+      toast.success(`Pembayaran piutang tercatat · ${PAYMENT_LABELS[payMethod]}`);
+      setPay(null); setAmt(""); setPayMethod("cash"); reload();
     } catch (e) { toast.error(apiError(e)); }
   };
   return (
@@ -330,14 +429,17 @@ function ReceivableDialog({ onClose }) {
                 <p className="text-sm font-semibold truncate">{r.customer_name}</p>
                 <p className="text-xs text-warning tabular">Sisa {formatRupiah(r.remaining)}</p>
               </div>
-              <Button size="sm" data-testid={`debt-pay-${r.id}`} onClick={() => { setPay(r); setAmt(String(r.remaining)); }}>Bayar</Button>
+              <Button size="sm" data-testid={`debt-pay-${r.id}`} onClick={() => { setPay(r); setAmt(String(r.remaining)); setPayMethod("cash"); }}>Bayar</Button>
             </div>
           ))}
         </div>
         {pay && (
-          <div className="border-t border-border pt-3 mt-1 space-y-2">
-            <Label className="text-xs">Nominal untuk {pay.customer_name} (sisa {formatRupiah(pay.remaining)})</Label>
-            <Input data-testid="debt-amount" type="number" value={amt} onChange={(e) => setAmt(e.target.value)} className="tabular" />
+          <div className="border-t border-border pt-3 mt-1 space-y-3">
+            <div>
+              <Label className="text-xs">Nominal untuk {pay.customer_name} (sisa {formatRupiah(pay.remaining)})</Label>
+              <Input data-testid="debt-amount" type="number" value={amt} onChange={(e) => setAmt(e.target.value)} className="mt-1 tabular" />
+            </div>
+            <PayMethodPicker value={payMethod} onChange={setPayMethod} testid="debt-method" />
             <div className="flex gap-2 justify-end">
               <Button variant="outline" size="sm" onClick={() => setPay(null)}>Batal</Button>
               <Button size="sm" data-testid="debt-confirm" onClick={submit}>Simpan Pembayaran</Button>
@@ -354,7 +456,8 @@ function EntryDialog({ product, onClose, onAdd }) {
   const { user } = useAuth();
   // Kasir tidak boleh melihat modal/HPP & laba (hanya owner & admin).
   const canSeeCost = user.role === "owner" || user.role === "admin";
-  const units = product.units && product.units.length ? product.units : ["kg"];
+  // Ayam utuh: pilihan "Per Kg" memang dihilangkan untuk SEMUA role.
+  const units = posUnits(product);
   const priceFor = useCallback((u) => priceOf(product, u), [product]);
   const [unit, setUnit] = useState(units[0]);
   const [qty, setQty] = useState("");
@@ -366,6 +469,10 @@ function EntryDialog({ product, onClose, onAdd }) {
   const unitLabel = UNIT_INPUT_LABEL[unit] || UNIT_INPUT_LABEL.kg;
   const qtyNum = Number(String(qty).replace(",", ".")) || 0;
   const subtotal = qtyNum * (Number(price) || 0);
+  // Ayam utuh: tunjukkan berapa kg stok yang akan berkurang, supaya kasir & owner
+  // tahu perhitungannya terukur (mis. 2 ekor x 1,85 kg = 3,7 kg).
+  const avgWeight = Number(product.avg_weight_used || product.avg_weight_ekor || 0);
+  const stockOut = unit === "ekor" && avgWeight > 0 ? qtyNum * avgWeight : 0;
 
   const press = (k) => {
     if (k === "del") return setQty((q) => q.slice(0, -1));
@@ -436,6 +543,13 @@ function EntryDialog({ product, onClose, onAdd }) {
               <span className="font-head font-extrabold text-3xl tabular w-16 text-center">{qtyNum || 0}</span>
               <Button variant="outline" size="icon" onClick={() => setQty((q) => String((Number(q) || 0) + 1))}><Plus className="w-4 h-4" /></Button>
             </div>
+          )}
+
+          {stockOut > 0 && (
+            <p data-testid="entry-stock-out" className="text-xs text-muted-foreground px-1 -mb-1">
+              Stok berkurang <span className="font-semibold tabular text-foreground">{formatWeight(stockOut, 2)}</span>
+              {` (${formatNumber(qtyNum)} ekor × ${formatWeight(avgWeight, 2)}/ekor)`}
+            </p>
           )}
 
           <div className="flex items-center justify-between px-1">

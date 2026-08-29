@@ -20,6 +20,7 @@ import Users from "@/pages/Users";
 import Settings from "@/pages/Settings";
 import SalesHistory from "@/pages/SalesHistory";
 import Closing from "@/pages/Closing";
+import usePointerEventsGuard from "@/hooks/usePointerEventsGuard";
 
 function Loader() {
   return (
@@ -57,6 +58,8 @@ const R_OPS = ["owner", "admin", "kasir"];
 
 function App() {
   const { user, loading } = useAuth();
+  // Jaga agar sentuhan tidak pernah "mati" setelah dialog ditutup (lihat hook).
+  usePointerEventsGuard();
   return (
     <div className="App">
       <BrowserRouter>

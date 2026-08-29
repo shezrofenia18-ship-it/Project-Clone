@@ -13,7 +13,7 @@ import requests
 from datetime import timedelta
 from typing import List, Optional, Any, Dict
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, WebSocket
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form, WebSocket
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -45,6 +45,7 @@ EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 APP_NAME = "berkah-ayam-mili"
 MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
               "gif": "image/gif", "webp": "image/webp"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 _storage_key = None
 
 
@@ -211,6 +212,27 @@ def sells_per_ekor(product: dict) -> bool:
         or float(product.get("stock_ekor", 0) or 0) > 0
         or float(product.get("cum_ekor_in", 0) or 0) > 0
     )
+
+
+def is_whole_chicken(product: dict) -> bool:
+    """Ayam utuh = produk yang punya satuan 'ekor' (Broiler/Kampung/Pejantan).
+
+    Keputusan owner: ayam utuh HANYA dijual per ekor di POS. Owner membeli dengan
+    ditimbang (mis. 15 ekor = 30 kg -> 2 kg/ekor), jadi saat satu ekor terjual,
+    stok kg ikut berkurang sebesar berat rata-rata/ekor supaya angka kg & ekor
+    tidak pernah berbeda lagi. Produk sampingan/potongan/fillet tidak terpengaruh
+    (tetap boleh kg atau pcs).
+    """
+    return "ekor" in (product.get("units") or [])
+
+
+def sale_line_weight(product: dict, unit: str, qty: float) -> float:
+    """Berat (kg) yang benar-benar keluar dari stok untuk satu baris penjualan."""
+    if unit == "kg":
+        return round(float(qty), 3)
+    if unit == "ekor":
+        return round(float(qty) * effective_avg_weight(product), 3)
+    return 0.0
 
 
 def default_avg_weight(product: dict) -> float:
@@ -424,6 +446,9 @@ class ExpenseBody(BaseModel):
     category: str
     amount: float
     description: str = ""
+    # Foto bukti pengeluaran (opsional) — diunggah lewat POST /api/upload?folder=proofs
+    proof_file_id: str = ""
+    proof_url: str = ""
 
 
 class TargetBody(BaseModel):
@@ -434,8 +459,28 @@ class TargetBody(BaseModel):
     target_laba: float = 0
 
 
+# Metode pembayaran yang dipakai untuk pelunasan piutang & hutang. "piutang"
+# sengaja TIDAK ada di sini: membayar piutang dengan piutang tidak masuk akal.
+PAY_METHODS = ("cash", "transfer", "qris", "debit", "ewallet")
+PAY_LABELS = {"cash": "Tunai", "transfer": "Transfer", "qris": "QRIS",
+              "debit": "Kartu Debit", "ewallet": "E-Wallet"}
+
+# Jenis penyesuaian stok. "mati" dipertahankan HANYA agar riwayat lama tetap
+# terbaca; pilihan barunya adalah "salah_potong" (permintaan owner).
+ADJUST_TYPES = ("penyesuaian", "rusak", "salah_potong", "susut", "mati")
+
+
 class PayBody(BaseModel):
     amount: float
+    method: str = "cash"
+    note: str = ""
+
+
+def check_pay_method(method: str) -> str:
+    m = (method or "cash").strip().lower()
+    if m not in PAY_METHODS:
+        raise HTTPException(400, "Metode pembayaran tidak dikenal")
+    return m
 
 
 class AdjustBody(BaseModel):
@@ -886,27 +931,41 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
 
     items_out = []
     subtotal = total_hpp = total_weight = total_ekor = 0.0
+    weight_from_ekor = 0.0
     products_cache = {}
     for it in body.items:
         product = await db.products.find_one({"id": it.product_id})
         if not product:
             raise HTTPException(404, "Produk tidak ditemukan")
         products_cache[it.product_id] = product
+        # Ayam utuh hanya boleh dijual per ekor (keputusan owner). Dikunci di server
+        # supaya transaksi offline lama / klien lain tidak bisa menyelipkan jual kg.
+        if it.unit == "kg" and is_whole_chicken(product):
+            raise HTTPException(400, f"{product['name']} hanya bisa dijual per ekor, bukan per kg")
         line = round(it.qty * it.price, 2)
+        avg_w = 0.0
         if it.unit == "kg":
             hpp_unit = float(product.get("hpp_kg", 0) or 0)
             total_weight += it.qty
         elif it.unit == "ekor":
             hpp_unit = float(product.get("hpp_ekor", 0) or 0)
             total_ekor += it.qty
+            avg_w = effective_avg_weight(product)
         else:
             hpp_unit = float(product.get("hpp_pcs", 0) or 0)
+        # Berat nyata yang keluar dari stok. Untuk per-ekor = qty x berat rata-rata/ekor,
+        # DISIMPAN di baris penjualan supaya pembatalan mengembalikan angka yang sama
+        # walaupun berat rata-rata sudah berubah karena pembelian baru.
+        line_weight = sale_line_weight(product, it.unit, it.qty)
+        if it.unit == "ekor":
+            weight_from_ekor += line_weight
         hpp_total = round(hpp_unit * it.qty, 2)
         subtotal += line
         total_hpp += hpp_total
         items_out.append({"product_id": it.product_id, "name": product["name"], "unit": it.unit,
                           "qty": it.qty, "price": it.price, "subtotal": line,
-                          "hpp_unit": hpp_unit, "hpp_total": hpp_total, "category": product["category"]})
+                          "hpp_unit": hpp_unit, "hpp_total": hpp_total, "category": product["category"],
+                          "weight_kg": line_weight, "avg_weight_used": avg_w})
     total = round(subtotal - body.discount, 2)
     paid = body.paid if body.paid else 0
     if body.payment_method != "piutang" and paid == 0:
@@ -927,15 +986,23 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
         "total": total, "paid": paid, "change": change, "receivable": receivable,
         "payment_method": body.payment_method, "payment_status": "lunas" if receivable <= 0 else "piutang",
         "total_hpp": round(total_hpp, 2), "gross_profit": gross_profit, "margin_pct": margin,
-        "total_weight": round(total_weight, 3), "total_ekor": total_ekor,
+        # total_weight = berat TERUKUR yang keluar dari stok: item per-kg + hasil
+        # konversi item per-ekor (qty x berat rata-rata/ekor). Dipecah agar tetap
+        # bisa ditelusuri dari mana kg-nya berasal.
+        "total_weight": round(total_weight + weight_from_ekor, 3),
+        "total_weight_kg_unit": round(total_weight, 3),
+        "total_weight_ekor": round(weight_from_ekor, 3),
+        "total_ekor": total_ekor,
         "status": "selesai", "created_at": body.offline_at or iso_now(),
         "offline": bool(body.offline_at),
         "synced_at": iso_now() if body.offline_at else None,
     }
-    for it in body.items:
+    for it, out in zip(body.items, items_out):
         product = products_cache[it.product_id]
         d_ekor = -it.qty if it.unit == "ekor" else 0
-        d_kg = -it.qty if it.unit == "kg" else 0
+        # Jual 1 ekor -> stok ekor -1 DAN stok kg berkurang sebesar berat/ekor,
+        # sehingga kedua angka stok selalu bergerak bersama.
+        d_kg = -float(out.get("weight_kg", 0) or 0)
         d_pcs = -it.qty if it.unit == "pcs" else 0
         await apply_stock(product, d_ekor, d_kg, "penjualan", user["name"], sid, allow_negative=allow_neg, delta_pcs=d_pcs)
     await db.sales.insert_one(doc)
@@ -979,7 +1046,13 @@ async def cancel_sale(sid: str, user: dict = Depends(require_roles("owner", "adm
         if not product:
             continue
         d_ekor = it["qty"] if it["unit"] == "ekor" else 0
-        d_kg = it["qty"] if it["unit"] == "kg" else 0
+        # Kembalikan kg PERSIS seperti saat penjualan (tersimpan di baris item).
+        # Transaksi lama tidak punya "weight_kg": untuk item per-kg berartinya qty,
+        # untuk item per-ekor berartinya 0 karena dulu stok kg memang tidak dipotong.
+        w = it.get("weight_kg")
+        if w is None:
+            w = it["qty"] if it["unit"] == "kg" else 0
+        d_kg = float(w or 0)
         d_pcs = it["qty"] if it["unit"] == "pcs" else 0
         await apply_stock(product, d_ekor, d_kg, "retur", user["name"], sid, allow_negative=True, delta_pcs=d_pcs)
     await db.sales.update_one({"id": sid}, {"$set": {"status": "batal"}})
@@ -1015,6 +1088,8 @@ async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles
     product = await db.products.find_one({"id": body.product_id})
     if not product:
         raise HTTPException(404, "Produk tidak ditemukan")
+    if body.type not in ADJUST_TYPES:
+        raise HTTPException(400, "Jenis penyesuaian tidak dikenal")
     await apply_stock(product, body.delta_ekor, body.delta_kg, body.type, user["name"], body.reason, allow_negative=True)
     await log_audit(user, "adjust", "stock", body.product_id, None,
                     {"delta_kg": body.delta_kg, "delta_ekor": body.delta_ekor, "reason": body.reason})
@@ -1036,6 +1111,8 @@ async def list_expenses(user: dict = Depends(require_roles("owner", "admin", "ka
 async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     doc = body.model_dump()
     doc.update({"id": new_id(), "date": body.date or today_str(), "created_by": user["name"], "created_at": iso_now()})
+    if doc.get("proof_file_id") and not doc.get("proof_url"):
+        doc["proof_url"] = f"/api/files/{doc['proof_file_id']}"
     await db.expenses.insert_one(doc)
     await log_audit(user, "create", "expense", doc["id"], None, {"amount": body.amount})
     await rt_emit(["expenses", "dashboard"])
@@ -1063,6 +1140,7 @@ async def pay_receivable(rid: str, body: PayBody, user: dict = Depends(require_r
     if r.get("status") == "batal":
         raise HTTPException(400, "Tagihan ini sudah dibatalkan")
     amount = round(float(body.amount or 0), 2)
+    method = check_pay_method(body.method)
     sisa = round(float(r.get("remaining", 0) or 0), 2)
     if amount <= 0:
         raise HTTPException(400, "Jumlah bayar harus lebih dari nol")
@@ -1072,7 +1150,12 @@ async def pay_receivable(rid: str, body: PayBody, user: dict = Depends(require_r
         raise HTTPException(400, f"Jumlah bayar melebihi sisa piutang (Rp {int(sisa):,})".replace(",", "."))
     remaining = round(sisa - amount, 2)
     status = "lunas" if remaining <= 0 else "belum_lunas"
-    await db.receivables.update_one({"id": rid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": amount}})
+    entry = {"id": new_id(), "amount": amount, "method": method, "note": body.note,
+             "date": today_str(), "by": user["name"], "at": iso_now()}
+    await db.receivables.update_one({"id": rid}, {
+        "$set": {"remaining": max(0, remaining), "status": status, "last_method": method},
+        "$inc": {"paid": amount},
+        "$push": {"payments": entry}})
     await db.customers.update_one({"id": r["customer_id"]}, {"$inc": {"receivable": -amount}})
     # Transaksi aslinya ikut diperbarui supaya Riwayat Transaksi & laporan
     # tidak lagi menampilkan piutang yang sebetulnya sudah dibayar.
@@ -1081,11 +1164,14 @@ async def pay_receivable(rid: str, body: PayBody, user: dict = Depends(require_r
             "receivable": max(0, remaining),
             "payment_status": "lunas" if remaining <= 0 else "piutang"}})
     await db.incomes.insert_one({"id": new_id(), "date": today_str(), "category": "Pembayaran Piutang",
-                                 "amount": amount, "source": "receivable", "ref": rid, "created_at": iso_now()})
-    await add_activity("payment", "Pembayaran Piutang", f"{r['customer_name']} bayar", amount, user["name"])
-    await log_audit(user, "pay", "receivable", rid, {"remaining": sisa}, {"remaining": max(0, remaining)})
+                                 "amount": amount, "source": "receivable", "ref": rid,
+                                 "method": method, "note": body.note, "created_at": iso_now()})
+    await add_activity("payment", "Pembayaran Piutang",
+                       f"{r['customer_name']} bayar via {PAY_LABELS[method]}", amount, user["name"])
+    await log_audit(user, "pay", "receivable", rid, {"remaining": sisa},
+                    {"remaining": max(0, remaining), "method": method})
     await rt_emit(["receivables", "incomes", "sales", "customers", "dashboard"], {"id": rid})
-    return {"ok": True, "remaining": max(0, remaining)}
+    return {"ok": True, "remaining": max(0, remaining), "method": method}
 
 
 @api.get("/payables")
@@ -1102,6 +1188,7 @@ async def pay_payable(pid: str, body: PayBody, user: dict = Depends(require_role
     if p.get("status") == "batal":
         raise HTTPException(400, "Hutang ini sudah dibatalkan")
     amount = round(float(body.amount or 0), 2)
+    method = check_pay_method(body.method)
     sisa = round(float(p.get("remaining", 0) or 0), 2)
     if amount <= 0:
         raise HTTPException(400, "Jumlah bayar harus lebih dari nol")
@@ -1111,16 +1198,24 @@ async def pay_payable(pid: str, body: PayBody, user: dict = Depends(require_role
         raise HTTPException(400, f"Jumlah bayar melebihi sisa hutang (Rp {int(sisa):,})".replace(",", "."))
     remaining = round(sisa - amount, 2)
     status = "lunas" if remaining <= 0 else "belum_lunas"
-    await db.payables.update_one({"id": pid}, {"$set": {"remaining": max(0, remaining), "status": status}, "$inc": {"paid": amount}})
+    entry = {"id": new_id(), "amount": amount, "method": method, "note": body.note,
+             "date": today_str(), "by": user["name"], "at": iso_now()}
+    await db.payables.update_one({"id": pid}, {
+        "$set": {"remaining": max(0, remaining), "status": status, "last_method": method},
+        "$inc": {"paid": amount},
+        "$push": {"payments": entry}})
     await db.suppliers.update_one({"id": p["supplier_id"]}, {"$inc": {"payable": -amount}})
     await db.expenses.insert_one({"id": new_id(), "date": today_str(), "category": "Pembayaran Hutang",
-                                  "amount": amount, "cash_amount": amount,
-                                  "description": f"Bayar ke {p['supplier_name']}",
+                                  "amount": amount, "cash_amount": amount, "method": method,
+                                  "description": f"Bayar ke {p['supplier_name']} via {PAY_LABELS[method]}",
+                                  "note": body.note,
                                   "ref": pid, "created_by": user["name"], "created_at": iso_now()})
-    await add_activity("payment", "Pembayaran Supplier", f"{p['supplier_name']}", amount, user["name"])
-    await log_audit(user, "pay", "payable", pid, {"remaining": sisa}, {"remaining": max(0, remaining)})
+    await add_activity("payment", "Pembayaran Supplier",
+                       f"{p['supplier_name']} via {PAY_LABELS[method]}", amount, user["name"])
+    await log_audit(user, "pay", "payable", pid, {"remaining": sisa},
+                    {"remaining": max(0, remaining), "method": method})
     await rt_emit(["payables", "expenses", "suppliers", "purchases", "dashboard"], {"id": pid})
-    return {"ok": True, "remaining": max(0, remaining)}
+    return {"ok": True, "remaining": max(0, remaining), "method": method}
 
 
 # ------------------------- Targets -------------------------
@@ -1483,6 +1578,20 @@ class ClosingBody(BaseModel):
     notes: str = ""
 
 
+def _group_by_method(rows: list) -> list:
+    """Kelompokkan catatan pembayaran (income/expense) berdasarkan metode bayar."""
+    out: Dict[str, dict] = {}
+    for r in rows:
+        m = (r.get("method") or "cash").lower()
+        e = out.setdefault(m, {"method": m, "label": PAY_LABELS.get(m, m),
+                               "count": 0, "amount": 0.0})
+        e["count"] += 1
+        e["amount"] += float(r.get("amount", 0) or 0)
+    for e in out.values():
+        e["amount"] = round(e["amount"], 2)
+    return sorted(out.values(), key=lambda x: -x["amount"])
+
+
 async def _closing_snapshot(d: str) -> dict:
     """Hitung ringkasan tutup buku untuk satu tanggal. Semua angka dari database."""
     sales = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(20000)
@@ -1533,6 +1642,13 @@ async def _closing_snapshot(d: str) -> dict:
     opex, expense_total = fin["opex"], fin["expense_total"]
     income_total, bayar_piutang = fin["cash_in"], fin["bayar_piutang_masuk"]
     exp_by_cat = {x["category"]: x["amount"] for x in fin["expenses_by_category"]}
+
+    # Rincian pelunasan piutang & hutang PER METODE (permintaan owner: mau tahu
+    # uang yang masuk/keluar itu tunai, transfer, QRIS, debit, atau e-wallet).
+    piutang_by_method = _group_by_method(
+        [x for x in incomes if x.get("category") == "Pembayaran Piutang"])
+    hutang_by_method = _group_by_method(
+        [x for x in expenses if x.get("category") == "Pembayaran Hutang"])
 
     purchases = await db.purchases.find({"date": d}).to_list(5000)
     beli_modal = sum(float(p.get("total_modal", 0) or 0) for p in purchases)
@@ -1588,6 +1704,8 @@ async def _closing_snapshot(d: str) -> dict:
         "kas_dari_penjualan": round(kas_masuk_jual, 2),
         "piutang_baru": round(piutang_baru, 2),
         "bayar_piutang_masuk": round(bayar_piutang, 2),
+        "piutang_by_method": piutang_by_method,
+        "hutang_by_method": hutang_by_method,
         "kas_masuk_total": round(kas_masuk_jual + bayar_piutang, 2),
         "income_total": round(income_total, 2),
         "expense_total": round(expense_total, 2),
@@ -1883,13 +2001,20 @@ async def realtime_status(user: dict = Depends(get_current_user)):
 
 # ------------------------- File upload / serving -------------------------
 @api.post("/upload")
-async def upload_file(file: UploadFile = File(...), user: dict = Depends(require_roles("owner", "admin"))):
+async def upload_file(file: UploadFile = File(...), folder: str = Form("products"),
+                     user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
     if ext not in MIME_TYPES:
         raise HTTPException(400, "Format gambar tidak didukung (jpg, png, webp, gif)")
+    # Kasir hanya boleh mengunggah bukti pengeluaran, bukan mengganti foto produk.
+    folder = folder if folder in ("products", "proofs") else "products"
+    if user["role"] == "kasir":
+        folder = "proofs"
     fid = new_id()
-    path = f"{APP_NAME}/products/{fid}.{ext}"
+    path = f"{APP_NAME}/{folder}/{fid}.{ext}"
     data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "Ukuran gambar maksimal 10 MB")
     ct = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
     try:
         result = put_object(path, data, ct)
@@ -1898,6 +2023,7 @@ async def upload_file(file: UploadFile = File(...), user: dict = Depends(require
         raise HTTPException(502, "Gagal mengunggah gambar ke penyimpanan")
     await db.files.insert_one({"id": fid, "storage_path": result["path"], "content_type": ct,
                                "original_filename": file.filename, "size": result.get("size", len(data)),
+                               "folder": folder, "uploaded_by": user["name"],
                                "is_deleted": False, "created_at": iso_now()})
     return {"id": fid, "url": f"/api/files/{fid}"}
 

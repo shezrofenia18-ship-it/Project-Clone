@@ -485,11 +485,30 @@ def _dc_volume(data, W):
     return [Paragraph("B. Volume Terjual & Uang Masuk", S_SEC), t]
 
 
+def _dc_debt_methods(data, W):
+    """Pelunasan piutang & hutang per metode bayar (tunai/transfer/QRIS/dll)."""
+    rec = data.get("piutang_by_method") or []
+    pay = data.get("hutang_by_method") or []
+    if not rec and not pay:
+        return []
+    rows = [["Jenis", "Metode", "Jumlah", "Nilai"]]
+    for m in rec:
+        rows.append(["Piutang masuk", PAYMENT_LABELS.get(m.get("method"), m.get("method", "-")),
+                     num(m.get("count")) + "x", rp(m.get("amount"))])
+    for m in pay:
+        rows.append(["Hutang dibayar", PAYMENT_LABELS.get(m.get("method"), m.get("method", "-")),
+                     num(m.get("count")) + "x", rp(m.get("amount"))])
+    t = Table(rows, colWidths=[W * 0.28, W * 0.24, W * 0.16, W * 0.32])
+    t.setStyle(_table_style(4))
+    return [Spacer(1, 5 * mm),
+            Paragraph("C2. Pelunasan Piutang & Hutang per Metode Bayar", S_SEC), t]
+
+
 def _dc_methods(data, W):
     """C. Rincian per metode pembayaran (dilewati bila tidak ada transaksi)."""
     methods = data.get("by_method") or []
     if not methods:
-        return []
+        return _dc_debt_methods(data, W)
     rows = [["Metode", "Transaksi", "Nilai Penjualan", "Uang Diterima"]]
     for m in methods:
         rows.append([PAYMENT_LABELS.get(m.get("method"), m.get("method", "-")),
@@ -502,7 +521,8 @@ def _dc_methods(data, W):
     st.add("FONTNAME", (0, len(rows) - 1), (-1, len(rows) - 1), "Helvetica-Bold")
     st.add("LINEABOVE", (0, len(rows) - 1), (-1, len(rows) - 1), 0.9, INK)
     t.setStyle(st)
-    return [Paragraph("C. Rincian per Metode Pembayaran", S_SEC), t]
+    return ([Paragraph("C. Rincian per Metode Pembayaran", S_SEC), t]
+            + _dc_debt_methods(data, W))
 
 
 def _dc_products(data, W):

@@ -167,5 +167,62 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - `memory/test_credentials.md` dibuat ulang (5 akun: 2 owner, 1 admin, 2 kasir).
 - CATATAN KEAMANAN: user kembali menempel GitHub PAT di chat → PAT tersebut harus DI-REVOKE.
 
+## Perubahan sesi #4 (30 Agu 2026) — 5 permintaan owner
+
+### 1. Jual per ekor memotong stok KG (perhitungan jadi terukur)
+- MASALAH: pembelian menambah stok ekor DAN kg, tapi `create_sale` hanya mengurangi `stock_ekor`
+  (`d_kg = -qty if unit == "kg" else 0`). Stok kg ayam utuh tidak pernah berkurang.
+- SEKARANG: jual 1 ekor -> `stock_ekor -1` DAN `stock_kg -= berat rata-rata/ekor`. Berat yang dipakai
+  DISIMPAN di baris penjualan (`items[].weight_kg`, `items[].avg_weight_used`) supaya pembatalan
+  mengembalikan angka yang sama walau berat rata-rata sudah berubah karena pembelian baru.
+- Dokumen penjualan: `total_weight` = item per-kg + konversi item per-ekor, plus
+  `total_weight_kg_unit` & `total_weight_ekor` untuk penelusuran. Transaksi LAMA tidak berubah
+  (fallback `weight_kg` = qty untuk unit kg, 0 untuk unit ekor).
+- Berat rata-rata/ekor tetap KUMULATIF seluruh pembelian (keputusan owner) + override manual.
+- Form Pembelian kini menampilkan hasil hitungnya langsung: "Berat 1 ekor kiriman ini: 2 kg/ekor"
+  (2 ekor / 4 kg) beserta baris ringkasan "Berat rata-rata/ekor kiriman ini".
+
+### 2. Ayam utuh HANYA dijual per ekor
+- `is_whole_chicken(p)` = "ekor" ada di `p.units` -> Ayam Broiler, Kampung, Pejantan.
+- POS: `posUnits()` memangkas pilihan jadi ["ekor"] sehingga tombol "Per Kg" hilang untuk SEMUA role.
+- Server ikut mengunci: jual unit "kg" untuk produk itu -> 400 "hanya bisa dijual per ekor".
+- TIDAK berubah: Fillet (kg), potongan & sampingan (kg + pcs).
+
+### 3. Keranjang POS di Tablet & HP (bug dilaporkan owner) — 2 bug ditemukan
+- BUG A (tata letak): wadah tinggi tetap + kolom produk `flex-1` mendorong keranjang keluar layar di
+  bawah 1024px (termasuk TABLET yang justru dipakai kasir). Diganti: bar tetap di bawah
+  (jumlah item + total + "Lihat Keranjang") yang membuka panel geser berisi keranjang lengkap.
+  Keranjang dirender HANYA SEKALI lewat `useIsDesktop()` supaya tidak ada elemen ganda di DOM.
+- BUG B (lebih halus, ditemukan saat pengujian): ada TIGA salinan
+  `@radix-ui/react-dismissable-layer` (1.1.7 dari react-dialog; 1.1.19 dari cmdk & vaul). Karena
+  tidak berbagi React context, `pointer-events: none` yang dipasang di `<body>` saat dialog terbuka
+  TIDAK selalu dibersihkan saat dialog ditutup -> sentuhan berikutnya di layar terabaikan TANPA
+  error apa pun (tombol terasa "mati"). Diperbaiki dengan `hooks/usePointerEventsGuard.js`
+  (MutationObserver pada style `<body>` + cek berkala 250ms, hanya membersihkan bila memang tidak
+  ada lapisan Radix yang terbuka), dipasang sekali di `App.js` sehingga melindungi SEMUA dialog.
+  Bar bawah juga sudah menghormati `env(safe-area-inset-bottom)` untuk HP berponi.
+
+### 4. Metode pembayaran piutang & hutang
+- `PayBody.method` (cash/transfer/qris/debit/ewallet, default cash; lain -> 400). Tersimpan di
+  dokumen income "Pembayaran Piutang" / expense "Pembayaran Hutang", array `payments`, dan
+  `last_method` pada tagihan. Rumus keuangan (finance.py) TIDAK diubah.
+- UI: komponen `PayMethodPicker` (tombol besar berikon, nyaman di tablet), kolom "Metode" di tabel
+  Piutang & Hutang, bagian baru "Pelunasan Piutang & Hutang per Metode Bayar" di Tutup Buku dan
+  bagian "C2" di PDF tutup buku.
+
+### 5. Foto bukti pengeluaran + "Salah Potong"
+- `POST /api/upload` kini menerima role kasir juga, dengan Form field `folder`
+  ("products"/"proofs"); role kasir DIPAKSA ke "proofs". Batas 10 MB.
+- `ExpenseBody.proof_file_id` & `proof_url` (opsional). UI: input `capture="environment"`
+  (langsung kamera di HP), pratinjau, tombol hapus foto, kolom "Bukti" berisi thumbnail yang bila
+  diklik membuka gambar penuh.
+- Penyesuaian stok: pilihan "Ayam Mati" diganti "Salah Potong" (`salah_potong`). Whitelist
+  `ADJUST_TYPES` di server; nilai "mati" dipertahankan agar riwayat lama tetap terbaca.
+
+### Catatan pemeliharaan
+- `backend/cleanup_test_data.py`: pembersih artefak data uji. Memulihkan stok dari jumlah delta
+  `stock_movements` (bukan angka hafalan), membatalkan pembayaran uji pada tagihan lama, dan
+  menghitung ulang akumulator berat/ekor dari pembelian yang tersisa. Punya mode simulasi.
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.
