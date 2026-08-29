@@ -135,38 +135,47 @@ async def log_audit(user: dict, action: str, entity: str, entity_id: str, before
     })
 
 
-async def record_movement(product_id, product_name, mtype, qty_ekor, qty_kg,
-                          before_ekor, before_kg, after_ekor, after_kg, user, ref="",
-                          qty_pcs=0, before_pcs=0, after_pcs=0):
+async def record_movement(product: dict, mtype: str, delta: dict, before: dict, after: dict,
+                          user: str, ref: str = ""):
+    """Catat satu pergerakan stok.
+
+    `delta`/`before`/`after` masing-masing berisi kunci "ekor", "kg", "pcs" —
+    dulu fungsi ini menerima 14 argumen terpisah yang mudah tertukar urutannya.
+    """
     await db.stock_movements.insert_one({
-        "id": new_id(), "product_id": product_id, "product_name": product_name, "type": mtype,
-        "qty_ekor": qty_ekor, "qty_kg": qty_kg, "qty_pcs": qty_pcs,
-        "before_ekor": before_ekor, "before_kg": before_kg, "before_pcs": before_pcs,
-        "after_ekor": after_ekor, "after_kg": after_kg, "after_pcs": after_pcs,
+        "id": new_id(), "product_id": product["id"], "product_name": product["name"], "type": mtype,
+        "qty_ekor": delta["ekor"], "qty_kg": delta["kg"], "qty_pcs": delta["pcs"],
+        "before_ekor": before["ekor"], "before_kg": before["kg"], "before_pcs": before["pcs"],
+        "after_ekor": after["ekor"], "after_kg": after["kg"], "after_pcs": after["pcs"],
         "user": user, "ref": ref, "date": today_str(), "created_at": iso_now(),
     })
 
 
-async def apply_stock(product, delta_ekor, delta_kg, mtype, user, ref, allow_negative=False, delta_pcs=0):
-    before_ekor = float(product.get("stock_ekor", 0) or 0)
-    before_kg = float(product.get("stock_kg", 0) or 0)
-    before_pcs = float(product.get("stock_pcs", 0) or 0)
-    after_ekor = round(before_ekor + delta_ekor, 3)
-    after_kg = round(before_kg + delta_kg, 3)
-    after_pcs = round(before_pcs + delta_pcs, 3)
-    if not allow_negative and (after_kg < -0.0001 or after_ekor < -0.0001 or after_pcs < -0.0001):
-        raise HTTPException(status_code=400, detail=f"STOK TIDAK MENCUKUPI untuk {product['name']}")
-    await db.products.update_one({"id": product["id"]}, {"$set": {"stock_ekor": after_ekor, "stock_kg": after_kg, "stock_pcs": after_pcs}})
-    await record_movement(product["id"], product["name"], mtype, delta_ekor, delta_kg,
-                          before_ekor, before_kg, after_ekor, after_kg, user, ref,
-                          qty_pcs=delta_pcs, before_pcs=before_pcs, after_pcs=after_pcs)
-    product["stock_ekor"] = after_ekor
-    product["stock_kg"] = after_kg
-    product["stock_pcs"] = after_pcs
+async def _warn_low_stock(product: dict, after_kg: float, delta_kg: float, user: str):
+    """Peringatan stok menipis (hanya saat stok berkurang, bukan saat ditambah)."""
     min_kg = float(product.get("min_stock_kg", 0) or 0)
-    if min_kg > 0 and after_kg <= min_kg and delta_kg < 0:
-        await add_activity("stock_low", "Stok Menipis", f"Stok {product['name']} tersisa {after_kg} kg", 0, user)
-        await add_notification("stock_low", "Stok Menipis", f"Stok {product['name']} tersisa {after_kg} kg", "warning")
+    if not (min_kg > 0 and after_kg <= min_kg and delta_kg < 0):
+        return
+    pesan = f"Stok {product['name']} tersisa {after_kg} kg"
+    await add_activity("stock_low", "Stok Menipis", pesan, 0, user)
+    await add_notification("stock_low", "Stok Menipis", pesan, "warning")
+
+
+async def apply_stock(product, delta_ekor, delta_kg, mtype, user, ref, allow_negative=False, delta_pcs=0):
+    before = {"ekor": float(product.get("stock_ekor", 0) or 0),
+              "kg": float(product.get("stock_kg", 0) or 0),
+              "pcs": float(product.get("stock_pcs", 0) or 0)}
+    delta = {"ekor": delta_ekor, "kg": delta_kg, "pcs": delta_pcs}
+    after = {k: round(before[k] + delta[k], 3) for k in before}
+    if not allow_negative and any(v < -0.0001 for v in after.values()):
+        raise HTTPException(status_code=400, detail=f"STOK TIDAK MENCUKUPI untuk {product['name']}")
+    await db.products.update_one({"id": product["id"]}, {"$set": {
+        "stock_ekor": after["ekor"], "stock_kg": after["kg"], "stock_pcs": after["pcs"]}})
+    await record_movement(product, mtype, delta, before, after, user, ref)
+    product["stock_ekor"] = after["ekor"]
+    product["stock_kg"] = after["kg"]
+    product["stock_pcs"] = after["pcs"]
+    await _warn_low_stock(product, after["kg"], delta_kg, user)
     # POS & halaman stok langsung ikut berubah tanpa menunggu polling.
     await rt_emit(["stock", "products"], {"product_id": product["id"]})
     return product
@@ -616,70 +625,105 @@ async def list_purchases(user: dict = Depends(require_roles("owner", "admin"))):
     return [clean(x) for x in p]
 
 
-async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
-    supplier = await db.suppliers.find_one({"id": body.supplier_id})
-    if not supplier:
-        raise HTTPException(404, "Supplier tidak ditemukan")
-    items_out = []
-    total_bird_value = 0.0
-    total_weight_all = 0.0
-    total_ekor_all = 0.0
+async def _purchase_lines(body: "PurchaseBody"):
+    """Susun baris pembelian + totalnya, sekaligus memastikan produknya ada."""
+    items_out, products = [], {}
+    bird_value = weight_all = ekor_all = 0.0
     for it in body.items:
         product = await db.products.find_one({"id": it.product_id})
         if not product:
             raise HTTPException(404, "Produk tidak ditemukan")
-        computed_kg = round(it.total_price / it.total_weight, 2) if it.total_weight else 0
-        avg_w = round(it.total_weight / it.ekor, 3) if it.ekor else 0
-        total_bird_value += it.total_price
-        total_weight_all += it.total_weight
-        total_ekor_all += it.ekor
+        products[it.product_id] = product
+        bird_value += it.total_price
+        weight_all += it.total_weight
+        ekor_all += it.ekor
         items_out.append({"product_id": it.product_id, "name": product["name"], "ekor": it.ekor,
-                          "total_weight": it.total_weight, "avg_weight": avg_w,
-                          "buy_price_kg": computed_kg, "subtotal": round(it.total_price, 2)})
-    total_modal = round(total_bird_value + body.transport_cost + body.other_cost, 2)
-    eff_cost_kg = round(total_modal / total_weight_all, 2) if total_weight_all else 0
-    eff_cost_ekor = round(total_modal / total_ekor_all, 2) if total_ekor_all else 0
-    payable_amt = round(total_modal - body.paid, 2)
-    doc = {
+                          "total_weight": it.total_weight,
+                          "avg_weight": round(it.total_weight / it.ekor, 3) if it.ekor else 0,
+                          "buy_price_kg": round(it.total_price / it.total_weight, 2) if it.total_weight else 0,
+                          "subtotal": round(it.total_price, 2)})
+    return items_out, products, bird_value, weight_all, ekor_all
+
+
+def _purchase_totals(body: "PurchaseBody", bird_value: float, weight_all: float, ekor_all: float) -> dict:
+    """Modal total (ayam + transport + biaya lain) dan biaya efektifnya."""
+    total_modal = round(bird_value + body.transport_cost + body.other_cost, 2)
+    return {
+        "total_modal": total_modal,
+        "eff_cost_kg": round(total_modal / weight_all, 2) if weight_all else 0,
+        "eff_cost_ekor": round(total_modal / ekor_all, 2) if ekor_all else 0,
+        "payable": round(total_modal - body.paid, 2),
+    }
+
+
+def _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_all, tot, created_by) -> dict:
+    payable_amt = tot["payable"]
+    return {
         "id": pid, "supplier_id": body.supplier_id, "supplier_name": supplier["name"],
         "date": body.date or today_str(), "items": items_out,
         "transport_cost": body.transport_cost, "other_cost": body.other_cost,
-        "total_bird_value": round(total_bird_value, 2), "total_weight": round(total_weight_all, 3),
-        "total_ekor": total_ekor_all,
-        "total_modal": total_modal, "effective_cost_kg": eff_cost_kg, "effective_cost_ekor": eff_cost_ekor,
+        "total_bird_value": round(bird_value, 2), "total_weight": round(weight_all, 3),
+        "total_ekor": ekor_all,
+        "total_modal": tot["total_modal"], "effective_cost_kg": tot["eff_cost_kg"],
+        "effective_cost_ekor": tot["eff_cost_ekor"],
         "paid": body.paid, "payable": max(0, payable_amt),
         "payment_status": "lunas" if payable_amt <= 0 else "kredit",
-        "notes": body.notes, "created_by": user["name"], "created_at": iso_now(),
+        "notes": body.notes, "created_by": created_by, "created_at": iso_now(),
     }
-    await db.purchases.insert_one(doc)
+
+
+async def _apply_purchase_to_stock(body, user, pid, supplier, products, bird_value, tot) -> dict:
+    """Tambah stok, perbarui harga beli & HPP/ekor tiap produk. Kembalikan harga terakhir supplier."""
     last_prices = supplier.get("last_prices", {}) or {}
     for it in body.items:
-        product = await db.products.find_one({"id": it.product_id})
+        product = products[it.product_id]
         await apply_stock(product, it.ekor, it.total_weight, "pembelian", user["name"], pid)
-        share = round(total_modal * (it.total_price / total_bird_value), 2) if total_bird_value else it.total_price
-        item_hpp_kg = round(share / it.total_weight, 2) if it.total_weight else eff_cost_kg
+        share = round(tot["total_modal"] * (it.total_price / bird_value), 2) if bird_value else it.total_price
+        item_hpp_kg = round(share / it.total_weight, 2) if it.total_weight else tot["eff_cost_kg"]
         item_buy_kg = round(it.total_price / it.total_weight, 2) if it.total_weight else 0
         await db.products.update_one({"id": it.product_id}, {"$set": {"buy_price_kg": item_buy_kg}})
         # Berat/ekor diakumulasi dari semua ayam masuk → HPP/ekor otomatis.
         await recompute_avg_weight(it.product_id, add_ekor=it.ekor,
                                    add_weight=it.total_weight, set_hpp_kg=item_hpp_kg)
         last_prices[product["category"]] = item_buy_kg
+    return last_prices
+
+
+async def _record_purchase_ledger(body, user, pid, supplier, doc, tot, last_prices):
+    """Sisi keuangan pembelian: saldo supplier, tagihan hutang, dan pengeluaran modal."""
+    payable_amt = tot["payable"]
     await db.suppliers.update_one({"id": body.supplier_id}, {
         "$set": {"last_prices": last_prices},
-        "$inc": {"total_purchase": total_modal, "payable": max(0, payable_amt)}})
+        "$inc": {"total_purchase": tot["total_modal"], "payable": max(0, payable_amt)}})
     if payable_amt > 0:
         await db.payables.insert_one({
             "id": new_id(), "supplier_id": body.supplier_id, "supplier_name": supplier["name"],
-            "purchase_id": pid, "amount": total_modal, "paid": body.paid, "remaining": payable_amt,
-            "due_date": body.due_date, "status": "belum_lunas", "date": doc["date"], "created_at": iso_now()})
+            "purchase_id": pid, "amount": tot["total_modal"], "paid": body.paid,
+            "remaining": payable_amt, "due_date": body.due_date, "status": "belum_lunas",
+            "date": doc["date"], "created_at": iso_now()})
     await db.expenses.insert_one({
-        "id": new_id(), "date": doc["date"], "category": "Pembelian Ayam", "amount": total_modal,
+        "id": new_id(), "date": doc["date"], "category": "Pembelian Ayam",
+        "amount": tot["total_modal"],
         # cash_amount = uang yang benar-benar keluar saat ini (sisanya jadi hutang,
         # dicatat sebagai kas keluar saat dilunasi) -> kas tidak dihitung dobel.
         "cash_amount": round(float(body.paid or 0), 2),
         "description": f"Pembelian dari {supplier['name']}", "ref": pid,
         "created_by": user["name"], "created_at": iso_now()})
-    return doc, total_weight_all, total_modal
+
+
+async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
+    """Simpan satu pembelian: baris & total -> dokumen -> stok -> keuangan."""
+    supplier = await db.suppliers.find_one({"id": body.supplier_id})
+    if not supplier:
+        raise HTTPException(404, "Supplier tidak ditemukan")
+    items_out, products, bird_value, weight_all, ekor_all = await _purchase_lines(body)
+    tot = _purchase_totals(body, bird_value, weight_all, ekor_all)
+    doc = _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_all,
+                        tot, user["name"])
+    await db.purchases.insert_one(doc)
+    last_prices = await _apply_purchase_to_stock(body, user, pid, supplier, products, bird_value, tot)
+    await _record_purchase_ledger(body, user, pid, supplier, doc, tot, last_prices)
+    return doc, weight_all, tot["total_modal"]
 
 
 async def _reverse_purchase(purchase: dict):

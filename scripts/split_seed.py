@@ -1,98 +1,15 @@
-"""Seed realistic, interconnected demo data for Berkah Ayam Mili."""
-import uuid
-import random
-from datetime import datetime, timedelta, timezone
+"""Skrip sekali-jalan: pecah seed_demo() jadi fungsi per jenis data.
 
-JKT = timezone(timedelta(hours=7))
+URUTAN pemanggilan random DIJAGA SAMA PERSIS, karena seed_demo memakai
+random.seed(42) sehingga data demo harus tetap identik (dibuktikan dengan
+seed_fingerprint.py sebelum/sesudah).
+"""
 
+import ast
 
-def _id():
-    return str(uuid.uuid4())
+PATH = "/app/backend/seed.py"
 
-
-def _now():
-    return datetime.now(JKT)
-
-
-PRODUCTS = [
-    # name, category, units, buy, hpp_kg, price_kg, price_ekor, stock_kg, stock_ekor, min_kg, byproduct
-    ("Ayam Broiler", "broiler", ["kg", "ekor"], 24000, 28000, 34000, 55000, 225.5, 120, 30, False,
-     "https://images.unsplash.com/photo-1587593810167-a84920ea0781?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Ayam Kampung", "kampung", ["kg", "ekor"], 45000, 52000, 62000, 75000, 52.8, 40, 10, False,
-     "https://images.unsplash.com/photo-1672787153720-e85fe802fd9f?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Ayam Pejantan", "pejantan", ["kg", "ekor"], 30000, 33000, 40000, 48000, 95.4, 80, 15, False,
-     "https://images.unsplash.com/photo-1672787153720-e85fe802fd9f?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Ayam Fillet", "fillet", ["kg"], 0, 42500, 55000, 0, 25.7, 0, 8, False,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Dada Fillet", "fillet", ["kg"], 0, 43000, 58000, 0, 12.0, 0, 5, False,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Ceker Ayam", "sampingan", ["kg"], 0, 12000, 20000, 0, 8.5, 0, 3, True,
-     "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Kepala Ayam", "sampingan", ["kg"], 0, 8000, 15000, 0, 5.2, 0, 2, True,
-     "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Ati Ampela", "sampingan", ["kg"], 0, 18000, 28000, 0, 6.0, 0, 2, True,
-     "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Kulit Ayam", "sampingan", ["kg"], 0, 10000, 18000, 0, 4.0, 0, 2, True,
-     "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Tulang Ayam", "sampingan", ["kg"], 0, 5000, 10000, 0, 3.0, 0, 1, True,
-     "https://images.unsplash.com/photo-1656412665049-52e33e42b9a6?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Paha Ayam", "sampingan", ["kg"], 0, 22000, 32000, 0, 10.0, 0, 3, True,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-]
-
-# POTONG PARTS: bagian hasil "Produksi Potong" yang bisa dijual per kg ATAU per pcs.
-# Ditambahkan idempoten lewat ensure_potong_parts() supaya database yang sudah ada
-# (dan sudah pernah di-seed) tetap mendapatkan produk-produk ini.
-POTONG_PARTS = [
-    # name, hpp_kg, price_kg, hpp_pcs, price_pcs, min_stock_kg, image
-    ("Sayap Ayam", 30000, 40000, 4000, 6000, 3,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Dada Ayam", 32000, 42000, 9000, 13000, 3,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-    ("Paha Atas Ayam", 30000, 40000, 8000, 11000, 3,
-     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
-]
-
-
-async def ensure_potong_parts(db):
-    """Pastikan bagian potongan (Sayap, Dada, Paha Atas) tersedia sebagai produk.
-
-    Dipanggil setiap startup dan aman diulang: produk yang namanya sudah ada
-    dilewati, harga/stok yang sudah diubah owner TIDAK ditimpa.
-    """
-    added = []
-    for (name, hpp_kg, price_kg, hpp_pcs, price_pcs, min_kg, img) in POTONG_PARTS:
-        if await db.products.find_one({"name": name}):
-            continue
-        await db.products.insert_one({
-            "id": _id(), "name": name, "category": "potongan", "units": ["kg", "pcs"],
-            "buy_price_kg": 0, "hpp_kg": hpp_kg, "hpp_ekor": 0, "hpp_pcs": hpp_pcs,
-            "price_kg": price_kg, "price_ekor": 0, "price_pcs": price_pcs,
-            "stock_kg": 0, "stock_ekor": 0, "stock_pcs": 0,
-            "min_stock_kg": min_kg, "min_stock_ekor": 0, "min_stock_pcs": 0,
-            "image_url": img, "is_byproduct": False, "active": True,
-            "created_at": _now().isoformat(),
-        })
-        added.append(name)
-    return added
-
-
-CUSTOMERS = [
-    ("Warung Bu Sri", "081234567001", "Jl. Melati No.1", "warung"),
-    ("RM Sederhana", "081234567002", "Jl. Merdeka No.5", "rumah_makan"),
-    ("Reseller Pak Joko", "081234567003", "Pasar Induk Blok C", "reseller"),
-    ("Restoran Nikmat", "081234567004", "Jl. Sudirman No.10", "restoran"),
-    ("Ibu Rina", "081234567005", "Perum Griya Asri", "rumah_tangga"),
-]
-
-SUPPLIERS = [
-    ("Peternakan Jaya", "082111000001", "Blitar", ["broiler", "pejantan"]),
-    ("CV Ayam Makmur", "082111000002", "Kediri", ["broiler", "kampung"]),
-    ("Supplier Barokah", "082111000003", "Malang", ["kampung", "pejantan"]),
-]
-
-
-PCS_PRICE = {"Ceker Ayam": 2000, "Kepala Ayam": 3000, "Ati Ampela": 4000,
+NEW = '''PCS_PRICE = {"Ceker Ayam": 2000, "Kepala Ayam": 3000, "Ati Ampela": 4000,
              "Kulit Ayam": 3000, "Tulang Ayam": 2000, "Paha Ayam": 8000}
 PCS_STOCK = {"Ceker Ayam": 120, "Kepala Ayam": 80, "Ati Ampela": 60,
              "Kulit Ayam": 40, "Tulang Ayam": 30, "Paha Ayam": 90}
@@ -329,3 +246,19 @@ async def seed_demo(db):
     await _seed_purchase(db, prod_ids)
     await _seed_production(db, prod_ids)
     await _seed_settings(db)
+'''
+
+
+def main():
+    src = open(PATH).read()
+    tree = ast.parse(src)
+    node = next(n for n in tree.body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "seed_demo")
+    lines = src.split("\n")
+    out = lines[:node.lineno - 1] + NEW.rstrip("\n").split("\n") + lines[node.end_lineno:]
+    open(PATH, "w").write("\n".join(out))
+    print("seed.py diperbarui")
+
+
+if __name__ == "__main__":
+    main()

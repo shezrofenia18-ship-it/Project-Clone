@@ -1,110 +1,162 @@
-import { useCallback, useEffect, useState } from "react";
-import api from "@/lib/api";
-import { usePoll, useRealtimeReload } from "@/lib/hooks";
+// Dashboard Owner: merangkai kartu-kartu dari components/dashboard.
+// Bagian yang punya logika sendiri (grafik tren, arus kas, target) sudah dipindah
+// ke komponennya masing-masing supaya halaman ini tetap enak dibaca.
+import { usePoll } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import Stat from "@/components/dashboard/Stat";
+import CashflowCard from "@/components/dashboard/CashflowCard";
+import TargetCard from "@/components/dashboard/TargetCard";
+import SalesTrendCard from "@/components/dashboard/SalesTrendCard";
+import { TICK_SM, TOOLTIP_STYLE, BAR_MARGIN, BAR_RADIUS, jtFmt } from "@/components/dashboard/chartTheme";
 import {
   formatRupiah, formatRupiahShort, formatWeight, formatNumber, formatPct,
   formatTime, CATEGORY_LABELS, PAYMENT_LABELS,
 } from "@/lib/format";
 import {
-  ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell,
-  ComposedChart, Line, Legend,
+  ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Cell,
 } from "recharts";
 import {
-  Wallet, TrendingUp, Scale, Percent, Target as TargetIcon, Boxes,
-  ShoppingCart, Truck, Scissors, Factory, AlertTriangle, CreditCard, Package,
-  ArrowUpRight, ArrowDownRight, Banknote, Loader2,
+  Wallet, TrendingUp, Scale, Percent, Boxes, ShoppingCart, Truck, Scissors,
+  Factory, AlertTriangle, CreditCard, Package,
 } from "lucide-react";
 
 const ACT_ICON = { sale: ShoppingCart, purchase: Truck, slaughter: Scissors, production: Factory, stock_low: AlertTriangle, cancel: AlertTriangle, payment: CreditCard, adjust: Boxes };
 const ACT_COLOR = { sale: "text-success", purchase: "text-chart-4", slaughter: "text-chart-5", production: "text-chart-5", stock_low: "text-warning", cancel: "text-destructive", payment: "text-secondary", adjust: "text-muted-foreground" };
 
-function Stat({ icon: Icon, label, value, sub, tone = "primary", testid }) {
-  const tones = { primary: "bg-primary/10 text-primary", success: "bg-success/10 text-success", warning: "bg-warning/20 text-warning", chart4: "bg-chart-4/10 text-chart-4" };
+function ProductPerfCard({ perf }) {
   return (
-    <Card className="p-5 bam-card-hover" data-testid={testid}>
-      <div className="flex items-start justify-between">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-          <p className="font-head font-extrabold text-2xl mt-1.5 tabular truncate">{value}</p>
-          {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
-        </div>
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${tones[tone]}`}>
-          <Icon className="w-5 h-5" />
-        </div>
+    <Card className="p-5 lg:col-span-2" data-testid="product-perf">
+      <h3 className="font-head font-bold mb-4">Performa Produk</h3>
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={perf.map((p) => ({ ...p, label: CATEGORY_LABELS[p.category] || p.category }))} margin={BAR_MARGIN}>
+          <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+          <XAxis dataKey="label" tick={TICK_SM} stroke="hsl(var(--muted-foreground))" />
+          <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
+          <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
+          <Bar dataKey="penjualan" name="Penjualan" radius={BAR_RADIUS}>
+            {perf.map((p, i) => <Cell key={p.category} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+        {perf.map((p) => (
+          <div key={p.category} className="rounded-lg border border-border p-2.5">
+            <p className="text-xs font-semibold truncate">{CATEGORY_LABELS[p.category] || p.category}</p>
+            <p className="text-sm font-bold tabular">{formatRupiahShort(p.penjualan)}</p>
+            <p className="text-[11px] text-success">Margin {formatPct(p.margin)}</p>
+            <p className="text-[10px] text-muted-foreground tabular truncate">
+              {p.weight ? formatWeight(p.weight, 0) : ""}{p.ekor ? ` · ${formatNumber(p.ekor)} ekor` : ""}{p.pcs ? ` · ${formatNumber(p.pcs)} pcs` : ""}
+            </p>
+          </div>
+        ))}
       </div>
     </Card>
   );
 }
 
-const TICK_SM = { fontSize: 11 };
-const TICK_MD = { fontSize: 12 };
-const TOOLTIP_STYLE = { borderRadius: 12, border: "1px solid hsl(var(--border))" };
-const AREA_MARGIN = { left: -10, right: 8 };
-const BAR_MARGIN = { left: -10 };
-const BAR_RADIUS = [6, 6, 0, 0];
-const jtFmt = (v) => `${v / 1000000}jt`;
-const shortFmt = (v) => formatRupiahShort(v).replace("Rp ", "");
-// Rentang bulan yang bisa dipilih owner pada grafik tren.
-const MONTH_OPTIONS = [3, 6, 12, 24];
-
-// Ringkasan kecil untuk tren bulanan (pertumbuhan, bulan terbaik, rata-rata).
-function TrendBit({ label, value, tone = "", note }) {
+function ActivityFeed({ activities }) {
   return (
-    <div className="rounded-lg border border-border p-2.5 min-w-0">
-      <p className="text-[11px] text-muted-foreground truncate">{label}</p>
-      <p className={`font-bold text-sm tabular truncate ${tone}`}>{value}</p>
-      {note && <p className="text-[10px] text-muted-foreground truncate">{note}</p>}
-    </div>
+    <Card className="p-5" data-testid="activity-feed">
+      <h3 className="font-head font-bold mb-4">Aktivitas Toko</h3>
+      <div className="space-y-3 max-h-[360px] overflow-y-auto no-scrollbar">
+        {activities.length === 0 && <p className="text-sm text-muted-foreground">Belum ada aktivitas.</p>}
+        {activities.map((a) => {
+          const Icon = ACT_ICON[a.type] || ShoppingCart;
+          return (
+            <div key={a.id} className="flex gap-3">
+              <div className={`w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 ${ACT_COLOR[a.type] || ""}`}>
+                <Icon className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">{a.title}</p>
+                <p className="text-xs text-muted-foreground truncate">{a.message}</p>
+              </div>
+              <div className="text-right shrink-0">
+                {a.amount > 0 && <p className="text-sm font-bold tabular">{formatRupiahShort(a.amount)}</p>}
+                <p className="text-[10px] text-muted-foreground">{formatTime(a.created_at)}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 
-function GrowthBadge({ value, testid }) {
-  if (value === null || value === undefined) {
-    return <Badge variant="secondary" className="text-[10px]" data-testid={testid}>Belum ada pembanding</Badge>;
-  }
-  const up = value >= 0;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
+function RecentSalesCard({ sales }) {
   return (
-    <Badge data-testid={testid}
-      className={`text-[10px] gap-0.5 ${up ? "bg-success/15 text-success hover:bg-success/15" : "bg-destructive/15 text-destructive hover:bg-destructive/15"}`}>
-      <Icon className="w-3 h-3" />{up ? "+" : ""}{formatPct(value)}
-    </Badge>
+    <Card className="p-5 lg:col-span-2" data-testid="recent-sales">
+      <h3 className="font-head font-bold mb-4">Transaksi Terbaru</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted-foreground border-b border-border">
+              <th className="pb-2 font-semibold">Waktu</th><th className="pb-2 font-semibold">Kasir</th>
+              <th className="pb-2 font-semibold">Pelanggan</th><th className="pb-2 font-semibold">Bayar</th>
+              <th className="pb-2 font-semibold text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sales.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">Belum ada transaksi hari ini.</td></tr>}
+            {sales.map((s) => (
+              <tr key={s.id} className="border-b border-border/60 last:border-0">
+                <td className="py-2.5">{formatTime(s.created_at)}</td>
+                <td className="py-2.5">{s.cashier_name}</td>
+                <td className="py-2.5 text-muted-foreground">{s.customer_name}</td>
+                <td className="py-2.5"><Badge variant="secondary" className="text-[10px]">{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge></td>
+                <td className="py-2.5 text-right font-bold tabular">{formatRupiah(s.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function StockAndPrices({ critical, prices }) {
+  return (
+    <div className="space-y-4">
+      <Card className="p-5" data-testid="critical-stock">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle className="w-4 h-4 text-warning" />
+          <h3 className="font-head font-bold">Stok Kritis</h3>
+        </div>
+        {critical.length === 0 ? (
+          <p className="text-sm text-success">Semua stok aman.</p>
+        ) : (
+          <div className="space-y-2">
+            {critical.map((c) => (
+              <div key={c.name} className="flex items-center justify-between">
+                <span className="text-sm">{c.name}</span>
+                <Badge className="bg-warning text-warning-foreground">{formatWeight(c.stock_kg)}</Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+      <Card className="p-5" data-testid="price-list">
+        <div className="flex items-center gap-2 mb-3">
+          <Package className="w-4 h-4 text-primary" />
+          <h3 className="font-head font-bold">Harga Ayam Terkini</h3>
+        </div>
+        <div className="space-y-2">
+          {prices.map((p) => (
+            <div key={p.name} className="flex items-center justify-between text-sm">
+              <span className="truncate">{p.name}</span>
+              <span className="font-bold tabular">{formatRupiah(p.price_kg)}<span className="text-muted-foreground font-normal">/kg</span></span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
   );
 }
 
 export default function OwnerDashboard() {
   const { data: d } = usePoll("/dashboard", 8000, ["dashboard"]);
-  // Tren bulanan dimuat hanya saat owner menekan tombol "Bulanan" (hemat data).
-  const [range, setRange] = useState("7d");
-  const [months, setMonths] = useState(12);
-  const [monthly, setMonthly] = useState(null);
-  const [loadingMonthly, setLoadingMonthly] = useState(false);
-
-  const loadMonthly = useCallback(async (n) => {
-    setLoadingMonthly(true);
-    try {
-      const r = await api.get(`/dashboard/monthly?months=${n}`);
-      setMonthly(r.data);
-    } catch (e) {
-      if (process.env.NODE_ENV !== "production") console.error("tren bulanan gagal:", e);
-    } finally {
-      setLoadingMonthly(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (range === "bulanan") loadMonthly(months);
-  }, [range, months, loadMonthly]);
-
-  // Kalau ada transaksi baru, tren bulanan yang sedang dilihat ikut disegarkan.
-  const refreshMonthly = useCallback(() => {
-    if (range === "bulanan") loadMonthly(months);
-  }, [range, months, loadMonthly]);
-  useRealtimeReload(["dashboard"], refreshMonthly);
 
   if (!d) {
     return (
@@ -113,8 +165,6 @@ export default function OwnerDashboard() {
       </div>
     );
   }
-
-  const ach = d.target.achievement || 0;
 
   return (
     <div className="bam-fade">
@@ -127,275 +177,21 @@ export default function OwnerDashboard() {
         <Stat testid="stat-margin" icon={Percent} label="Margin" value={formatPct(d.margin)} sub={`Laba bersih usaha ${formatRupiahShort(d.net_profit)}`} tone="warning" />
       </div>
 
-      {/* Arus kas hari ini — di sinilah uang beli ayam & bayar hutang ikut dihitung,
-          supaya biaya ayam tidak dikurangi dua kali dari laba. */}
-      <Card className="p-4 mt-4" data-testid="cashflow-card">
-        <div className="flex items-center gap-2 mb-3">
-          <Banknote className="w-4 h-4 text-primary" />
-          <h3 className="font-head font-bold text-sm">Uang Masuk & Keluar Hari Ini</h3>
-        </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <div>
-            <p className="text-[11px] text-muted-foreground">Uang Masuk</p>
-            <p className="font-head font-bold text-lg tabular text-success" data-testid="cash-in">{formatRupiah(d.cash_in)}</p>
-            <p className="text-[10px] text-muted-foreground">Tunai jual {formatRupiahShort(d.kas_dari_penjualan)}</p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">Uang Keluar</p>
-            <p className="font-head font-bold text-lg tabular text-destructive" data-testid="cash-out">{formatRupiah(d.cash_out)}</p>
-            <p className="text-[10px] text-muted-foreground">Beli ayam & hutang {formatRupiahShort(d.modal_cash)}</p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">Uang Bersih (Kas)</p>
-            <p className={`font-head font-bold text-lg tabular ${d.net_cash < 0 ? "text-destructive" : "text-success"}`} data-testid="net-cash">{formatRupiah(d.net_cash)}</p>
-            <p className="text-[10px] text-muted-foreground">Masuk − keluar</p>
-          </div>
-          <div>
-            <p className="text-[11px] text-muted-foreground">Biaya Operasional</p>
-            <p className="font-head font-bold text-lg tabular" data-testid="opex">{formatRupiah(d.opex)}</p>
-            <p className="text-[10px] text-muted-foreground">Piutang baru {formatRupiahShort(d.piutang_baru)}</p>
-          </div>
-        </div>
-      </Card>
+      <CashflowCard d={d} />
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
-        {/* target */}
-        <Card className="p-5 lg:col-span-1" data-testid="target-card">
-          <div className="flex items-center gap-2 mb-4">
-            <TargetIcon className="w-4 h-4 text-primary" />
-            <h3 className="font-head font-bold">Target Hari Ini</h3>
-          </div>
-          {d.target.omzet ? (
-            <>
-              <div className="flex items-end justify-between mb-1">
-                <span className="text-sm text-muted-foreground">Omzet</span>
-                <span className="font-bold tabular">{formatPct(ach)}</span>
-              </div>
-              <Progress value={Math.min(ach, 100)} className="h-2.5" />
-              <p className="text-xs text-muted-foreground mt-1.5">{formatRupiah(d.omzet)} / {formatRupiah(d.target.omzet)}</p>
-              <div className="grid grid-cols-3 gap-2 mt-5 text-center">
-                <div><p className="text-[11px] text-muted-foreground">Berat</p><p className="font-bold text-sm tabular">{formatWeight(d.weight, 0)}</p><p className="text-[10px] text-muted-foreground">/{formatNumber(d.target.weight)}kg</p></div>
-                <div><p className="text-[11px] text-muted-foreground">Ekor</p><p className="font-bold text-sm tabular">{formatNumber(d.ekor)}</p><p className="text-[10px] text-muted-foreground">/{formatNumber(d.target.ekor)}</p></div>
-                <div><p className="text-[11px] text-muted-foreground">Laba</p><p className="font-bold text-sm tabular">{formatRupiahShort(d.laba)}</p><p className="text-[10px] text-muted-foreground">/{formatRupiahShort(d.target.laba)}</p></div>
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground py-6 text-center">Target belum diatur untuk hari ini.</p>
-          )}
-        </Card>
-
-        {/* sales chart: 7 hari (harian) atau 12 bulan (tren jangka panjang) */}
-        <Card className="p-5 lg:col-span-2" data-testid="sales-chart">
-          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-            <h3 className="font-head font-bold">
-              {range === "7d" ? "Grafik Penjualan 7 Hari" : `Tren ${months} Bulan`}
-            </h3>
-            <div className="flex items-center gap-2">
-              {range === "bulanan" && (
-                <select data-testid="months-select" value={months} aria-label="Jumlah bulan"
-                  onChange={(e) => setMonths(Number(e.target.value))}
-                  className="h-8 rounded-lg border border-border bg-background px-2 text-xs font-semibold">
-                  {MONTH_OPTIONS.map((m) => <option key={m} value={m}>{m} bulan</option>)}
-                </select>
-              )}
-              <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5" data-testid="chart-range-toggle">
-                <button type="button" data-testid="range-7d" onClick={() => setRange("7d")}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${range === "7d" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-                  7 Hari
-                </button>
-                <button type="button" data-testid="range-12m" onClick={() => setRange("bulanan")}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${range === "bulanan" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-                  Bulanan
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {range === "7d" ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={d.chart} margin={AREA_MARGIN}>
-                <defs>
-                  <linearGradient id="gOmzet" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                <XAxis dataKey="label" tick={TICK_MD} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
-                <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
-                <Area type="monotone" dataKey="omzet" name="Omzet" stroke="hsl(var(--primary))" strokeWidth={2.5} fill="url(#gOmzet)" />
-                <Area type="monotone" dataKey="laba" name="Laba" stroke="hsl(var(--success))" strokeWidth={2} fillOpacity={0} />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : !monthly ? (
-            <div className="h-[220px] flex items-center justify-center text-sm text-muted-foreground gap-2" data-testid="monthly-loading">
-              <Loader2 className="w-4 h-4 animate-spin" /> Memuat tren bulanan…
-            </div>
-          ) : (
-            <div data-testid="monthly-chart" className={loadingMonthly ? "opacity-60 transition-opacity" : "transition-opacity"}>
-              <ResponsiveContainer width="100%" height={230}>
-                <ComposedChart data={monthly.series} margin={AREA_MARGIN}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis dataKey="label" tick={TICK_SM} stroke="hsl(var(--muted-foreground))" interval={0} angle={-30} textAnchor="end" height={48} />
-                  <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={shortFmt} />
-                  <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="omzet" name="Omzet" fill="hsl(var(--primary))" radius={BAR_RADIUS} maxBarSize={26} />
-                  <Line type="monotone" dataKey="laba_kotor" name="Laba Kotor" stroke="hsl(var(--success))" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey="laba_bersih" name="Laba Bersih" stroke="hsl(var(--chart-4))" strokeWidth={2} strokeDasharray="5 3" dot={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-              <div className="flex items-center flex-wrap gap-2 mt-3 mb-2">
-                {monthly.summary.growth_omzet === null && monthly.summary.growth_laba_bersih === null ? (
-                  <span className="text-xs text-muted-foreground" data-testid="growth-empty">
-                    Belum ada bulan pembanding — pertumbuhan mulai terlihat bulan depan
-                  </span>
-                ) : (
-                  <>
-                    <span className="text-xs text-muted-foreground">Omzet vs {monthly.summary.prev_month || "bulan lalu"}</span>
-                    <GrowthBadge value={monthly.summary.growth_omzet} testid="growth-omzet" />
-                    <span className="text-xs text-muted-foreground ml-2">Laba bersih</span>
-                    <GrowthBadge value={monthly.summary.growth_laba_bersih} testid="growth-laba" />
-                  </>
-                )}
-              </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2" data-testid="monthly-summary">
-                <TrendBit label={`Bulan ini (${monthly.summary.this_month || "-"})`}
-                  value={formatRupiahShort(monthly.summary.this_omzet)}
-                  note={`Laba bersih ${formatRupiahShort(monthly.summary.this_laba_bersih)}`} />
-                <TrendBit label="Bulan terbaik" value={monthly.summary.best_month || "-"}
-                  tone="text-success" note={formatRupiahShort(monthly.summary.best_omzet)} />
-                <TrendBit label="Rata-rata omzet/bulan" value={formatRupiahShort(monthly.summary.avg_omzet)}
-                  note={`${monthly.summary.active_months} bulan berjalan`} />
-                <TrendBit label={`Total ${months} bulan`} value={formatRupiahShort(monthly.summary.total_omzet)}
-                  note={`Laba bersih ${formatRupiahShort(monthly.summary.total_laba_bersih)}`} />
-              </div>
-            </div>
-          )}
-        </Card>
+        <TargetCard d={d} />
+        <SalesTrendCard chart={d.chart} />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
-        {/* product performance */}
-        <Card className="p-5 lg:col-span-2" data-testid="product-perf">
-          <h3 className="font-head font-bold mb-4">Performa Produk</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={d.products_perf.map((p) => ({ ...p, label: CATEGORY_LABELS[p.category] || p.category }))} margin={BAR_MARGIN}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-              <XAxis dataKey="label" tick={TICK_SM} stroke="hsl(var(--muted-foreground))" />
-              <YAxis tick={TICK_SM} stroke="hsl(var(--muted-foreground))" tickFormatter={jtFmt} />
-              <Tooltip formatter={(v) => formatRupiah(v)} contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="penjualan" name="Penjualan" radius={BAR_RADIUS}>
-                {d.products_perf.map((p, i) => <Cell key={p.category} fill={`hsl(var(--chart-${(i % 5) + 1}))`} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-            {d.products_perf.map((p) => (
-              <div key={p.category} className="rounded-lg border border-border p-2.5">
-                <p className="text-xs font-semibold truncate">{CATEGORY_LABELS[p.category] || p.category}</p>
-                <p className="text-sm font-bold tabular">{formatRupiahShort(p.penjualan)}</p>
-                <p className="text-[11px] text-success">Margin {formatPct(p.margin)}</p>
-                <p className="text-[10px] text-muted-foreground tabular truncate">
-                  {p.weight ? formatWeight(p.weight, 0) : ""}{p.ekor ? ` · ${formatNumber(p.ekor)} ekor` : ""}{p.pcs ? ` · ${formatNumber(p.pcs)} pcs` : ""}
-                </p>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        {/* activity feed */}
-        <Card className="p-5" data-testid="activity-feed">
-          <h3 className="font-head font-bold mb-4">Aktivitas Toko</h3>
-          <div className="space-y-3 max-h-[360px] overflow-y-auto no-scrollbar">
-            {d.activities.length === 0 && <p className="text-sm text-muted-foreground">Belum ada aktivitas.</p>}
-            {d.activities.map((a) => {
-              const Icon = ACT_ICON[a.type] || ShoppingCart;
-              return (
-                <div key={a.id} className="flex gap-3">
-                  <div className={`w-8 h-8 rounded-lg bg-accent flex items-center justify-center shrink-0 ${ACT_COLOR[a.type] || ""}`}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold">{a.title}</p>
-                    <p className="text-xs text-muted-foreground truncate">{a.message}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    {a.amount > 0 && <p className="text-sm font-bold tabular">{formatRupiahShort(a.amount)}</p>}
-                    <p className="text-[10px] text-muted-foreground">{formatTime(a.created_at)}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
+        <ProductPerfCard perf={d.products_perf} />
+        <ActivityFeed activities={d.activities} />
       </div>
 
       <div className="grid lg:grid-cols-3 gap-4 mt-4">
-        {/* recent transactions */}
-        <Card className="p-5 lg:col-span-2" data-testid="recent-sales">
-          <h3 className="font-head font-bold mb-4">Transaksi Terbaru</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-muted-foreground border-b border-border">
-                  <th className="pb-2 font-semibold">Waktu</th><th className="pb-2 font-semibold">Kasir</th>
-                  <th className="pb-2 font-semibold">Pelanggan</th><th className="pb-2 font-semibold">Bayar</th>
-                  <th className="pb-2 font-semibold text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d.recent_sales.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">Belum ada transaksi hari ini.</td></tr>}
-                {d.recent_sales.map((s) => (
-                  <tr key={s.id} className="border-b border-border/60 last:border-0">
-                    <td className="py-2.5">{formatTime(s.created_at)}</td>
-                    <td className="py-2.5">{s.cashier_name}</td>
-                    <td className="py-2.5 text-muted-foreground">{s.customer_name}</td>
-                    <td className="py-2.5"><Badge variant="secondary" className="text-[10px]">{PAYMENT_LABELS[s.payment_method] || s.payment_method}</Badge></td>
-                    <td className="py-2.5 text-right font-bold tabular">{formatRupiah(s.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        {/* critical stock + prices */}
-        <div className="space-y-4">
-          <Card className="p-5" data-testid="critical-stock">
-            <div className="flex items-center gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 text-warning" />
-              <h3 className="font-head font-bold">Stok Kritis</h3>
-            </div>
-            {d.critical_stock.length === 0 ? (
-              <p className="text-sm text-success">Semua stok aman.</p>
-            ) : (
-              <div className="space-y-2">
-                {d.critical_stock.map((c) => (
-                  <div key={c.name} className="flex items-center justify-between">
-                    <span className="text-sm">{c.name}</span>
-                    <Badge className="bg-warning text-warning-foreground">{formatWeight(c.stock_kg)}</Badge>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-          <Card className="p-5" data-testid="price-list">
-            <div className="flex items-center gap-2 mb-3">
-              <Package className="w-4 h-4 text-primary" />
-              <h3 className="font-head font-bold">Harga Ayam Terkini</h3>
-            </div>
-            <div className="space-y-2">
-              {d.prices.map((p) => (
-                <div key={p.name} className="flex items-center justify-between text-sm">
-                  <span className="truncate">{p.name}</span>
-                  <span className="font-bold tabular">{formatRupiah(p.price_kg)}<span className="text-muted-foreground font-normal">/kg</span></span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
+        <RecentSalesCard sales={d.recent_sales} />
+        <StockAndPrices critical={d.critical_stock} prices={d.prices} />
       </div>
     </div>
   );

@@ -138,7 +138,25 @@ async def _check_debt_cash_flag(a: _Audit):
                                            {"$set": {"cash_amount": num(e.get("amount"))}})
 
 
-# ------------------------- 3. tagihan piutang vs penjualan -------------------------
+# ------------------------- 3. pembayaran hutang yatim -------------------------
+async def _check_orphan_debt_payment(a: _Audit):
+    """Pelunasan hutang yang tagihannya sudah tidak ada (pembeliannya dibatalkan/dihapus).
+
+    Kalau dibiarkan, catatan ini terus menambah "uang keluar" padahal pembeliannya
+    sudah dianggap tidak pernah terjadi.
+    """
+    ids = {p.get("id") for p in a.payables}
+    async for e in a.db.expenses.find({"category": DEBT_CATEGORY}):
+        ref = e.get("ref")
+        if not ref or ref in ids:
+            continue
+        a.note("pembayaran_hutang_yatim", "Pembayaran hutang tanpa tagihan (pembelian dihapus)",
+               f"{e.get('date')} \u00b7 {e.get('description', '-')}", e.get("amount"))
+        if a.counted():
+            await a.db.expenses.delete_one({"id": e["id"]})
+
+
+# ------------------------- 4. tagihan piutang vs penjualan -------------------------
 async def _void_receivable_of_cancelled_sale(a: _Audit, r: dict):
     if r.get("status") == "batal" or num(r.get("remaining")) <= 0:
         return
@@ -174,7 +192,7 @@ async def _check_receivable_vs_sale(a: _Audit):
         await _sync_sale_payment_status(a, r, sale)
 
 
-# ------------------------- 4. kekurangan bayar tanpa tagihan -------------------------
+# ------------------------- 5. kekurangan bayar tanpa tagihan -------------------------
 async def _check_sale_without_receivable(a: _Audit):
     """Kekurangan bayar tanpa dokumen tagihan = piutang tidak terlihat di Keuangan."""
     with_bill = {r.get("sale_id") for r in a.receivables}
@@ -199,7 +217,7 @@ async def _check_sale_without_receivable(a: _Audit):
         await a.reload_receivables()
 
 
-# ------------------------- 5. pemasukan vs penjualan -------------------------
+# ------------------------- 6. pemasukan vs penjualan -------------------------
 async def _check_income_orphans(a: _Audit, inc_by_ref: Dict[str, List[dict]]):
     for ref, rows in inc_by_ref.items():
         if ref not in a.active_ids:
@@ -248,7 +266,7 @@ async def _check_incomes(a: _Audit):
         await _check_income_of_sale(a, s, inc_by_ref.get(s["id"]) or [])
 
 
-# ------------------------- 6. saldo pelanggan -------------------------
+# ------------------------- 7. saldo pelanggan -------------------------
 def _open_receivable_per_customer(a: _Audit) -> Dict[str, float]:
     out: Dict[str, float] = {}
     for r in a.receivables:
@@ -283,7 +301,7 @@ async def _check_customer_balance(a: _Audit):
                 "receivable": want_recv, "total_purchase": want_buy}})
 
 
-# ------------------------- 7. saldo supplier -------------------------
+# ------------------------- 8. saldo supplier -------------------------
 async def _check_supplier_balance(a: _Audit):
     """Saldo hutang & total belanja supplier = hasil hitung dari pembeliannya."""
     open_pay: Dict[str, float] = {}
@@ -314,6 +332,7 @@ async def _check_supplier_balance(a: _Audit):
 CHECKS = (
     _check_purchase_expense,
     _check_debt_cash_flag,
+    _check_orphan_debt_payment,
     _check_receivable_vs_sale,
     _check_sale_without_receivable,
     _check_incomes,
