@@ -1,17 +1,37 @@
-import { formatRupiah, formatWeight, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
+import { formatRupiah, formatQtyUnit, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
 import { toast } from "sonner";
 
-const STORE = "Berkah Ayam Mili";
+const DEFAULT_STORE = { name: "Berkah Ayam Mili", tagline: "Ayam Potong & Fillet", address: "", phone: "" };
+
+// Peringatan wajib di struk (permintaan owner). Disimpan di satu tempat supaya
+// pratinjau di layar, struk cetak, dan teks WhatsApp selalu sama.
+export const RECEIPT_PROMO = "Belanja GRATIS jika kasir tidak menyerahkan struk pembayaran";
+export const RECEIPT_PROMO_NOTE = "*syarat & ketentuan berlaku*";
+
+// Menerima objek toko {name, tagline, address, phone} maupun string nama toko.
+export function normStore(store) {
+  if (!store) return DEFAULT_STORE;
+  if (typeof store === "string") return { ...DEFAULT_STORE, name: store };
+  return {
+    name: store.name || DEFAULT_STORE.name,
+    tagline: store.tagline || DEFAULT_STORE.tagline,
+    address: store.address || "",
+    phone: store.phone || "",
+  };
+}
 
 function line(it) {
-  const q = it.unit === "kg" ? formatWeight(it.qty, 3) : `${it.qty} ekor`;
+  const q = formatQtyUnit(it.qty, it.unit, 3);
   return { name: it.name, detail: `${q} x ${formatRupiah(it.price)}`, sub: formatRupiah(it.subtotal) };
 }
 
-export function receiptText(sale, store = STORE) {
+export function receiptText(sale, store) {
+  const s = normStore(store);
   const L = [];
-  L.push(`*${store}*`);
-  L.push("Ayam Potong & Fillet");
+  L.push(`*${s.name}*`);
+  L.push(s.tagline);
+  if (s.address) L.push(s.address);
+  if (s.phone) L.push(`Telp/WA: ${s.phone}`);
   L.push("----------------------------");
   L.push(`${formatDate(sale.created_at)} ${formatTime(sale.created_at)}`);
   L.push(`Kasir   : ${sale.cashier_name}`);
@@ -29,10 +49,13 @@ export function receiptText(sale, store = STORE) {
   if (sale.receivable > 0) L.push(`Piutang : ${formatRupiah(sale.receivable)}`);
   L.push("----------------------------");
   L.push("Terima kasih atas kunjungan Anda");
+  L.push("");
+  L.push(RECEIPT_PROMO);
+  L.push(RECEIPT_PROMO_NOTE);
   return L.join("\n");
 }
 
-export function waShareReceipt(sale, store = STORE, phone) {
+export function waShareReceipt(sale, store, phone) {
   const text = encodeURIComponent(receiptText(sale, store));
   let num = String(phone || "").replace(/[^0-9]/g, "");
   if (num.startsWith("0")) num = "62" + num.slice(1);
@@ -44,7 +67,8 @@ function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function printReceipt(sale, store = STORE) {
+export function printReceipt(sale, store) {
+  const s = normStore(store);
   const rows = sale.items.map((it) => {
     const x = line(it);
     return `<div class="it"><div class="nm">${esc(x.name)}</div><div class="rw"><span>${esc(x.detail)}</span><span>${x.sub}</span></div></div>`;
@@ -60,8 +84,13 @@ export function printReceipt(sale, store = STORE) {
     .tot{font-size:14px;font-weight:bold}
     h1{font-size:16px;margin:0}
     small{font-size:10px}
+    .promo{border:1px dashed #000;padding:5px;margin-top:6px;text-align:center;font-size:10px;font-weight:bold;line-height:1.35}
+    .promo em{display:block;font-weight:normal;font-style:normal;font-size:9px;margin-top:2px}
   </style></head><body>
-    <div class="c"><h1>${esc(store)}</h1><small>Ayam Potong &amp; Fillet</small></div>
+    <div class="c"><h1>${esc(s.name)}</h1><small>${esc(s.tagline)}</small>
+    ${s.address ? `<div><small>${esc(s.address)}</small></div>` : ""}
+    ${s.phone ? `<div><small>Telp/WA: ${esc(s.phone)}</small></div>` : ""}
+    </div>
     <div class="hr"></div>
     <div class="rw"><span>${formatDate(sale.created_at)}</span><span>${formatTime(sale.created_at)}</span></div>
     <div class="rw"><span>Kasir</span><span>${esc(sale.cashier_name)}</span></div>
@@ -75,6 +104,7 @@ export function printReceipt(sale, store = STORE) {
     ${sale.receivable > 0 ? `<div class="rw"><span>Piutang</span><span>${formatRupiah(sale.receivable)}</span></div>` : ""}
     <div class="hr"></div>
     <div class="c"><small>Terima kasih atas kunjungan Anda</small></div>
+    <div class="promo">${esc(RECEIPT_PROMO)}<em>${esc(RECEIPT_PROMO_NOTE)}</em></div>
     <script>window.onload=function(){window.focus();window.print();};<\/script>
   </body></html>`;
   const blob = new Blob([html], { type: "text/html" });

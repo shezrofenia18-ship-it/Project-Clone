@@ -7,14 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { formatRupiah, formatWeight, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
+import { formatRupiah, formatQtyUnit, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
 import { useAuth } from "@/context/AuthContext";
 import { printReceipt, waShareReceipt } from "@/lib/receipt";
+import { useStore } from "@/lib/hooks";
 import { Ban, Receipt, Printer, Share2 } from "lucide-react";
 
 export default function SalesHistory() {
   const { user } = useAuth();
   const { data, reload } = useFetch("/sales");
+  const store = useStore();
   const [detail, setDetail] = useState(null);
   const canCancel = ["owner", "admin"].includes(user.role);
 
@@ -58,7 +60,7 @@ export default function SalesHistory() {
               <div className="space-y-1.5">
                 {detail.items.map((it, i) => (
                   <div key={`${it.product_id || it.name}-${i}`} className="flex justify-between text-sm">
-                    <span>{it.name} <span className="text-muted-foreground">({it.unit === "kg" ? formatWeight(it.qty, 3) : `${it.qty} ekor`} × {formatRupiah(it.price)})</span></span>
+                    <span>{it.name} <span className="text-muted-foreground">({formatQtyUnit(it.qty, it.unit)} × {formatRupiah(it.price)})</span></span>
                     <span className="tabular font-medium">{formatRupiah(it.subtotal)}</span>
                   </div>
                 ))}
@@ -70,8 +72,8 @@ export default function SalesHistory() {
                 {["owner", "admin"].includes(user.role) && <div className="flex justify-between text-success"><span>Laba Kotor (margin {detail.margin_pct}%)</span><span className="tabular">{formatRupiah(detail.gross_profit)}</span></div>}
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" data-testid="hist-print" onClick={() => printReceipt(detail)}><Printer className="w-4 h-4 mr-1" /> Cetak Struk</Button>
-                <Button variant="outline" data-testid="hist-wa" onClick={() => waShareReceipt(detail, "Berkah Ayam Mili")} className="text-success border-success/40 hover:bg-success/10"><Share2 className="w-4 h-4 mr-1" /> WhatsApp</Button>
+                <Button variant="outline" data-testid="hist-print" onClick={() => printReceipt(detail, store)}><Printer className="w-4 h-4 mr-1" /> Cetak Struk</Button>
+                <Button variant="outline" data-testid="hist-wa" onClick={() => waShareReceipt(detail, store)} className="text-success border-success/40 hover:bg-success/10"><Share2 className="w-4 h-4 mr-1" /> WhatsApp</Button>
               </div>
               {canCancel && detail.status !== "batal" && (
                 <Button data-testid="cancel-sale" variant="destructive" className="w-full" onClick={() => cancel(detail.id)}>

@@ -16,7 +16,7 @@ export default function Production() {
   const { data, reload } = useFetch("/productions");
   const { data: products } = useFetch("/products");
   const source = (products || []).filter((p) => ["broiler", "kampung", "pejantan"].includes(p.category));
-  const outs = (products || []).filter((p) => p.category === "fillet" || p.category === "sampingan");
+  const outs = (products || []).filter((p) => ["fillet", "potongan", "sampingan"].includes(p.category));
   const [open, setOpen] = useState(false);
 
   return (

@@ -14,6 +14,7 @@ from typing import List, Optional, Any, Dict
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from db import db, client
@@ -24,7 +25,8 @@ from auth import (
     seed_admin,
     now_jkt,
 )
-from seed import seed_demo
+from seed import seed_demo, ensure_potong_parts
+import pdf_reports
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("berkah")
@@ -982,9 +984,70 @@ async def report_stock(user: dict = Depends(get_current_user)):
     out = []
     for p in prods:
         val = float(p.get("stock_kg", 0) or 0) * float(p.get("hpp_kg", 0) or 0)
+        val_pcs = float(p.get("stock_pcs", 0) or 0) * float(p.get("hpp_pcs", 0) or 0)
         out.append({"name": p["name"], "category": p["category"], "stock_ekor": p.get("stock_ekor", 0),
-                    "stock_kg": p.get("stock_kg", 0), "hpp_kg": p.get("hpp_kg", 0), "value": round(val, 2)})
-    return {"items": out, "total_value": round(sum(x["value"] for x in out), 2)}
+                    "stock_kg": p.get("stock_kg", 0), "stock_pcs": p.get("stock_pcs", 0),
+                    "hpp_kg": p.get("hpp_kg", 0), "hpp_pcs": p.get("hpp_pcs", 0),
+                    "value": round(val, 2), "value_pcs": round(val_pcs, 2)})
+    return {"items": out, "total_value": round(sum(x["value"] for x in out), 2),
+            "total_value_pcs": round(sum(x["value_pcs"] for x in out), 2)}
+
+
+# ------------------------- Reports: PDF (kop toko) -------------------------
+async def _store_info() -> dict:
+    s = await db.settings.find().to_list(50)
+    kv = {x["key"]: x["value"] for x in s}
+    return {
+        "name": kv.get("store_name") or "Berkah Ayam Mili",
+        "tagline": kv.get("store_tagline") or "Ayam Potong & Fillet",
+        "address": kv.get("store_address") or "",
+        "phone": kv.get("store_phone") or "",
+    }
+
+
+def _pdf_response(data: bytes, filename: str) -> Response:
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(data)),
+            # supaya nama file tetap terbaca oleh frontend (CORS)
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+def _range_tag(start: Optional[str], end: Optional[str]) -> str:
+    if start and end:
+        return f"{start}_sd_{end}"
+    return "semua-periode"
+
+
+@api.get("/reports/profit-loss/pdf")
+async def report_pl_pdf(start: Optional[str] = None, end: Optional[str] = None,
+                        user: dict = Depends(require_roles("owner", "admin"))):
+    data = await report_pl(start, end, user)
+    store = await _store_info()
+    pdf = await run_in_threadpool(pdf_reports.profit_loss_pdf, data, store, start, end, user["name"])
+    return _pdf_response(pdf, f"laba-rugi_{_range_tag(start, end)}.pdf")
+
+
+@api.get("/reports/sales/pdf")
+async def report_sales_pdf(start: Optional[str] = None, end: Optional[str] = None,
+                           user: dict = Depends(require_roles("owner", "admin"))):
+    data = await report_sales(start, end, user)
+    store = await _store_info()
+    pdf = await run_in_threadpool(pdf_reports.sales_pdf, data, store, start, end, user["name"])
+    return _pdf_response(pdf, f"penjualan_{_range_tag(start, end)}.pdf")
+
+
+@api.get("/reports/stock/pdf")
+async def report_stock_pdf(user: dict = Depends(require_roles("owner", "admin"))):
+    data = await report_stock(user)
+    store = await _store_info()
+    pdf = await run_in_threadpool(pdf_reports.stock_pdf, data, store, user["name"])
+    return _pdf_response(pdf, f"nilai-stok_{today_str()}.pdf")
 
 
 # ------------------------- File upload / serving -------------------------
@@ -1042,6 +1105,9 @@ async def startup():
     await db.sales.create_index("date")
     await seed_admin()
     await seed_demo(db)
+    added = await ensure_potong_parts(db)
+    if added:
+        logger.info("Produk potongan ditambahkan: %s", ", ".join(added))
     try:
         init_storage()
         logger.info("Object storage initialized")

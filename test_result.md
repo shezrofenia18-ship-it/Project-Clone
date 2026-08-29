@@ -184,7 +184,448 @@ backend:
           
           No backend issues found. Ready for frontend integration testing.
 
+  - task: "Laporan PDF berkop toko: 3 endpoint PDF (laba rugi, penjualan, nilai stok) pakai reportlab"
+    implemented: true
+    working: true
+    file: "backend/pdf_reports.py, backend/server.py, backend/requirements.txt"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          FASE 2a. Modul BARU backend/pdf_reports.py (reportlab 5.0.1, ditambahkan ke requirements.txt).
+          3 endpoint BARU (role owner/admin):
+            GET /api/reports/profit-loss/pdf?start&end
+            GET /api/reports/sales/pdf?start&end   (A4 landscape, detail maks 400 baris)
+            GET /api/reports/stock/pdf
+          Semua mengembalikan Response media_type application/pdf + Content-Disposition attachment
+          + header Access-Control-Expose-Headers: Content-Disposition (supaya frontend bisa baca nama file).
+          Isi PDF: kop toko (nama/tagline/alamat/telepon dari settings), judul, periode, "dicetak oleh",
+          tabel zebra, footer nomor halaman + waktu cetak, blok tanda tangan (Petugas & Owner).
+          Rendering dijalankan lewat run_in_threadpool agar tidak memblokir event loop.
+          Sudah diuji lokal (python): 5 skenario (termasuk data kosong & toko tanpa alamat) menghasilkan
+          PDF valid berawalan %PDF-.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL PDF ENDPOINTS WORKING
+          
+          Tested all 3 PDF endpoints comprehensively (24 tests passed):
+          
+          1. GET /api/reports/profit-loss/pdf ✅
+             - Owner: 200, valid PDF (3,388 bytes), response time: 0.14s
+             - Admin: 200, valid PDF
+             - Kasir: 403 (correctly rejected)
+             - No token: 401 (correctly rejected)
+             - Content-Type: application/pdf ✅
+             - Content-Disposition: attachment; filename="laba-rugi_..." ✅
+             - Access-Control-Expose-Headers: Content-Disposition ✅
+             - PDF validity: starts with %PDF- ✅
+          
+          2. GET /api/reports/sales/pdf ✅
+             - Owner: 200, valid PDF (15,628 bytes), response time: 0.17s
+             - Admin: 200, valid PDF
+             - Kasir: 403 (correctly rejected)
+             - No token: 401 (correctly rejected)
+             - Content-Type: application/pdf ✅
+             - Content-Disposition: attachment; filename="penjualan_..." ✅
+             - Access-Control-Expose-Headers: Content-Disposition ✅
+             - PDF validity: starts with %PDF- ✅
+          
+          3. GET /api/reports/stock/pdf ✅
+             - Owner: 200, valid PDF (4,003 bytes), response time: 0.11s
+             - Admin: 200, valid PDF
+             - Kasir: 403 (correctly rejected)
+             - No token: 401 (correctly rejected)
+             - Content-Type: application/pdf ✅
+             - Content-Disposition: attachment; filename="nilai-stok_..." ✅
+             - Access-Control-Expose-Headers: Content-Disposition ✅
+             - PDF validity: starts with %PDF- ✅
+          
+          4. EDGE CASES TESTED ✅
+             - Empty date range (2000-01-01 to 2000-01-02): Returns valid PDF (no 500 error)
+             - No parameters: Returns valid PDF
+             - Invalid date params (start=abc&end=xyz): Returns 200 (gracefully handled)
+          
+          5. PDF WITH STORE INFO (store_address, store_phone) ✅
+             - After setting store_address and store_phone, stock PDF regenerated successfully
+             - PDF size: 4,072 bytes (increased from 4,003 bytes due to address/phone in kop)
+             - No errors with kop rendering
+          
+          All PDF endpoints are PRODUCTION-READY.
+  - task: "report_stock diperluas: stock_pcs, hpp_pcs, value_pcs, total_value_pcs (total_value TIDAK diubah)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Nilai stok satuan pcs sebelumnya sama sekali tidak terlihat di laporan. Field baru ditambahkan
+          sebagai INFORMASI TAMBAHAN; `value` dan `total_value` SENGAJA tidak diubah supaya angka
+          keuangan yang sudah dipakai owner tidak berubah arti (hindari hitung ganda kg vs pcs).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL NEW FIELDS WORKING
+          
+          GET /api/reports/stock tested with 7 validations (all passed):
+          
+          1. Response has 14 items ✅
+          
+          2. All required fields present in each item ✅
+             - name, category, stock_ekor, stock_kg, stock_pcs
+             - hpp_kg, hpp_pcs, value, value_pcs
+          
+          3. Root level fields present ✅
+             - total_value: Rp 13,688,150
+             - total_value_pcs: Rp 1,707,000
+          
+          4. total_value calculation CORRECT ✅
+             - Matches sum of all item["value"]
+             - Calculated: 13,688,150.00
+             - Actual: 13,688,150.00
+          
+          5. Item value calculation CORRECT ✅
+             - value = stock_kg * hpp_kg for all items
+             - Verified for first 5 items
+          
+          6. total_value_pcs calculation CORRECT ✅
+             - Matches sum of all item["value_pcs"]
+             - Calculated: 1,707,000.00
+             - Actual: 1,707,000.00
+          
+          7. ANTI-REGRESSION: total_value NOT mixed with pcs values ✅
+             - total_value only includes kg-based values
+             - total_value_pcs is separate
+             - No double counting
+          
+          All new fields working correctly. No regression in existing fields.
+  - task: "Produk potongan baru (Sayap Ayam, Dada Ayam, Paha Atas Ayam) + kategori 'potongan', idempotent di startup"
+    implemented: true
+    working: true
+    file: "backend/seed.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Permintaan user: tambah bagian Sayap, Dada, Paha Atas di input Produksi Potong.
+          seed.py: POTONG_PARTS + ensure_potong_parts(db) yang dipanggil SETIAP startup dan aman diulang
+          (skip bila nama produk sudah ada, TIDAK menimpa harga/stok yang sudah diubah owner).
+          Kategori baru "potongan", units ["kg","pcs"], stok awal 0 (harus lewat Produksi Potong).
+          Log startup memastikan: "Produk potongan ditambahkan: Sayap Ayam, Dada Ayam, Paha Atas Ayam".
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL 3 PRODUCTS + IDEMPOTENCY WORKING
+          
+          1. THREE NEW PRODUCTS EXIST ✅
+             - Sayap Ayam: Found
+             - Dada Ayam: Found
+             - Paha Atas Ayam: Found
+          
+          2. PRODUCT PROPERTIES CORRECT ✅
+             All 3 products have:
+             - category == "potongan" ✅
+             - units == ["kg", "pcs"] ✅
+             - active == True ✅
+             - price_pcs > 0 ✅
+             - hpp_pcs > 0 ✅
+          
+          3. IDEMPOTENCY VERIFIED ✅
+             - Count before restart: Sayap=1, Dada=1, Paha Atas=1
+             - Backend restarted successfully
+             - Count after restart: Sayap=1, Dada=1, Paha Atas=1
+             - NO DUPLICATES created on restart ✅
+          
+          4. NO OVERWRITE OF OWNER DATA ✅
+             - Updated Sayap Ayam price_pcs to 9999
+             - Restarted backend
+             - Price still 9999 after restart (not overwritten by ensure_potong_parts)
+             - ensure_potong_parts correctly skips existing products ✅
+          
+          5. PRODUCTION WITH NEW PRODUCTS ✅
+             - Source: Ayam Broiler (120 ekor)
+             - Input: 2 ekor
+             - Outputs: Sayap Ayam (4 pcs), Dada Ayam (2 pcs)
+             - Source stock decreased: 120 → 118 ekor ✅
+             - Sayap stock increased: 0 → 4 pcs ✅
+             - Dada stock increased: 0 → 2 pcs ✅
+             - HPP PCS updated: Sayap hpp_pcs = 2500.0 (total_cost / pcs) ✅
+             - Output names in GET /api/productions: correct ✅
+          
+          6. SALE WITH NEW PRODUCTS (PCS UNIT) ✅
+             - Created production to get 10 pcs Sayap Ayam
+             - Sale: 2 pcs Sayap Ayam
+             - Response item unit == "pcs" ✅
+             - Stock decreased: 10 → 8 pcs ✅
+             - Cancel sale: Stock restored to 10 pcs ✅
+          
+          All new products working correctly with production and sales.
+  - task: "Settings baru: store_address & store_phone untuk kop struk + PDF"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Endpoint settings sudah generik (key/value), jadi tidak ada perubahan skema. Helper _store_info()
+          membaca store_name / store_tagline / store_address / store_phone dengan fallback aman.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - SETTINGS WORKING
+          
+          1. PUT /api/settings (owner) ✅
+             - Set store_address: "Jl. Raya Pasar No. 12, Blitar" → 200
+             - Set store_phone: "081234567890" → 200
+          
+          2. GET /api/settings ✅
+             - store_address: "Jl. Raya Pasar No. 12, Blitar" ✅
+             - store_phone: "081234567890" ✅
+          
+          3. PDF WITH STORE INFO ✅
+             - GET /api/reports/stock/pdf after setting store info
+             - PDF generated successfully: 4,072 bytes
+             - No errors with kop rendering (address/phone in header)
+          
+          4. ROLE RESTRICTION ✅
+             - Kasir PUT /api/settings: 403 (correctly rejected)
+          
+          Settings working correctly. PDF kop includes store address and phone.
+
+
 frontend:
+  - task: "Struk: kalimat promo 'Belanja GRATIS jika kasir tidak menyerahkan struk pembayaran' + fix satuan pcs + identitas toko dari Pengaturan"
+    implemented: true
+    working: true
+    file: "frontend/src/lib/receipt.js, frontend/src/components/Receipt.js, frontend/src/pages/SalesHistory.js, frontend/src/lib/format.js, frontend/src/lib/hooks.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Permintaan user: tambah kalimat promo di struk (ditaruh setelah "Terima kasih atas kunjungan Anda").
+          RECEIPT_PROMO + RECEIPT_PROMO_NOTE dideklarasikan SEKALI di lib/receipt.js lalu dipakai oleh
+          pratinjau layar (Receipt.js), struk cetak (printReceipt), dan teks WhatsApp (receiptText).
+          BUG DIPERBAIKI: lib/receipt.js line() dan SalesHistory.js menulis "ekor" untuk SEMUA satuan
+          non-kg, sehingga produk per pcs (Paha Ayam, Ceker, Sayap, dst) tercetak "3 ekor" padahal "3 pcs".
+          Dibuat helper tunggal formatQtyUnit(qty, unit) di lib/format.js dan dipakai di semua tempat.
+          Nama toko dulu hardcoded "Berkah Ayam Mili" di 3 tempat; sekarang lewat hook useStore()
+          (baca /settings, di-cache supaya struk tetap benar saat offline).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FASE 2 STRUK TESTING COMPLETE - ALL FEATURES WORKING
+          
+          Tested comprehensive receipt functionality with Sayap Ayam (2 pcs) transaction:
+          
+          1. POTONGAN AYAM CATEGORY TAB ✅
+             - Tab "Potongan Ayam" found and clickable
+             - All 3 products visible: Sayap Ayam, Dada Ayam, Paha Atas Ayam
+          
+          2. CRITICAL: SATUAN PCS FIX ✅
+             - Receipt preview shows "2 pcs" (CORRECT)
+             - NOT showing "2 ekor" (bug fixed)
+             - formatQtyUnit() working correctly
+          
+          3. PROMO TEXT ✅
+             - Receipt preview displays promo box with testid="receipt-promo"
+             - Text: "Belanja GRATIS jika kasir tidak menyerahkan struk pembayaran"
+             - Note: "*syarat & ketentuan berlaku*"
+             - Positioned AFTER "Terima kasih atas kunjungan Anda"
+          
+          4. STORE KOP (IDENTITAS TOKO) ✅
+             - Store address visible: "Jl. Raya Pasar No. 12, Blitar"
+             - Store phone visible: "Telp/WA: 081234567890"
+             - Data from Settings page (/pengaturan) correctly displayed
+          
+          5. WHATSAPP SHARE ✅
+             - WhatsApp button opens popup with encoded URL
+             - Decoded text contains:
+               * "2+pcs" (URL-encoded "2 pcs") ✅
+               * Store address ✅
+               * Store phone: 081234567890 ✅
+               * Promo text present in URL (URL-encoded)
+          
+          All receipt features working correctly. The critical bug fix (pcs vs ekor) is verified.
+  - task: "Laporan: tombol Unduh PDF di 3 tab (PdfButton, unduh blob dari endpoint server)"
+    implemented: true
+    working: true
+    file: "frontend/src/pages/Reports.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Komponen PdfButton (responseType blob + baca nama file dari Content-Disposition, fallback nama lokal),
+          status "Menyiapkan..." saat proses, toast sukses/gagal. Ditambahkan ke tab Laba Rugi (pdf-pl),
+          Penjualan (pdf-sales), Stok (pdf-stock). Export CSV stok kini juga menyertakan kolom Pcs.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FASE 2 LAPORAN PDF TESTING COMPLETE - ALL 3 PDF DOWNLOADS WORKING
+          
+          Tested all 3 PDF download buttons on /laporan page:
+          
+          1. LABA RUGI PDF (pdf-pl) ✅
+             - Button found and clickable
+             - Download triggered successfully
+             - Filename: laba-rugi_2026-07-30_sd_2026-08-29.pdf
+             - File size: 3,449 bytes
+             - Valid PDF: starts with %PDF- ✅
+             - Toast "Laporan PDF terunduh" displayed
+          
+          2. PENJUALAN PDF (pdf-sales) ✅
+             - Tab switch working
+             - Button found and clickable
+             - Download triggered successfully
+             - Filename: penjualan_2026-07-30_sd_2026-08-29.pdf
+             - File size: 16,449 bytes
+             - Valid PDF: starts with %PDF- ✅
+          
+          3. STOK PDF (pdf-stock) ✅
+             - Tab switch working
+             - Button found and clickable
+             - Download triggered successfully
+             - Filename: nilai-stok_2026-08-29.pdf
+             - File size: 4,070 bytes
+             - Valid PDF: starts with %PDF- ✅
+          
+          4. EXPORT CSV BUTTONS ✅
+             - export-sales button present on Penjualan tab
+             - export-stock button present on Stok tab
+             - No regression in existing CSV export functionality
+          
+          5. EMPTY DATE RANGE TEST ✅
+             - Set date range to 2000-01-01 to 2000-01-02 (no data)
+             - PDF still generated successfully (no error)
+             - Valid PDF returned
+             - Graceful handling of empty data
+          
+          All PDF download features working correctly. Backend PDF generation (reportlab) 
+          producing valid PDFs with store kop (address, phone from settings).
+  - task: "Pengaturan: kolom Alamat Toko & Nomor Telepon/WA"
+    implemented: true
+    working: true
+    file: "frontend/src/pages/Settings.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Blok "Identitas Toko" berisi Nama + Alamat + Telepon/WA, satu tombol "Simpan Identitas Toko"
+          yang menyimpan ketiga key. Dipakai sebagai kop struk & laporan PDF.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FASE 2 PENGATURAN TESTING COMPLETE - ALL FIELDS WORKING
+          
+          Tested Settings page (/pengaturan) with store identity fields:
+          
+          1. ALL FIELDS PRESENT ✅
+             - set-store-name input found
+             - set-store-address input found
+             - set-store-phone input found
+             - save-store-name button found
+          
+          2. SAVE FUNCTIONALITY ✅
+             - Filled fields:
+               * Nama: "Berkah Ayam Mili"
+               * Alamat: "Jl. Raya Pasar No. 12, Blitar"
+               * Telepon: "081234567890"
+             - Clicked "Simpan Identitas Toko" button
+             - Toast "Pengaturan disimpan" displayed
+          
+          3. PERSISTENCE VERIFIED ✅
+             - Page reloaded
+             - All 3 values persisted correctly:
+               * Nama: "Berkah Ayam Mili" ✅
+               * Alamat: "Jl. Raya Pasar No. 12, Blitar" ✅
+               * Telepon: "081234567890" ✅
+             - Data saved to backend and retrieved on reload
+          
+          4. INTEGRATION WITH STRUK & PDF ✅
+             - Store address and phone appear in receipt preview (verified in TES 2)
+             - Store address and phone appear in PDF reports (verified in TES 4)
+          
+          Settings page working correctly. Store identity data properly saved and used 
+          across receipts and PDF reports.
+  - task: "Kategori baru 'Potongan Ayam' muncul di POS, Produksi Potong, Produk & Harga; dikecualikan dari Pembelian"
+    implemented: true
+    working: true
+    file: "frontend/src/lib/format.js, frontend/src/pages/POS.js, frontend/src/pages/Production.js, frontend/src/pages/Purchases.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          CATEGORY_LABELS.potongan = "Potongan Ayam" (otomatis muncul di dropdown kategori Produk & Harga).
+          POS CATS ditambah "potongan". Production outs filter kini ["fillet","potongan","sampingan"].
+          Purchases mengecualikan "potongan" karena stoknya berasal dari Produksi Potong, bukan pembelian.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FASE 2 KATEGORI POTONGAN TESTING COMPLETE - ALL UI INTEGRATION WORKING
+          
+          Tested "Potongan Ayam" category across multiple pages:
+          
+          1. POS KASIR (/pos) ✅
+             - Category tab "Potongan Ayam" (pos-cat-potongan) present and clickable
+             - Tab displays all 3 products:
+               * Sayap Ayam ✅
+               * Dada Ayam ✅
+               * Paha Atas Ayam ✅
+             - Products show correct pricing and stock (pcs unit)
+             - Transaction with Sayap Ayam (2 pcs) successful
+          
+          2. PRODUKSI POTONG (/produksi) ✅
+             - Output dropdown includes all potongan products:
+               * Sayap Ayam ✅
+               * Dada Ayam ✅
+               * Paha Atas Ayam ✅
+             - Full dropdown list verified:
+               ['Ati Ampela', 'Ayam Fillet', 'Ceker Ayam', 'Dada Ayam', 'Dada Fillet', 
+                'Kepala Ayam', 'Kulit Ayam', 'Paha Atas Ayam', 'Paha Ayam', 'Sayap Ayam', 
+                'Tulang Ayam']
+             - Filter working: ["fillet", "potongan", "sampingan"]
+             - Production with Paha Atas Ayam (2 pcs) + Sayap Ayam (4 pcs) successful
+          
+          3. PRODUK & HARGA (/produk) ✅
+             - Sayap Ayam visible in products list
+             - Category badge "Potongan Ayam" displayed
+             - Category dropdown includes "Potongan Ayam" option
+          
+          4. PEMBELIAN (/pembelian) - EXCLUSION VERIFIED ✅
+             - Potongan products (Sayap, Dada, Paha Atas) NOT in purchase dropdown
+             - Fillet products NOT in purchase dropdown
+             - Sampingan products NOT in purchase dropdown
+             - Only ayam utuh (Broiler, Kampung, Pejantan) available for purchase
+             - Correct behavior: potongan stock comes from Production, not Purchase
+          
+          Category integration working correctly across all pages. Potongan products 
+          properly excluded from Pembelian as designed.
+
   - task: "Mode Offline POS: antrean tahan-tutup-aplikasi, indikator jumlah antrean, dialog daftar transaksi tertenda (retry/hapus), tombol sinkron manual, banner POS"
     implemented: true
     working: true
@@ -458,8 +899,8 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 7
+  version: "1.4"
+  test_sequence: 9
   run_ui: false
 
 test_plan:
@@ -577,3 +1018,223 @@ agent_communication:
       Kasir can reload/close/reopen app while offline and continue working.
       
       No code changes needed. Feature working as designed.
+    -agent: "testing"
+    -message: |
+      ✅ FASE 2 BACKEND TESTING COMPLETE - ALL FEATURES WORKING (85/85 TESTS PASSED)
+      
+      Created /app/backend_test_fase2.py with comprehensive tests for:
+      1. PDF Reports (3 endpoints)
+      2. Report Stock new fields
+      3. New products (Sayap, Dada, Paha Atas) + idempotency
+      4. Production with new products
+      5. Sales with new products (pcs unit)
+      6. Settings (store_address, store_phone)
+      7. Smoke regression test
+      
+      DETAILED RESULTS:
+      
+      === 1. PDF ENDPOINTS (24 tests) ✅ ===
+      All 3 PDF endpoints working perfectly:
+      
+      A. GET /api/reports/profit-loss/pdf
+         - Owner: 200, valid PDF (3,388 bytes), 0.14s response time
+         - Admin: 200, valid PDF
+         - Kasir: 403 (correctly rejected)
+         - No token: 401 (correctly rejected)
+         - Content-Type: application/pdf ✅
+         - Content-Disposition: attachment; filename="laba-rugi_..." ✅
+         - Access-Control-Expose-Headers: Content-Disposition ✅
+         - PDF validity: %PDF- header ✅
+      
+      B. GET /api/reports/sales/pdf
+         - Owner: 200, valid PDF (15,628 bytes), 0.17s response time
+         - Admin: 200, valid PDF
+         - Kasir: 403 (correctly rejected)
+         - No token: 401 (correctly rejected)
+         - All headers correct ✅
+         - PDF validity: %PDF- header ✅
+      
+      C. GET /api/reports/stock/pdf
+         - Owner: 200, valid PDF (4,003 bytes), 0.11s response time
+         - Admin: 200, valid PDF
+         - Kasir: 403 (correctly rejected)
+         - No token: 401 (correctly rejected)
+         - All headers correct ✅
+         - PDF validity: %PDF- header ✅
+      
+      D. EDGE CASES ✅
+         - Empty date range (2000-01-01 to 2000-01-02): Valid PDF (no 500 error)
+         - No parameters: Valid PDF
+         - Invalid date params (start=abc&end=xyz): 200 (gracefully handled)
+      
+      === 2. REPORT STOCK NEW FIELDS (7 tests) ✅ ===
+      GET /api/reports/stock with new fields:
+      - 14 items returned
+      - All required fields present: stock_pcs, hpp_pcs, value_pcs ✅
+      - Root fields: total_value (Rp 13,688,150), total_value_pcs (Rp 1,707,000) ✅
+      - total_value calculation: sum of item["value"] = 13,688,150 ✅
+      - Item value calculation: value = stock_kg * hpp_kg ✅
+      - total_value_pcs calculation: sum of item["value_pcs"] = 1,707,000 ✅
+      - ANTI-REGRESSION: total_value NOT mixed with pcs values ✅
+      
+      === 3. NEW PRODUCTS + IDEMPOTENCY (12 tests) ✅ ===
+      Three new products exist:
+      - Sayap Ayam: category="potongan", units=["kg","pcs"], active=true, price_pcs>0, hpp_pcs>0 ✅
+      - Dada Ayam: category="potongan", units=["kg","pcs"], active=true, price_pcs>0, hpp_pcs>0 ✅
+      - Paha Atas Ayam: category="potongan", units=["kg","pcs"], active=true, price_pcs>0, hpp_pcs>0 ✅
+      
+      IDEMPOTENCY VERIFIED:
+      - Count before restart: Sayap=1, Dada=1, Paha Atas=1
+      - Backend restarted
+      - Count after restart: Sayap=1, Dada=1, Paha Atas=1 (NO DUPLICATES) ✅
+      
+      NO OVERWRITE OF OWNER DATA:
+      - Updated Sayap price_pcs to 9999
+      - Restarted backend
+      - Price still 9999 (ensure_potong_parts skips existing products) ✅
+      
+      === 4. PRODUCTION WITH NEW PRODUCTS (6 tests) ✅ ===
+      - Source: Ayam Broiler (120 ekor)
+      - Input: 2 ekor
+      - Outputs: Sayap Ayam (4 pcs), Dada Ayam (2 pcs)
+      - Source stock decreased: 120 → 118 ekor ✅
+      - Sayap stock increased: 0 → 4 pcs ✅
+      - Dada stock increased: 0 → 2 pcs ✅
+      - HPP PCS updated: Sayap hpp_pcs = 2500.0 (total_cost / pcs) ✅
+      - Output names in GET /api/productions: correct ✅
+      
+      === 5. SALES WITH NEW PRODUCTS (PCS UNIT) (3 tests) ✅ ===
+      - Created additional production: 3 ekor → 6 pcs Sayap
+      - Sale: 2 pcs Sayap Ayam
+      - Response item unit == "pcs" ✅
+      - Stock decreased: 10 → 8 pcs ✅
+      - Cancel sale: Stock restored to 10 pcs ✅
+      
+      === 6. SETTINGS (6 tests) ✅ ===
+      - PUT /api/settings store_address: 200 ✅
+      - PUT /api/settings store_phone: 200 ✅
+      - GET /api/settings: both values correct ✅
+      - PDF with store info: 4,072 bytes (increased from 4,003 due to address/phone in kop) ✅
+      - Kasir PUT /api/settings: 403 (correctly rejected) ✅
+      
+      === 7. SMOKE REGRESSION (27 tests) ✅ ===
+      All 20 main endpoints return 200 for owner:
+      /dashboard, /products, /customers, /sales, /reports/profit-loss, /reports/sales,
+      /reports/stock, /productions, /slaughters, /purchases, /stock-movements, /activities,
+      /notifications, /receivables, /payables, /targets, /settings, /audit-logs, /expenses, /incomes
+      
+      Normal sale (kg unit) still works:
+      - Sale created successfully ✅
+      - Stock decreased correctly ✅
+      
+      Idempotency still works:
+      - Same txn_id posted twice returns same ID ✅
+      - Stock decreased only once ✅
+      
+      CONCLUSION:
+      All FASE 2 features are PRODUCTION-READY. No backend issues found.
+      - PDF reports working with all edge cases handled
+      - New products working with production and sales
+      - Idempotency verified (no duplicates on restart)
+      - Settings working with PDF kop rendering
+      - No regressions in existing features
+    -agent: "testing"
+    -message: |
+      ✅ FASE 2 FRONTEND TESTING COMPLETE - ALL 4 TASKS WORKING (7/7 TEST SCENARIOS PASSED)
+      
+      Comprehensive UI testing completed for all FASE 2 frontend features using Playwright.
+      
+      IMPORTANT NOTE: App uses INDONESIAN routes:
+      - /pengaturan (not /settings)
+      - /laporan (not /reports)
+      - /produksi (not /productions)
+      - /riwayat (not /sales)
+      
+      === TEST RESULTS SUMMARY ===
+      
+      ✅ TES 1: PENGATURAN (Settings) - PASS
+      - All 3 input fields present with correct testids
+      - Save functionality working (toast displayed)
+      - Values persist after page reload
+      - Integration with receipts and PDFs verified
+      
+      ✅ TES 2: STRUK (Receipt) - PASS
+      - Potongan Ayam category tab working
+      - All 3 products visible (Sayap, Dada, Paha Atas)
+      - CRITICAL FIX VERIFIED: Receipt shows "2 pcs" (not "2 ekor")
+      - Promo text displayed correctly
+      - Store kop (address, phone) displayed
+      - WhatsApp share working with correct data
+      
+      ✅ TES 3: RIWAYAT TRANSAKSI (Sales History) - PASS
+      - Transaction list displayed
+      - Detail dialog opens on row click
+      - Transaction details show correct unit (kg for Ayam Broiler)
+      - formatQtyUnit() working correctly
+      
+      ✅ TES 4: LAPORAN PDF (Reports) - PASS
+      - All 3 PDF buttons working (pdf-pl, pdf-sales, pdf-stock)
+      - Valid PDFs downloaded:
+        * Laba Rugi: 3,449 bytes
+        * Penjualan: 16,449 bytes
+        * Stok: 4,070 bytes
+      - All PDFs start with %PDF- (valid format)
+      - CSV export buttons still present
+      - Empty date range handled gracefully (no error)
+      
+      ✅ TES 5: PRODUKSI POTONG (Production) - PASS
+      - Add production dialog working
+      - Output dropdown contains all 3 new products:
+        * Sayap Ayam ✅
+        * Dada Ayam ✅
+        * Paha Atas Ayam ✅
+      - Production creation successful
+      - Toast "Produksi tersimpan" displayed
+      
+      ✅ TES 6: KATEGORI POTONGAN (Category UI) - PASS
+      - "Potongan Ayam" tab in POS working
+      - All 3 products visible in POS
+      - Category badge displayed in Produk & Harga
+      - Potongan products correctly EXCLUDED from Pembelian dropdown
+      
+      ✅ TES 7: REGRESI (Regression) - PASS
+      - Dashboard loads with data (omzet, charts)
+      - No console errors
+      - No breaking changes in existing features
+      
+      === KEY FINDINGS ===
+      
+      1. CRITICAL BUG FIX VERIFIED ✅
+         - formatQtyUnit() correctly displays "pcs" for pcs unit
+         - No more "ekor" for pcs products
+         - Fix applied in: lib/format.js, lib/receipt.js, Receipt.js, SalesHistory.js
+      
+      2. STORE IDENTITY INTEGRATION ✅
+         - Settings page saves address and phone
+         - Data appears in receipts (preview, print, WhatsApp)
+         - Data appears in PDF reports (kop toko)
+      
+      3. NEW PRODUCTS INTEGRATION ✅
+         - Sayap Ayam, Dada Ayam, Paha Atas Ayam working in:
+           * POS (category tab, product cards, transactions)
+           * Production (output dropdown, production creation)
+           * Products page (category badge)
+         - Correctly excluded from Purchases (stock from Production only)
+      
+      4. PDF DOWNLOAD FEATURE ✅
+         - All 3 PDF endpoints working
+         - Valid PDFs with store kop
+         - Graceful error handling (empty data)
+         - No regression in CSV exports
+      
+      === NO CRITICAL ISSUES FOUND ===
+      
+      All FASE 2 frontend features are PRODUCTION-READY.
+      - Receipt promo text working
+      - Satuan pcs fix verified
+      - Store identity integration complete
+      - PDF downloads working
+      - New products fully integrated
+      - No regressions in existing features
+      
+      User can proceed with production deployment.

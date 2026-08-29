@@ -44,7 +44,7 @@ export default function Purchases() {
           </tbody>
         </table>
       </Card>
-      {open && <PurchaseDialog suppliers={suppliers || []} products={(products || []).filter((p) => p.category !== "sampingan" && p.category !== "fillet")} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
+      {open && <PurchaseDialog suppliers={suppliers || []} products={(products || []).filter((p) => !["sampingan", "fillet", "potongan"].includes(p.category))} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
     </div>
   );
 }

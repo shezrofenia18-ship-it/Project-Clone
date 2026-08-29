@@ -23,6 +23,15 @@ export function formatPct(n) {
   return Number(n || 0).toLocaleString("id-ID", { maximumFractionDigits: 2 }) + "%";
 }
 
+// Satu sumber kebenaran untuk menulis jumlah + satuan. Sebelumnya beberapa tempat
+// menulis "ekor" untuk SEMUA satuan non-kg, sehingga produk per pcs (Paha Ayam,
+// Ceker, Sayap, dst) tercetak salah di struk.
+export function formatQtyUnit(qty, unit, digits = 3) {
+  if (unit === "kg") return formatWeight(qty, digits);
+  if (unit === "pcs") return `${formatNumber(qty)} pcs`;
+  return `${formatNumber(qty)} ekor`;
+}
+
 export function parseDecimal(str) {
   if (typeof str === "number") return str;
   if (!str) return 0;
@@ -50,6 +59,7 @@ export const CATEGORY_LABELS = {
   kampung: "Ayam Kampung",
   pejantan: "Ayam Pejantan",
   fillet: "Ayam Fillet",
+  potongan: "Potongan Ayam",
   sampingan: "Produk Sampingan",
 };
 

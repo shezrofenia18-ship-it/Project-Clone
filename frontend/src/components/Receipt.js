@@ -1,10 +1,12 @@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { formatRupiah, formatWeight, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
-import { printReceipt, waShareReceipt } from "@/lib/receipt";
+import { formatRupiah, formatQtyUnit, formatTime, formatDate, PAYMENT_LABELS } from "@/lib/format";
+import { printReceipt, waShareReceipt, RECEIPT_PROMO, RECEIPT_PROMO_NOTE } from "@/lib/receipt";
+import { useStore } from "@/lib/hooks";
 import { Printer, Share2, Check, WifiOff } from "lucide-react";
 
 export default function Receipt({ sale, phone, offline, onClose }) {
+  const store = useStore();
   if (!sale) return null;
   return (
     <Dialog open onOpenChange={onClose}>
@@ -16,8 +18,10 @@ export default function Receipt({ sale, phone, offline, onClose }) {
 
         <div data-testid="receipt-preview" className="rounded-lg border border-dashed border-border p-4 font-mono text-xs bg-background max-h-[45vh] overflow-y-auto">
           <div className="text-center">
-            <p className="font-bold text-sm">Berkah Ayam Mili</p>
-            <p className="text-[10px] text-muted-foreground">Ayam Potong & Fillet</p>
+            <p className="font-bold text-sm">{store.name}</p>
+            <p className="text-[10px] text-muted-foreground">{store.tagline}</p>
+            {store.address && <p className="text-[10px] text-muted-foreground">{store.address}</p>}
+            {store.phone && <p className="text-[10px] text-muted-foreground">Telp/WA: {store.phone}</p>}
           </div>
           {offline && (
             <div className="flex items-center justify-center gap-1 text-[10px] text-warning mt-1">
@@ -33,7 +37,7 @@ export default function Receipt({ sale, phone, offline, onClose }) {
             <div key={`${it.name}-${i}`} className="mb-1.5">
               <p>{it.name}</p>
               <div className="flex justify-between text-muted-foreground">
-                <span>{it.unit === "kg" ? formatWeight(it.qty, 3) : `${it.qty} ekor`} x {formatRupiah(it.price)}</span>
+                <span>{formatQtyUnit(it.qty, it.unit)} x {formatRupiah(it.price)}</span>
                 <span>{formatRupiah(it.subtotal)}</span>
               </div>
             </div>
@@ -45,13 +49,17 @@ export default function Receipt({ sale, phone, offline, onClose }) {
           {sale.receivable > 0 && <div className="flex justify-between text-warning"><span>Piutang</span><span>{formatRupiah(sale.receivable)}</span></div>}
           <div className="border-t border-dashed my-2" />
           <p className="text-center text-muted-foreground">Terima kasih atas kunjungan Anda</p>
+          <div data-testid="receipt-promo" className="mt-2 border border-dashed border-foreground/40 rounded p-2 text-center">
+            <p className="font-bold leading-snug">{RECEIPT_PROMO}</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{RECEIPT_PROMO_NOTE}</p>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" data-testid="receipt-print" onClick={() => printReceipt(sale)}>
+          <Button variant="outline" data-testid="receipt-print" onClick={() => printReceipt(sale, store)}>
             <Printer className="w-4 h-4 mr-1" /> Cetak
           </Button>
-          <Button variant="outline" data-testid="receipt-wa" onClick={() => waShareReceipt(sale, "Berkah Ayam Mili", phone)} className="text-success border-success/40 hover:bg-success/10">
+          <Button variant="outline" data-testid="receipt-wa" onClick={() => waShareReceipt(sale, store, phone)} className="text-success border-success/40 hover:bg-success/10">
             <Share2 className="w-4 h-4 mr-1" /> WhatsApp
           </Button>
         </div>

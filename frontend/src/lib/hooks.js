@@ -25,6 +25,18 @@ export function useFetch(path, deps = [], cacheKey = null) {
   return { data, loading, reload: load, setData };
 }
 
+// Identitas toko untuk kop struk & laporan. Di-cache supaya struk tetap benar
+// walau kasir sedang offline.
+export function useStore() {
+  const { data } = useFetch("/settings", [], "settings");
+  return {
+    name: data?.store_name || "Berkah Ayam Mili",
+    tagline: data?.store_tagline || "Ayam Potong & Fillet",
+    address: data?.store_address || "",
+    phone: data?.store_phone || "",
+  };
+}
+
 export function usePoll(path, interval = 8000) {
   const [data, setData] = useState(null);
   const [online, setOnline] = useState(true);

@@ -8,11 +8,45 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatRupiah, formatWeight, formatPct, formatDate, PAYMENT_LABELS } from "@/lib/format";
-import { Printer, Download } from "lucide-react";
+import { Printer, Download, FileDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function daysAgoISO(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
+
+// PDF dibuat di server (reportlab) supaya hasil cetaknya rapi & seragam,
+// lengkap dengan kop toko, periode, dan kolom tanda tangan.
+function PdfButton({ path, filename, testid }) {
+  const [busy, setBusy] = useState(false);
+  const click = async () => {
+    setBusy(true);
+    try {
+      const r = await api.get(path, { responseType: "blob" });
+      const cd = r.headers["content-disposition"] || "";
+      const m = /filename="?([^";]+)"?/.exec(cd);
+      const url = URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = m ? m[1] : filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast.success("Laporan PDF terunduh");
+    } catch {
+      toast.error("Gagal membuat PDF. Periksa koneksi lalu coba lagi.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button variant="outline" size="sm" data-testid={testid} disabled={busy} onClick={click}>
+      {busy ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <FileDown className="w-4 h-4 mr-1" />}
+      {busy ? "Menyiapkan..." : "Unduh PDF"}
+    </Button>
+  );
+}
 
 function csvExport(filename, rows) {
   const sep = ";";
@@ -60,7 +94,12 @@ export default function Reports() {
 
         <TabsContent value="pl">
           {pl && (
-            <div className="grid lg:grid-cols-2 gap-4">
+            <>
+              <div className="flex justify-end mb-3">
+                <PdfButton testid="pdf-pl" path={`/reports/profit-loss/pdf?start=${start}&end=${end}`}
+                  filename={`laba-rugi_${start}_${end}.pdf`} />
+              </div>
+              <div className="grid lg:grid-cols-2 gap-4">
               <Card className="p-6">
                 <h3 className="font-head font-bold mb-4">Ringkasan Laba Rugi</h3>
                 <div className="space-y-2.5 text-sm">
@@ -86,13 +125,16 @@ export default function Reports() {
                 ) : <p className="text-sm text-muted-foreground">Tidak ada data.</p>}
               </Card>
             </div>
+            </>
           )}
         </TabsContent>
 
         <TabsContent value="sales">
           {sales && (
             <>
-              <div className="flex justify-end mb-3">
+              <div className="flex justify-end gap-2 mb-3">
+                <PdfButton testid="pdf-sales" path={`/reports/sales/pdf?start=${start}&end=${end}`}
+                  filename={`penjualan_${start}_${end}.pdf`} />
                 <Button variant="outline" size="sm" data-testid="export-sales" onClick={() => csvExport(`penjualan_${start}_${end}.csv`, [["Tanggal", "Kasir", "Pelanggan", "Metode", "Jumlah Item", "Total (Rp)", "HPP (Rp)", "Laba (Rp)"], ...sales.sales.map((s) => [formatDate(s.date), s.cashier_name, s.customer_name, PAYMENT_LABELS[s.payment_method] || s.payment_method, (s.items || []).length, Math.round(s.total), Math.round(s.total_hpp || 0), Math.round((s.total || 0) - (s.total_hpp || 0))])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
               </div>
               <div className="grid sm:grid-cols-3 gap-4 mb-4">
@@ -115,8 +157,9 @@ export default function Reports() {
         <TabsContent value="stock">
           {stock && (
             <>
-              <div className="flex justify-end mb-3">
-                <Button variant="outline" size="sm" data-testid="export-stock" onClick={() => csvExport("nilai_stok.csv", [["Produk", "Kategori", "Ekor", "Kg", "HPP/kg (Rp)", "Nilai Stok (Rp)"], ...stock.items.map((s) => [s.name, s.category, s.stock_ekor, s.stock_kg, Math.round(s.hpp_kg || 0), Math.round(s.value || 0)])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
+              <div className="flex justify-end gap-2 mb-3">
+                <PdfButton testid="pdf-stock" path="/reports/stock/pdf" filename="nilai-stok.pdf" />
+                <Button variant="outline" size="sm" data-testid="export-stock" onClick={() => csvExport("nilai_stok.csv", [["Produk", "Kategori", "Ekor", "Kg", "Pcs", "HPP/kg (Rp)", "Nilai Stok (Rp)"], ...stock.items.map((s) => [s.name, s.category, s.stock_ekor, s.stock_kg, s.stock_pcs || 0, Math.round(s.hpp_kg || 0), Math.round(s.value || 0)])])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
               </div>
               <Card className="overflow-x-auto">
               <table className="w-full text-sm">

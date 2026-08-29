@@ -20,7 +20,7 @@ import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METH
 import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff } from "lucide-react";
 import PendingSales from "@/components/PendingSales";
 
-const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "sampingan"];
+const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "potongan", "sampingan"];
 
 // Local calendar date (YYYY-MM-DD) so a sale queued offline is still booked on the
 // day it actually happened, not on the day it finally syncs.

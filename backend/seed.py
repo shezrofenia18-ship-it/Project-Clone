@@ -40,6 +40,43 @@ PRODUCTS = [
      "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
 ]
 
+# POTONG PARTS: bagian hasil "Produksi Potong" yang bisa dijual per kg ATAU per pcs.
+# Ditambahkan idempoten lewat ensure_potong_parts() supaya database yang sudah ada
+# (dan sudah pernah di-seed) tetap mendapatkan produk-produk ini.
+POTONG_PARTS = [
+    # name, hpp_kg, price_kg, hpp_pcs, price_pcs, min_stock_kg, image
+    ("Sayap Ayam", 30000, 40000, 4000, 6000, 3,
+     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
+    ("Dada Ayam", 32000, 42000, 9000, 13000, 3,
+     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
+    ("Paha Atas Ayam", 30000, 40000, 8000, 11000, 3,
+     "https://images.unsplash.com/photo-1604503468506-a8da13d82791?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"),
+]
+
+
+async def ensure_potong_parts(db):
+    """Pastikan bagian potongan (Sayap, Dada, Paha Atas) tersedia sebagai produk.
+
+    Dipanggil setiap startup dan aman diulang: produk yang namanya sudah ada
+    dilewati, harga/stok yang sudah diubah owner TIDAK ditimpa.
+    """
+    added = []
+    for (name, hpp_kg, price_kg, hpp_pcs, price_pcs, min_kg, img) in POTONG_PARTS:
+        if await db.products.find_one({"name": name}):
+            continue
+        await db.products.insert_one({
+            "id": _id(), "name": name, "category": "potongan", "units": ["kg", "pcs"],
+            "buy_price_kg": 0, "hpp_kg": hpp_kg, "hpp_ekor": 0, "hpp_pcs": hpp_pcs,
+            "price_kg": price_kg, "price_ekor": 0, "price_pcs": price_pcs,
+            "stock_kg": 0, "stock_ekor": 0, "stock_pcs": 0,
+            "min_stock_kg": min_kg, "min_stock_ekor": 0, "min_stock_pcs": 0,
+            "image_url": img, "is_byproduct": False, "active": True,
+            "created_at": _now().isoformat(),
+        })
+        added.append(name)
+    return added
+
+
 CUSTOMERS = [
     ("Warung Bu Sri", "081234567001", "Jl. Melati No.1", "warung"),
     ("RM Sederhana", "081234567002", "Jl. Merdeka No.5", "rumah_makan"),
