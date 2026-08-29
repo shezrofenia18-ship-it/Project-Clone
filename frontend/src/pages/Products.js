@@ -11,15 +11,123 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, formatPct, CATEGORY_LABELS } from "@/lib/format";
-import { Plus, Pencil, Trash2, Image as ImageIcon, RotateCcw } from "lucide-react";
+import { Plus, Pencil, Trash2, Image as ImageIcon, RotateCcw, Scale, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const EMPTY = { name: "", category: "sampingan", units: ["kg"], buy_price_kg: 0, hpp_kg: 0, hpp_ekor: 0, hpp_pcs: 0, price_kg: 0, price_ekor: 0, price_pcs: 0, stock_kg: 0, stock_ekor: 0, stock_pcs: 0, min_stock_kg: 0, min_stock_ekor: 0, min_stock_pcs: 0, image_url: "", is_byproduct: false, active: true, avg_weight_override: 0 };
 
 // Berat perkiraan/ekor yang benar-benar dipakai sistem untuk menghitung HPP/ekor.
+// Prioritas backend: override manual > rata-rata pembelian > perkiraan bawaan sistem.
 const usedWeight = (p) => Number(p.avg_weight_override) > 0
   ? Number(p.avg_weight_override)
   : Number(p.avg_weight_used || p.avg_weight_ekor || 0);
+
+// Panduan: produk yang berat/ekornya masih memakai perkiraan bawaan sistem.
+// Sistem TETAP menghitung HPP/ekor dari perkiraan ini walau owner tidak mengisi,
+// jadi angka laba tidak pernah salah 100% seperti sebelumnya.
+function WeightGuidance({ onChanged }) {
+  const { data, reload } = useFetch("/products/weight-guidance");
+  const [hidden, setHidden] = useState(localStorage.getItem("bam_weight_guide_hidden") === "1");
+  const [draft, setDraft] = useState({});
+  const [busy, setBusy] = useState("");
+
+  const toggle = () => {
+    const next = !hidden;
+    setHidden(next);
+    localStorage.setItem("bam_weight_guide_hidden", next ? "1" : "0");
+  };
+
+  const saveWeight = async (id, val) => {
+    const v = Number(val) || 0;
+    if (v < 0 || v > 10) return toast.error("Berat per ekor tidak wajar (0 - 10 kg)");
+    setBusy(id);
+    try {
+      await api.post(`/products/${id}/avg-weight`, { avg_weight_override: v });
+      toast.success(v > 0 ? "Berat per ekor dikonfirmasi" : "Kembali ke perhitungan otomatis");
+      setDraft((d) => ({ ...d, [id]: undefined }));
+      reload();
+      onChanged?.();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
+  };
+
+  const items = data?.items || [];
+  const estimates = items.filter((i) => i.is_estimate);
+  const thin = items.filter((i) => i.thin_margin);
+  if (!data || (!estimates.length && !thin.length)) return null;
+
+  return (
+    <Card className="mb-4 border-warning/40 bg-warning/5" data-testid="weight-guidance">
+      <div className="flex items-start justify-between gap-3 p-4">
+        <div className="flex gap-3">
+          <div className="w-9 h-9 rounded-lg bg-warning/20 flex items-center justify-center shrink-0">
+            <Scale className="w-5 h-5 text-warning" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-sm">Panduan Berat per Ekor</h3>
+            <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed max-w-2xl">
+              {estimates.length > 0
+                ? <>Ada <b>{estimates.length} produk</b> yang berat rata-ratanya belum pernah Anda isi dan belum pernah dibeli per ekor.
+                  Sistem <b>tetap memakai berat perkiraan</b> di bawah supaya HPP & laba per ekor tidak nol —
+                  konfirmasi angkanya agar makin akurat.</>
+                : <>Berat per ekor semua produk sudah terisi. Periksa peringatan laba di bawah.</>}
+            </p>
+          </div>
+        </div>
+        <Button variant="ghost" size="sm" data-testid="toggle-weight-guidance" onClick={toggle}>
+          {hidden ? <><ChevronDown className="w-4 h-4 mr-1" /> Lihat</> : <><ChevronUp className="w-4 h-4 mr-1" /> Sembunyikan</>}
+        </Button>
+      </div>
+
+      {!hidden && (
+        <div className="px-4 pb-4 space-y-2">
+          {estimates.map((i) => {
+            const val = draft[i.id] === undefined ? "" : draft[i.id];
+            return (
+              <div key={i.id} data-testid={`weight-guide-${i.id}`}
+                className="rounded-lg border border-border bg-card p-3 flex flex-wrap items-center gap-3">
+                <div className="min-w-[190px]">
+                  <p className="font-semibold text-sm">{i.name}</p>
+                  <p className="text-[11px] text-muted-foreground tabular">
+                    Perkiraan sistem {formatNumber(i.avg_weight_used, 2)} kg/ekor · modal/ekor {formatRupiah(i.hpp_ekor)}
+                    {i.price_ekor > 0 && <> · jual {formatRupiah(i.price_ekor)}</>}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Input type="number" step="0.01" min="0" className="w-28 tabular"
+                    data-testid={`weight-input-${i.id}`}
+                    placeholder={`${i.avg_weight_used}`} value={val}
+                    onChange={(e) => setDraft((d) => ({ ...d, [i.id]: e.target.value }))} />
+                  <span className="text-xs text-muted-foreground">kg/ekor</span>
+                  <Button size="sm" disabled={busy === i.id || !val}
+                    data-testid={`weight-save-${i.id}`}
+                    onClick={() => saveWeight(i.id, val)}>Simpan</Button>
+                  <Button size="sm" variant="outline" disabled={busy === i.id}
+                    data-testid={`weight-accept-${i.id}`}
+                    onClick={() => saveWeight(i.id, i.avg_weight_used)}>
+                    Pakai {formatNumber(i.avg_weight_used, 2)} kg
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+
+          {thin.map((i) => (
+            <div key={`thin-${i.id}`} data-testid={`thin-margin-${i.id}`}
+              className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+              <span className="leading-relaxed">
+                <b>{i.name}</b>: harga jual {formatRupiah(i.price_ekor)}/ekor sedangkan modal efektif {formatRupiah(i.hpp_ekor)}/ekor
+                {" "}({formatNumber(i.avg_weight_used, 2)} kg × {formatRupiah(i.hpp_kg)}/kg) — laba hanya{" "}
+                <b className={i.profit_ekor < 0 ? "text-destructive" : ""}>{formatRupiah(i.profit_ekor)}</b>{" "}
+                ({formatPct(i.margin_ekor)}). Tinjau harga jual per ekor atau berat perkiraannya.
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 export default function Products() {
   const { data, reload } = useFetch("/products");
@@ -38,6 +146,7 @@ export default function Products() {
     <div className="bam-fade">
       <PageHeader title="Produk & Harga" subtitle="Master produk, harga beli, HPP & harga jual"
         actions={<Button data-testid="add-product" onClick={() => setEdit(EMPTY)}><Plus className="w-4 h-4 mr-1" /> Tambah Produk</Button>} />
+      <WeightGuidance onChanged={reload} />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -60,6 +169,7 @@ export default function Products() {
                 const berat = usedWeight(p);
                 const sellsEkor = (p.units || []).includes("ekor");
                 const needWeight = sellsEkor && !berat;
+                const isEstimate = p.avg_weight_source === "perkiraan" && berat > 0;
                 return (
                   <tr key={p.id} data-testid={`product-row-${p.id}`} className="border-t border-border hover:bg-accent/40">
                     <td className="px-4 py-3 font-semibold">{p.name}{p.active === false && <Badge variant="secondary" className="ml-2 text-[10px]">nonaktif</Badge>}</td>
@@ -70,6 +180,13 @@ export default function Products() {
                       {berat ? `${formatNumber(berat, 2)} kg` : "-"}
                       {Number(p.avg_weight_override) > 0 && (
                         <Badge variant="secondary" className="ml-1.5 text-[10px]" title="Diisi manual oleh owner">manual</Badge>
+                      )}
+                      {isEstimate && (
+                        <Badge data-testid={`badge-perkiraan-${p.id}`}
+                          className="ml-1.5 text-[10px] bg-warning/20 text-warning hover:bg-warning/20"
+                          title="Berat perkiraan bawaan sistem — HPP/ekor sudah dihitung, konfirmasi agar lebih akurat">
+                          perkiraan
+                        </Badge>
                       )}
                       {needWeight && (
                         <Badge className="ml-1.5 text-[10px] bg-warning/20 text-warning hover:bg-warning/20"
@@ -104,7 +221,11 @@ function ProductDialog({ init, onClose, onSaved }) {
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const num = (k) => (e) => set(k, Number(e.target.value));
   const autoAvg = Number(f.avg_weight_ekor || 0);
-  const effAvg = Number(f.avg_weight_override) > 0 ? Number(f.avg_weight_override) : autoAvg;
+  const dfltAvg = Number(f.avg_weight_default || 0);
+  const effAvg = Number(f.avg_weight_override) > 0
+    ? Number(f.avg_weight_override)
+    : (autoAvg > 0 ? autoAvg : dfltAvg);
+  const usingEstimate = Number(f.avg_weight_override) <= 0 && autoAvg <= 0 && dfltAvg > 0;
 
   const onUpload = async (e) => {
     const file = e.target.files?.[0];
@@ -181,12 +302,17 @@ function ProductDialog({ init, onClose, onSaved }) {
             <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed">
               {autoAvg > 0
                 ? `Otomatis dari ayam yang pernah masuk stok: ${formatNumber(autoAvg, 3)} kg/ekor (${formatNumber(f.cum_ekor_in)} ekor · ${formatWeight(f.cum_weight_in)}).`
-                : "Belum ada data pembelian per ekor untuk produk ini — isi manual agar HPP per ekor akurat."}
-              {" "}Isi 0 untuk memakai perhitungan otomatis.
+                : (dfltAvg > 0
+                  ? `Belum ada data pembelian per ekor. Selama dibiarkan 0, sistem tetap memakai berat perkiraan bawaan ${formatNumber(dfltAvg, 2)} kg/ekor agar HPP & laba per ekor tidak nol.`
+                  : "Belum ada data pembelian per ekor untuk produk ini — isi manual agar HPP per ekor akurat.")}
+              {" "}Isi 0 untuk memakai perhitungan otomatis/perkiraan.
             </p>
             <p className="text-xs mt-2">
               HPP per ekor dipakai sistem: <b className="tabular">{formatRupiah((f.hpp_kg || 0) * effAvg)}</b>
               {effAvg > 0 ? ` (${formatRupiah(f.hpp_kg)}/kg × ${formatNumber(effAvg, 3)} kg)` : " — belum bisa dihitung"}
+              {usingEstimate && (
+                <Badge className="ml-1.5 text-[10px] bg-warning/20 text-warning hover:bg-warning/20">perkiraan</Badge>
+              )}
             </p>
           </div>
           <div><Label className="text-xs">Harga Jual/kg</Label><Input data-testid="prod-price-kg" type="number" value={f.price_kg} onChange={num("price_kg")} className="mt-1 tabular" /></div>

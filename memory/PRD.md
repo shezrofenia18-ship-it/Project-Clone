@@ -81,5 +81,19 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - `memory/test_credentials.md` dibuat ulang (owner/admin/kasir; password kasir Budi tidak diketahui).
 - CATATAN KEAMANAN: user menempel GitHub PAT di chat → harus di-revoke.
 
+## Implemented (2026-08-29 — FASE 4a: Berat Perkiraan Bawaan per Ekor + Rekap WhatsApp diperluas)
+- **Berat perkiraan bawaan (fallback)** — permintaan user: "pandu owner mengisi berat perkiraan Ayam Kampung & Pejantan, JIKA TIDAK DIISI TETAP DENGAN PERKIRAAN".
+  Prioritas berat efektif/ekor: `manual (override owner)` > `auto (rata-rata pembelian)` > `perkiraan (DEFAULT_AVG_WEIGHT)`.
+  Default per nama produk: broiler 1.8 · kampung 1.2 · pejantan 1.1 · petelur 1.6 · ayam lain 1.5 (fallback 1.5).
+  Hanya untuk produk per-ekor (`sells_per_ekor`), jadi produk potongan/fillet tetap `hpp_ekor = 0` (benar).
+  Field baru: `avg_weight_default`, `avg_weight_is_estimate`; `refresh_all_avg_weights()` idempoten di startup.
+  Endpoint baru `GET /api/products/weight-guidance` (owner+admin) → need_confirm, thin_margin_count, items dgn profit_ekor/margin_ekor/thin_margin.
+  UI Produk & Harga: panel **"Panduan Berat per Ekor"** (bisa disembunyikan, tersimpan di localStorage) berisi input cepat per produk + tombol "Pakai X kg", plus peringatan **laba/ekor tipis (<5%)**; badge kuning **perkiraan** di tabel & dialog; POS menandai "berat perkiraan" pada baris modal (owner/admin saja).
+  Efeknya: Ayam Kampung `hpp_ekor` 62.400 (52.000 × 1,2), Ayam Pejantan 36.300 (33.000 × 1,1) — sebelumnya 0 sehingga laba/ekor tampak 100%.
+- **Rekap WhatsApp** (sudah ada dari sesi sebelumnya, kini diuji + diperluas): collection `wa_logs`, `GET /api/whatsapp/log`, `POST /api/whatsapp/test` (owner), trigger tercatat `manual`/`otomatis`/`uji coba`; UI Pengaturan dapat tombol **Kirim Uji Coba** + **Riwayat pengiriman terakhir**.
+  Mode aktif = **1-tap manual** (kredensial Meta belum diberikan user). Begitu `META_PHONE_NUMBER_ID` + `META_ACCESS_TOKEN` (+ `WA_TEMPLATE_NAME`) diisi di backend/.env, pengiriman otomatis jam 21:00 WIB langsung aktif tanpa ubah kode.
+- Teruji: testing agent backend **14/14 PASS** (berat perkiraan 6/6, WhatsApp 7/7, regresi 11/11).
+- Bersih-bersih data uji: 2 pembelian uji dihapus (stok & akumulator pulih), harga Ayam Kampung dikembalikan ke nilai demo (beli 45.000 · HPP 52.000 · jual 62.000).
+
 ## Test Credentials
 Lihat `/app/memory/test_credentials.md`.

@@ -8,17 +8,22 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { MessageCircle, Plus, Trash2, Loader2 } from "lucide-react";
+import { MessageCircle, Plus, Trash2, Loader2, Send } from "lucide-react";
 
 // Rekap tutup buku harian dikirim ke WhatsApp. Nomor bisa ditambah/diubah kapan saja.
 function WhatsAppSettings() {
   const [w, setW] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [log, setLog] = useState([]);
+
+  const loadLog = () => api.get("/whatsapp/log?limit=5").then((r) => setLog(r.data || [])).catch(() => {});
 
   useEffect(() => {
     api.get("/whatsapp/settings")
       .then((r) => setW({ ...r.data, recipients: r.data.recipients?.length ? r.data.recipients : [{ name: "", number: "" }] }))
       .catch((e) => toast.error(apiError(e)));
+    loadLog();
   }, []);
 
   if (!w) return <div className="h-24 rounded-xl bg-muted animate-pulse" />;
@@ -49,6 +54,21 @@ function WhatsAppSettings() {
   };
 
   const configured = w.provider?.configured;
+
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      const { data } = await api.post("/whatsapp/test");
+      if (data.mode === "auto") {
+        toast.success(`Pesan uji terkirim ke ${data.sent_count} nomor`);
+      } else {
+        const link = data.results?.[0]?.link;
+        if (link) window.open(link, "_blank");
+        toast.info("Provider belum dikonfigurasi — WhatsApp dibuka dengan pesan uji siap kirim");
+      }
+      loadLog();
+    } catch (e) { toast.error(apiError(e)); } finally { setTesting(false); }
+  };
 
   return (
     <div className="space-y-3 border-t border-border pt-5">
@@ -120,9 +140,33 @@ function WhatsAppSettings() {
           onChange={(e) => setW((p) => ({ ...p, auto_time: e.target.value }))} />
       </div>
 
-      <Button data-testid="wa-save" disabled={busy} onClick={save}>
-        {busy && <Loader2 className="w-4 h-4 mr-1 animate-spin" />} Simpan Pengaturan WhatsApp
-      </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button data-testid="wa-save" disabled={busy} onClick={save}>
+          {busy && <Loader2 className="w-4 h-4 mr-1 animate-spin" />} Simpan Pengaturan WhatsApp
+        </Button>
+        <Button variant="outline" data-testid="wa-test" disabled={testing} onClick={sendTest}>
+          {testing ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Send className="w-4 h-4 mr-1" />}
+          Kirim Uji Coba
+        </Button>
+      </div>
+
+      {log.length > 0 && (
+        <div className="pt-2" data-testid="wa-log">
+          <p className="text-xs font-semibold mb-1.5">Riwayat pengiriman terakhir</p>
+          <div className="space-y-1">
+            {log.map((l) => (
+              <div key={l.id} className="text-[11px] text-muted-foreground flex items-center gap-2">
+                <span className="tabular">{(l.created_at || "").slice(0, 16).replace("T", " ")}</span>
+                <Badge variant="secondary" className="text-[10px]">{l.trigger}</Badge>
+                <span>{l.kind === "test" ? "uji coba" : `rekap ${l.date}`}</span>
+                <span className={l.sent_count > 0 ? "text-success" : "text-warning"}>
+                  {l.sent_count > 0 ? `terkirim ${l.sent_count} nomor` : "disiapkan (mode 1-tap)"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

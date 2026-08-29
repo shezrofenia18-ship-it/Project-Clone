@@ -174,11 +174,60 @@ async def apply_stock(product, delta_ekor, delta_kg, mtype, user, ref, allow_neg
 # ditimbang. Jadi HPP/ekor dihitung: HPP/kg x berat perkiraan per ekor.
 # Berat perkiraan diambil dari rata-rata seluruh ayam yang pernah MASUK STOK
 # (akumulator cum_weight_in / cum_ekor_in), atau dari override manual owner.
-def effective_avg_weight(product: dict) -> float:
+#
+# Urutan prioritas berat efektif per ekor:
+#   1. override manual owner        -> source "manual"
+#   2. rata-rata dari pembelian     -> source "auto"
+#   3. BERAT PERKIRAAN BAWAAN       -> source "perkiraan"  (fallback, agar HPP/ekor
+#      tidak pernah 0 walau owner belum pernah mengisi apa pun)
+DEFAULT_AVG_WEIGHT = (
+    ("broiler", 1.8),
+    ("kampung", 1.2),
+    ("pejantan", 1.1),
+    ("petelur", 1.6),
+    ("ayam", 1.5),
+)
+DEFAULT_AVG_WEIGHT_FALLBACK = 1.5
+
+
+def sells_per_ekor(product: dict) -> bool:
+    """Produk yang relevan punya berat/ekor: dijual atau distok per ekor."""
+    units = product.get("units") or []
+    return bool(
+        "ekor" in units
+        or float(product.get("price_ekor", 0) or 0) > 0
+        or float(product.get("stock_ekor", 0) or 0) > 0
+        or float(product.get("cum_ekor_in", 0) or 0) > 0
+    )
+
+
+def default_avg_weight(product: dict) -> float:
+    """Berat perkiraan bawaan berdasarkan jenis ayam pada nama produk."""
+    if not sells_per_ekor(product):
+        return 0.0
+    name = (product.get("name") or "").lower()
+    for key, val in DEFAULT_AVG_WEIGHT:
+        if key in name:
+            return val
+    return DEFAULT_AVG_WEIGHT_FALLBACK
+
+
+def resolve_avg_weight(product: dict, auto_avg: Optional[float] = None) -> tuple:
+    """Kembalikan (berat_dipakai, sumber, berat_bawaan)."""
     ov = float(product.get("avg_weight_override", 0) or 0)
+    auto = float(product.get("avg_weight_ekor", 0) or 0) if auto_avg is None else float(auto_avg)
+    dflt = default_avg_weight(product)
     if ov > 0:
-        return round(ov, 3)
-    return round(float(product.get("avg_weight_ekor", 0) or 0), 3)
+        return round(ov, 3), "manual", dflt
+    if auto > 0:
+        return round(auto, 3), "auto", dflt
+    if dflt > 0:
+        return round(dflt, 3), "perkiraan", dflt
+    return 0.0, "auto", dflt
+
+
+def effective_avg_weight(product: dict) -> float:
+    return resolve_avg_weight(product)[0]
 
 
 async def recompute_avg_weight(product_id: str, add_ekor: float = 0.0, add_weight: float = 0.0,
@@ -194,14 +243,17 @@ async def recompute_avg_weight(product_id: str, add_ekor: float = 0.0, add_weigh
     cum_weight = max(round(float(p.get("cum_weight_in", 0) or 0) + add_weight, 3), 0.0)
     auto_avg = round(cum_weight / cum_ekor, 3) if cum_ekor > 0 else 0.0
     hpp_kg = float(p.get("hpp_kg", 0) or 0) if set_hpp_kg is None else float(set_hpp_kg)
-    override = float(p.get("avg_weight_override", 0) or 0)
-    avg_used = round(override, 3) if override > 0 else auto_avg
+    probe = {**p, "cum_ekor_in": cum_ekor, "cum_weight_in": cum_weight}
+    avg_used, source, dflt = resolve_avg_weight(probe, auto_avg)
     updates = {
         "cum_ekor_in": cum_ekor,
         "cum_weight_in": cum_weight,
         "avg_weight_ekor": auto_avg,
         "avg_weight_used": avg_used,
-        "avg_weight_source": "manual" if override > 0 else "auto",
+        "avg_weight_source": source,
+        "avg_weight_default": dflt,
+        # true = angka masih perkiraan bawaan sistem, belum dikonfirmasi owner
+        "avg_weight_is_estimate": source == "perkiraan",
         "hpp_kg": round(hpp_kg, 2),
         # Kalau belum ada data berat sama sekali, jangan hapus HPP/ekor yang
         # sudah diisi manual oleh owner.
@@ -216,6 +268,7 @@ async def migrate_avg_weights():
     # Bagian ini aman dijalankan berulang: memastikan semua produk punya field berat.
     for field, default in (("avg_weight_override", 0), ("avg_weight_ekor", 0),
                            ("avg_weight_used", 0), ("avg_weight_source", "auto"),
+                           ("avg_weight_default", 0), ("avg_weight_is_estimate", False),
                            ("cum_ekor_in", 0), ("cum_weight_in", 0)):
         await db.products.update_many({field: {"$exists": False}}, {"$set": {field: default}})
     if await get_setting("avg_weight_migrated_v1", False):
@@ -235,6 +288,18 @@ async def migrate_avg_weights():
     await db.settings.update_one({"key": "avg_weight_migrated_v1"},
                                  {"$set": {"value": True}}, upsert=True)
     logger.info("Migrasi berat rata-rata/ekor selesai untuk %s produk", len(agg))
+
+
+async def refresh_all_avg_weights():
+    """Hitung ulang berat/ekor + HPP/ekor semua produk (aman dijalankan berulang).
+
+    Dipakai saat startup supaya produk yang belum pernah dibeli per ekor langsung
+    memakai BERAT PERKIRAAN BAWAAN (hpp_ekor tidak lagi 0).
+    """
+    ids = [p["id"] for p in await db.products.find({}, {"id": 1}).to_list(1000) if p.get("id")]
+    for pid in ids:
+        await recompute_avg_weight(pid)
+    logger.info("Berat/ekor & HPP/ekor disegarkan untuk %s produk", len(ids))
 
 
 # ------------------------- models -------------------------
@@ -379,6 +444,45 @@ class SettingBody(BaseModel):
 async def list_products(user: dict = Depends(get_current_user)):
     prods = await db.products.find().sort("name", 1).to_list(1000)
     return [clean(p) for p in prods]
+
+
+@api.get("/products/weight-guidance")
+async def products_weight_guidance(user: dict = Depends(require_roles("owner", "admin"))):
+    """Panduan berat/ekor: produk mana yang masih memakai perkiraan bawaan sistem.
+
+    Dipakai frontend untuk memandu owner mengonfirmasi berat rata-rata per ekor.
+    Selama belum dikonfirmasi, sistem TETAP memakai berat perkiraan (hpp_ekor != 0).
+    """
+    prods = await db.products.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
+    items = []
+    for p in prods:
+        if not sells_per_ekor(p):
+            continue
+        used, source, dflt = resolve_avg_weight(p)
+        hpp_kg = float(p.get("hpp_kg", 0) or 0)
+        hpp_ekor = round(hpp_kg * used, 2) if used > 0 else float(p.get("hpp_ekor", 0) or 0)
+        price_ekor = float(p.get("price_ekor", 0) or 0)
+        profit = round(price_ekor - hpp_ekor, 2) if price_ekor > 0 else 0.0
+        items.append({
+            "id": p.get("id"), "name": p.get("name"),
+            "avg_weight_used": used, "avg_weight_source": source,
+            "avg_weight_default": dflt,
+            "avg_weight_override": float(p.get("avg_weight_override", 0) or 0),
+            "avg_weight_auto": float(p.get("avg_weight_ekor", 0) or 0),
+            "is_estimate": source == "perkiraan",
+            "hpp_kg": hpp_kg, "hpp_ekor": hpp_ekor, "price_ekor": price_ekor,
+            "profit_ekor": profit,
+            "margin_ekor": round(profit / price_ekor * 100, 2) if price_ekor > 0 else 0.0,
+            # laba per ekor sangat tipis / minus -> perlu ditinjau owner
+            "thin_margin": bool(price_ekor > 0 and (profit / price_ekor) < 0.05),
+        })
+    return {
+        "total": len(items),
+        "need_confirm": sum(1 for i in items if i["is_estimate"]),
+        "thin_margin_count": sum(1 for i in items if i["thin_margin"]),
+        "items": items,
+        "defaults": {k: v for k, v in DEFAULT_AVG_WEIGHT},
+    }
 
 
 @api.post("/products")
@@ -1393,7 +1497,7 @@ async def _wa_recipients() -> List[dict]:
     return out
 
 
-async def _dispatch_closing_whatsapp(closing: dict, notes: str = "") -> dict:
+async def _dispatch_closing_whatsapp(closing: dict, notes: str = "", trigger: str = "manual") -> dict:
     """Kirim rekap tutup buku ke WhatsApp. Tidak boleh menggagalkan tutup buku."""
     try:
         recipients = await _wa_recipients()
@@ -1414,11 +1518,29 @@ async def _dispatch_closing_whatsapp(closing: dict, notes: str = "") -> dict:
         else:
             await add_notification("whatsapp", "Rekap WhatsApp Siap Dikirim",
                                    f"{closing['date']} · tekan tombol Kirim ke WhatsApp di halaman Tutup Buku", "info")
+        await _wa_log("closing", closing.get("date", ""), out, trigger)
         return out
     except Exception as e:
         logger.error("Dispatch rekap WhatsApp gagal: %s", e)
         return {"text": "", "provider": whatsapp.provider_info(), "results": [],
                 "sent_count": 0, "mode": "manual", "error": str(e)[:200]}
+
+
+async def _wa_log(kind: str, date: str, out: dict, trigger: str = "manual"):
+    """Catat setiap upaya kirim rekap supaya owner bisa audit & kirim ulang."""
+    try:
+        await db.wa_logs.insert_one({
+            "id": new_id(), "kind": kind, "date": date, "trigger": trigger,
+            "mode": out.get("mode"), "sent_count": out.get("sent_count", 0),
+            "results": [{k: v for k, v in r.items() if k != "link"} for r in (out.get("results") or [])],
+            "provider": (out.get("provider") or {}).get("provider"),
+            "configured": bool((out.get("provider") or {}).get("configured")),
+            "error": out.get("error"),
+            "created_at": iso_now(),
+        })
+        await rt_emit(["whatsapp"])
+    except Exception as e:
+        logger.warning("Gagal mencatat log WhatsApp: %s", e)
 
 
 class WaSettingsBody(BaseModel):
@@ -1457,6 +1579,50 @@ async def put_wa_settings(body: WaSettingsBody, user: dict = Depends(require_rol
     return await get_wa_settings(user)
 
 
+@api.get("/whatsapp/log")
+async def get_wa_log(limit: int = 30, user: dict = Depends(require_roles("owner", "admin"))):
+    """Riwayat upaya pengiriman rekap (otomatis maupun manual)."""
+    rows = await db.wa_logs.find().sort("created_at", -1).to_list(max(min(limit, 100), 1))
+    return [clean(r) for r in rows]
+
+
+@api.post("/whatsapp/test")
+async def send_wa_test(user: dict = Depends(require_roles("owner"))):
+    """Kirim pesan uji ke semua nomor penerima.
+
+    Bila kredensial provider belum diisi, kembalikan tautan wa.me 1-tap
+    supaya owner tetap bisa memastikan nomornya benar.
+    """
+    recipients = await _wa_recipients()
+    if not recipients:
+        raise HTTPException(400, "Belum ada nomor penerima. Tambahkan dulu di Pengaturan.")
+    store = await _store_info()
+    nama = (store or {}).get("name") or "Berkah Ayam Mili"
+    text = (f"*UJI COBA REKAP — {nama.upper()}*\n"
+            "Pesan ini dikirim untuk memastikan nomor WhatsApp penerima sudah benar.\n"
+            f"Rekap tutup buku harian akan dikirim otomatis setiap hari jam "
+            f"{str(await get_setting('wa_auto_time', '21:00'))[:5]} WIB.\n\n"
+            "_Dikirim oleh sistem Berkah Ayam Mili_")
+    results = []
+    configured = whatsapp.is_configured()
+    for rec in recipients:
+        item = {"name": rec["name"], "number": rec["number"],
+                "link": whatsapp.wa_me_link(rec["number"], text), "sent": False, "error": None}
+        if configured:
+            try:
+                res = await whatsapp.send_text(rec["number"], text)
+                item["sent"] = True
+                item["message_id"] = (res.get("messages") or [{}])[0].get("id")
+            except Exception as e:
+                item["error"] = str(e)[:300]
+        results.append(item)
+    sent = sum(1 for r in results if r["sent"])
+    out = {"text": text, "provider": whatsapp.provider_info(), "results": results,
+           "sent_count": sent, "mode": "auto" if (configured and sent) else "manual"}
+    await _wa_log("test", today_str(), out, "uji coba")
+    return out
+
+
 @api.post("/daily-closing/{cid}/whatsapp")
 async def send_closing_whatsapp(cid: str, user: dict = Depends(require_roles("owner", "admin"))):
     """Siapkan/kirim rekap. Kalau provider belum dikonfigurasi, kembalikan tautan 1-tap."""
@@ -1488,7 +1654,7 @@ async def auto_closing_worker():
                 continue
             logger.info("Tutup buku otomatis dijalankan untuk %s", d)
             doc = await _save_closing(d, "", "Sistem (Otomatis)")
-            await _dispatch_closing_whatsapp(doc)
+            await _dispatch_closing_whatsapp(doc, trigger="otomatis")
             last_done = d
         except asyncio.CancelledError:
             break
@@ -1587,6 +1753,7 @@ async def startup():
         logger.info("Produk potongan ditambahkan: %s", ", ".join(added))
     try:
         await migrate_avg_weights()
+        await refresh_all_avg_weights()
     except Exception as e:
         logger.error(f"Migrasi berat rata-rata gagal: {e}")
     # Nomor penerima rekap WhatsApp default (bisa diubah owner di Pengaturan).

@@ -404,10 +404,12 @@ function EntryDialog({ product, onClose, onAdd }) {
           {(() => {
             if (!canSeeCost) return null;
             const modal = unit === "ekor" ? product.hpp_ekor : unit === "pcs" ? product.hpp_pcs : product.hpp_kg;
+            const estimate = unit === "ekor" && product.avg_weight_source === "perkiraan";
             return modal > 0 ? (
               <p data-testid="entry-modal" className="text-xs text-muted-foreground -mt-1">
                 Modal efektif/{unit}: <span className="font-semibold tabular">{formatRupiah(modal)}</span>
                 {Number(price) > 0 && <span className="text-success"> · Laba/{unit} {formatRupiah(Number(price) - modal)}</span>}
+                {estimate && <span className="text-warning"> · berat perkiraan</span>}
               </p>
             ) : null;
           })()}

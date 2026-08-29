@@ -105,13 +105,124 @@
 user_problem_statement: "Hubungkan ke repository GitHub saya (Project1), cek commit terakhir, install dependencies, dan jalankan app di live preview Emergent. Lanjut: 4 fitur — (1) Mode Offline POS, (2) Realtime WebSocket, (3) Harga khusus pelanggan per produk, (4) Laporan PDF. Dikerjakan satu per satu."
 
 backend:
+  - task: "Berat perkiraan bawaan (fallback) per ekor: DEFAULT_AVG_WEIGHT + resolve_avg_weight (manual > auto > perkiraan), field avg_weight_default & avg_weight_is_estimate, refresh_all_avg_weights() di startup, GET /api/products/weight-guidance"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Permintaan user: "Pandu owner mengisi berat perkiraan Ayam Kampung dan Pejantan agar laba per ekor
+          akurat, JIKA TIDAK DIISI TETAP DENGAN PERKIRAAN".
+          Perubahan:
+          - Urutan prioritas berat efektif/ekor: (1) avg_weight_override manual owner -> source "manual",
+            (2) rata-rata dari akumulator pembelian -> source "auto", (3) BERAT PERKIRAAN BAWAAN
+            -> source "perkiraan". Jadi hpp_ekor tidak pernah 0 lagi untuk produk yang dijual per ekor.
+          - DEFAULT_AVG_WEIGHT (dicocokkan dengan nama produk): broiler 1.8, kampung 1.2, pejantan 1.1,
+            petelur 1.6, "ayam" lain 1.5; fallback 1.5. Hanya untuk produk relevan per ekor
+            (sells_per_ekor: units berisi "ekor" ATAU price_ekor>0 ATAU stock_ekor>0 ATAU cum_ekor_in>0).
+            Produk potongan/fillet (kg/pcs) TIDAK terkena -> hpp_ekor tetap 0 (benar).
+          - Field baru pada produk: avg_weight_default, avg_weight_is_estimate (bool).
+          - refresh_all_avg_weights() dipanggil di startup (idempoten) supaya data lama ikut terisi.
+          - Endpoint baru GET /api/products/weight-guidance (owner+admin): total, need_confirm,
+            thin_margin_count, defaults, items[] berisi name, avg_weight_used/source/default/override/auto,
+            is_estimate, hpp_kg, hpp_ekor, price_ekor, profit_ekor, margin_ekor, thin_margin (margin<5%).
+          Verifikasi mandiri main agent via DB setelah restart: Ayam Kampung source=perkiraan used=1.2
+          hpp_ekor=62.400 (52.000x1,2); Ayam Pejantan source=perkiraan used=1.1 hpp_ekor=36.300;
+          Ayam Broiler tetap source=auto used=1.85 hpp_ekor=51.800 (TANPA regresi); produk potongan hpp_ekor=0.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL BERAT PERKIRAAN TESTS PASSED (6/6)
+          
+          A1. GET /api/products - Berat Perkiraan Bawaan ✅
+          - Ayam Kampung: source=perkiraan, used=1.2, default=1.2, is_estimate=True, hpp_ekor=62,400 (52,000×1.2) ✅
+          - Ayam Pejantan: source=perkiraan, used=1.1, hpp_ekor=36,300 (33,000×1.1) ✅
+          - Ayam Broiler: source=auto, used=1.85, hpp_ekor=51,800 (TANPA regresi) ✅
+          - Sayap Ayam (potongan): avg_weight_used=0, hpp_ekor=0 (produk potongan TIDAK dapat perkiraan) ✅
+          
+          A2. GET /api/products/weight-guidance ✅
+          - Owner: 200, struktur lengkap (total=3, need_confirm=2, defaults={broiler:1.8, kampung:1.2, pejantan:1.1}) ✅
+          - Admin: 200 ✅
+          - Kasir: 403 (correctly rejected) ✅
+          
+          A3. POST /api/products/{id}/avg-weight - Manual Override ✅
+          - Set override 1.35 untuk Ayam Kampung
+          - Result: source=manual, used=1.35, is_estimate=False, hpp_ekor=70,200 (52,000×1.35) ✅
+          
+          A4. POST /api/products/{id}/avg-weight - Reset to Auto ✅
+          - Set override 0 untuk Ayam Kampung
+          - Result: source=perkiraan, used=1.2, hpp_ekor=62,400 (kembali ke perkiraan) ✅
+          
+          A5. PUT /api/products - Override Tidak Hilang ✅
+          - Update price_kg tanpa mengirim avg_weight_override
+          - Result: source dan used tetap (perkiraan, 1.2), hpp_ekor tetap terisi ✅
+          
+          A6. REGRESI PEMBELIAN ✅
+          - Buat pembelian: 8 ekor, 10 kg, Rp 600,000
+          - Result: source pindah ke "auto", used=1.25 (10/8), hpp_ekor=75,000 (60,000×1.25) ✅
+          - Hapus pembelian: source kembali ke "perkiraan", used=1.2 ✅
+          
+          B7. Log Backend Startup ✅
+          - "Berat/ekor & HPP/ekor disegarkan untuk 14 produk" ✅
+          - "Penjadwal tutup buku otomatis aktif (jam 21:00 WIB)" ✅
+          - Tidak ada traceback berulang ✅
+          
+          CONCLUSION: Berat perkiraan bawaan feature fully working. All calculations accurate,
+          manual override works, auto calculation from purchases works, reset to perkiraan works,
+          and startup refresh confirmed in logs.
+
+  - task: "WhatsApp: log riwayat pengiriman (collection wa_logs) + GET /api/whatsapp/log + POST /api/whatsapp/test"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Tambahan agar rekap "keduanya" (otomatis + manual 1-tap) bisa diaudit user:
+          - _wa_log(kind, date, out, trigger) mencatat tiap upaya kirim ke db.wa_logs (link wa.me TIDAK disimpan).
+          - _dispatch_closing_whatsapp() menerima trigger ("manual"/"otomatis") dan menulis log.
+          - GET /api/whatsapp/log?limit=N (owner+admin) -> riwayat terbaru.
+          - POST /api/whatsapp/test (OWNER saja) -> pesan uji ke semua penerima; bila provider belum
+            dikonfigurasi kembalikan tautan wa.me 1-tap (mode "manual", sent_count 0). 400 bila belum ada nomor.
+          Kredensial Meta MASIH BELUM diberikan user -> mode "manual" adalah perilaku yang BENAR sekarang.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL WHATSAPP LOG TESTS PASSED (2/2)
+          
+          B3. POST /api/whatsapp/test ✅
+          - Owner: 200, mode=manual, sent_count=0, text memuat "UJI COBA REKAP" ✅
+          - Results: wa.me links dengan ?text= ✅
+          - Admin: 403 (correctly rejected) ✅
+          - Kasir: 403 (correctly rejected) ✅
+          
+          B4. GET /api/whatsapp/log ✅
+          - Owner: 200, log count=1 ✅
+          - Entri test ditemukan: kind=test, trigger="uji coba", mode=manual ✅
+          - Field 'link' TIDAK disimpan di log (privasi) ✅
+          - Admin: 200 ✅
+          - Kasir: 403 (correctly rejected) ✅
+          
+          CONCLUSION: WhatsApp log feature fully working. Test endpoint creates log entries,
+          log endpoint returns history, privacy protection (no link storage) working,
+          and RBAC enforced correctly.
+
   - task: "Rekap WhatsApp tutup buku: modul whatsapp.py (teks rekap + wa.me + Meta Cloud API), endpoint /api/whatsapp/settings, POST /api/daily-closing/{cid}/whatsapp, penjadwal tutup buku otomatis"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/whatsapp.py, backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -142,6 +253,45 @@ backend:
           normalisasi 081289478221 -> 6281289478221, POST whatsapp untuk arsip yang ada -> mode "manual",
           results[].link berisi https://wa.me/62...?text=... dan text memuat "REKAP TUTUP BUKU",
           POST /api/daily-closing tetap sukses dan menyertakan field whatsapp.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL WHATSAPP REKAP TESTS PASSED (5/5)
+          
+          B1. GET /api/whatsapp/settings ✅
+          - Owner: 200, recipients=[{name:"Owner", number:"6281289478221"}], auto_enabled=True, auto_time="21:00" ✅
+          - Provider: configured=False, mode=manual (BENAR, kredensial belum diberikan) ✅
+          - Admin: 200 ✅
+          - Kasir: 403 (correctly rejected) ✅
+          
+          B2. PUT /api/whatsapp/settings ✅
+          - Normalisasi nomor: "081289478221" → "6281289478221", "+628123456789" → "628123456789" ✅
+          - Validasi nomor invalid ("123"): 400 ✅
+          - Validasi auto_time invalid ("25:00"): 400 ✅
+          - Admin PUT: 403 (correctly rejected, only owner can PUT) ✅
+          - Setting dikembalikan ke awal (6281289478221, 21:00) ✅
+          
+          B5. POST /api/daily-closing/{cid}/whatsapp ✅
+          - POST dengan ID: 200, mode=manual, sent_count=0, text memuat "REKAP TUTUP BUKU" dan "LABA BERSIH" ✅
+          - Results: wa.me links dengan ?text= ✅
+          - POST dengan tanggal: 200 ✅
+          - POST dengan cid asing: 404 ✅
+          - Kasir POST: 403 (correctly rejected) ✅
+          - Entri 'closing' ditemukan di log ✅
+          
+          B6. POST /api/daily-closing - Field WhatsApp ✅
+          - POST daily-closing: 200, field "whatsapp" ada di response ✅
+          - Whatsapp: mode=manual, sent_count=0, results count=1 ✅
+          - Tutup buku berhasil (proses TIDAK gagal walau WhatsApp tidak terkirim) ✅
+          
+          B7. Log Backend Startup ✅
+          - "Penjadwal tutup buku otomatis aktif (jam 21:00 WIB)" ✅
+          - Tidak ada traceback berulang dari auto_closing_worker ✅
+          
+          CONCLUSION: WhatsApp rekap tutup buku feature fully working. Settings CRUD works,
+          number normalization correct, validation enforced, manual mode (wa.me 1-tap) working
+          as expected without credentials, closing dispatch works, scheduler active, and
+          tutup buku process never fails due to WhatsApp issues.
 
   - task: "HPP per ekor dari berat rata-rata: akumulator cum_ekor_in/cum_weight_in, avg_weight_ekor, avg_weight_override, hpp_ekor = hpp_kg x berat efektif"
     implemented: true
@@ -670,6 +820,148 @@ backend:
 
 
 frontend:
+  - task: "Produk & Harga: panel 'Panduan Berat per Ekor' (input cepat + tombol Pakai X kg + peringatan laba tipis), badge 'perkiraan', dialog produk menjelaskan fallback; POS menandai 'berat perkiraan'; Pengaturan: tombol Kirim Uji Coba WhatsApp + Riwayat pengiriman"
+    implemented: true
+    working: true
+    file: "frontend/src/pages/Products.js, frontend/src/pages/POS.js, frontend/src/pages/Settings.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Products.js: komponen WeightGuidance (fetch /products/weight-guidance) di atas tabel —
+          hanya tampil bila ada produk berstatus perkiraan ATAU laba/ekor tipis. Tiap produk punya
+          Input (weight-input-{id}), tombol Simpan (weight-save-{id}, aktif hanya bila input diisi) dan
+          tombol "Pakai X kg" (weight-accept-{id}) yang POST /products/{id}/avg-weight. Panel bisa
+          disembunyikan (toggle-weight-guidance, disimpan di localStorage bam_weight_guide_hidden).
+          Tabel: badge kuning "perkiraan" (badge-perkiraan-{id}) bila avg_weight_source === "perkiraan".
+          Dialog produk: menjelaskan bahwa membiarkan 0 tetap memakai perkiraan bawaan + badge perkiraan.
+          POS.js EntryDialog: baris modal (data-testid entry-modal, hanya owner/admin) menambahkan
+          " · berat perkiraan" saat unit ekor & source perkiraan.
+          Settings.js: tombol wa-test (POST /whatsapp/test, mode manual -> buka wa.me di tab baru) dan
+          daftar riwayat wa-log (GET /whatsapp/log?limit=5).
+          Screenshot mandiri main agent: panel muncul benar untuk owner (2 produk perkiraan + 1 peringatan laba tipis).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ FRONTEND TESTING COMPLETE - ALL FEATURES WORKING (A1-A7, B1-B2, C1-C3, D)
+          
+          A. PANDUAN BERAT PER EKOR (/produk as OWNER) - ALL PASS ✅
+          ✅ A1: Panel [data-testid="weight-guidance"] visible with title "Panduan Berat per Ekor"
+               - Mentions "2 produk" correctly
+               - Ayam Kampung: 1,2 kg, modal/ekor Rp 62.400 ✅
+               - Ayam Pejantan: 1,1 kg, modal/ekor Rp 36.300 ✅
+               - No NaN/undefined/Rp 0 in panel ✅
+          
+          ✅ A2: Table badges working correctly
+               - Badge "perkiraan" [data-testid="badge-perkiraan-{id}"] found ✅
+               - Ayam Kampung: 1,20 kg, badge "perkiraan", HPP/ekor Rp 62.400 (NOT Rp 0) ✅
+               - Ayam Pejantan: 1,10 kg, badge "perkiraan", HPP/ekor Rp 36.300 (NOT Rp 0) ✅
+               - Ayam Broiler: 1,85 kg (auto calculation, no badge) ✅
+               - Produk potongan: Berat/ekor shows "-" (correct) ✅
+          
+          ✅ A3: Weight input and save working
+               - Filled weight-input-{id} with 1.25 for Ayam Pejantan ✅
+               - Clicked weight-save-{id} button ✅
+               - Toast "Berat per ekor dikonfirmasi" appeared ✅
+               - Table updated: 1,25 kg, badge "manual", HPP/ekor Rp 41.250 (33.000 × 1.25) ✅
+          
+          ✅ A4: RESTORATION COMPLETE - Ayam Pejantan back to perkiraan
+               - Opened edit dialog, clicked [data-testid="use-auto-weight"] ✅
+               - Input value changed to 0 ✅
+               - Saved successfully ✅
+               - Table shows: 1,10 kg, badge "perkiraan", HPP/ekor Rp 36.300 ✅
+          
+          ✅ A5: "Pakai X kg" button working + RESTORATION COMPLETE
+               - Clicked weight-accept-{id} ("Pakai 1,2 kg") for Ayam Kampung ✅
+               - Toast "Berat per ekor dikonfirmasi" appeared ✅
+               - HPP/ekor remained Rp 62.400 ✅
+               - Item removed from panel (became manual) ✅
+               - RESTORED: Clicked "Pakai Otomatis", saved, badge "perkiraan" restored ✅
+          
+          ✅ A6: Toggle hide/show panel working
+               - Clicked [data-testid="toggle-weight-guidance"] to hide ✅
+               - Panel content hidden ✅
+               - Page reloaded - panel still hidden (localStorage persistence) ✅
+               - Clicked toggle again - panel visible ✅
+          
+          ✅ A7: Admin and kasir access control
+               - Admin: Can see weight guidance panel and save weights ✅
+               - Kasir: Redirected from /produk to /pos ✅
+               - Kasir: "Produk & Harga" menu not visible ✅
+          
+          B. POS - PENANDA BERAT PERKIRAAN - ALL PASS ✅
+          ✅ B1: OWNER sees modal info with "berat perkiraan" text
+               - Clicked Ayam Pejantan card, dialog opened ✅
+               - Selected "Per Ekor" ✅
+               - [data-testid="entry-modal"] found with text:
+                 "Modal efektif/ekor: Rp 36.300 · Laba/ekor Rp 11.700 · berat perkiraan" ✅
+               - Contains "Modal efektif/ekor" ✅
+               - Contains "berat perkiraan" text ✅
+               - Selected "Per Kg" - "berat perkiraan" text NOT present (correct) ✅
+          
+          ✅ B2: KASIR does NOT see modal/laba info
+               - Logged in as kasir, opened Ayam Pejantan dialog ✅
+               - Selected "Per Ekor" ✅
+               - [data-testid="entry-modal"] NOT found (correct - kasir should not see modal/laba) ✅
+               - RBAC working correctly ✅
+          
+          C. PENGATURAN - REKAP WHATSAPP (OWNER) - ALL PASS ✅
+          ✅ C1: WhatsApp settings display correct
+               - Badge [data-testid="wa-provider-badge"] shows "Mode 1-tap" ✅
+               - This is CORRECT behavior (credentials not provided by user, not a bug) ✅
+               - Phone number 6281289478221 visible ✅
+               - Time 21:00 visible ✅
+          
+          ✅ C2: Test button working
+               - [data-testid="wa-test"] button found and clicked ✅
+               - Toast appeared (provider not configured, opens wa.me 1-tap) ✅
+               - [data-testid="wa-log"] block found with log entries ✅
+               - Log contains "uji coba" entry ✅
+          
+          ✅ C3: Add/remove number + RESTORATION COMPLETE
+               - Clicked [data-testid="wa-add"] to add second number ✅
+               - Filled wa-name-1="Manajer", wa-number-1="081234567890" ✅
+               - Clicked wa-save, toast "disimpan" appeared ✅
+               - Page reloaded - second number persisted ✅
+               - Number normalized to 6281234567890 (or displayed as 081234567890) ✅
+               - Name "Manajer" persisted ✅
+               - RESTORED: Clicked wa-del-1, saved ✅
+               - Only original number 6281289478221 remains ✅
+               - Second number successfully removed ✅
+          
+          D. REGRESI - ALL 16 PAGES - ALL PASS ✅
+          ✅ All pages loaded successfully without errors:
+               - /dashboard (LIVE badge active) ✅
+               - /pos ✅
+               - /riwayat ✅
+               - /produk ✅
+               - /stok ✅
+               - /pembelian ✅
+               - /produksi ✅
+               - /pelanggan ✅
+               - /supplier ✅
+               - /keuangan ✅
+               - /target ✅
+               - /laporan ✅
+               - /tutup-buku ✅
+               - /audit ✅
+               - /pengguna ✅
+               - /pengaturan ✅
+          ✅ No NaN/undefined/blank pages found ✅
+          ✅ LIVE badge active on dashboard ✅
+          
+          CRITICAL RESTORATIONS VERIFIED:
+          ✅ Ayam Pejantan: 1,10 kg, badge "perkiraan", HPP/ekor Rp 36.300
+          ✅ Ayam Kampung: 1,20 kg, badge "perkiraan", HPP/ekor Rp 62.400
+          ✅ WhatsApp recipients: Only 6281289478221, time 21:00
+          
+          CONCLUSION: All frontend features fully working. No major issues found.
+          All test requirements met. Data restored to original state as requested.
+
+
   - task: "RealtimeProvider (WebSocket) + usePoll/useRealtimeReload dengan fallback polling"
     implemented: true
     working: true
@@ -2027,3 +2319,163 @@ agent_communication:
          berulang dari auto_closing_worker.
       8. REGRESI singkat: login 3 role, GET /api/dashboard, GET /api/products, POST /api/sales (per kg) + idempotency
          txn_id, GET /api/daily-closing/preview, GET /api/daily-closing/{id}/pdf (%PDF-), WS /api/ws hello.
+    -agent: "main"
+    -message: |
+      UJI BACKEND SAJA. Dua fitur: (A) BERAT PERKIRAAN BAWAAN per ekor, (B) REKAP WHATSAPP (log + uji coba).
+
+      KONTEKS WAJIB DIBACA: user BELUM memberi kredensial WhatsApp Business (META_PHONE_NUMBER_ID /
+      META_ACCESS_TOKEN). Jadi mode "manual" (tautan wa.me 1-tap) adalah HASIL YANG BENAR, BUKAN BUG.
+      JANGAN menambahkan kredensial apa pun, JANGAN mengirim WhatsApp sungguhan, JANGAN mengubah kode.
+      Kredensial login ada di /app/memory/test_credentials.md (owner shezrofenia18@gmail.com / berkahayam1,
+      admin admin@berkahayam.com / admin123, kasir kasir@berkahayam.com / kasir123).
+
+      A. BERAT PERKIRAAN BAWAAN (fallback) — hpp_ekor tidak boleh 0 lagi:
+      A1. GET /api/products sebagai owner. Verifikasi:
+          - "Ayam Kampung": avg_weight_source == "perkiraan", avg_weight_used == 1.2,
+            avg_weight_default == 1.2, avg_weight_is_estimate == true, hpp_ekor == hpp_kg * 1.2.
+          - "Ayam Pejantan": source "perkiraan", used 1.1, hpp_ekor == hpp_kg * 1.1.
+          - "Ayam Broiler": source "auto" (sudah pernah dibeli per ekor), hpp_ekor == hpp_kg * avg_weight_ekor.
+          - Produk potongan/fillet (mis. "Sayap Ayam", "Ayam Fillet", "Dada Ayam"): avg_weight_used == 0 dan
+            hpp_ekor == 0 (BENAR, produk ini tidak dijual per ekor). Pastikan mereka TIDAK ikut dapat perkiraan.
+      A2. GET /api/products/weight-guidance sebagai owner dan admin -> 200. Verifikasi struktur:
+          total, need_confirm (>=2: Kampung & Pejantan), thin_margin_count, defaults (broiler 1.8, kampung 1.2,
+          pejantan 1.1), items[] tiap item punya id, name, avg_weight_used, avg_weight_source, avg_weight_default,
+          is_estimate, hpp_kg, hpp_ekor, price_ekor, profit_ekor, margin_ekor, thin_margin.
+          Hanya produk per-ekor yang muncul (produk potongan/fillet TIDAK boleh ada di items).
+          Sebagai KASIR -> 403.
+      A3. POST /api/products/{id_ayam_kampung}/avg-weight {"avg_weight_override": 1.35} sebagai owner -> 200,
+          avg_weight_source == "manual", avg_weight_used == 1.35, avg_weight_is_estimate == false,
+          hpp_ekor == hpp_kg * 1.35. Lalu GET weight-guidance -> need_confirm berkurang 1 dan Ayam Kampung
+          is_estimate == false.
+      A4. POST /api/products/{id_ayam_kampung}/avg-weight {"avg_weight_override": 0} -> KEMBALI ke perkiraan:
+          avg_weight_source == "perkiraan", avg_weight_used == 1.2, hpp_ekor == hpp_kg * 1.2 (BUKAN 0).
+      A5. PUT /api/products/{id_ayam_kampung} (ubah harga jual/kg saja, JANGAN kirim avg_weight_override)
+          -> override/perkiraan tidak boleh hilang; avg_weight_used tetap 1.2 dan hpp_ekor tetap terisi.
+      A6. REGRESI PEMBELIAN: POST /api/purchases untuk Ayam Kampung dengan total nominal, berat, dan ekor
+          (mis. total 600000, berat 10 kg, 8 ekor) -> setelah itu produk harus PINDAH ke source "auto"
+          (avg_weight_ekor = 10/8 = 1.25) dan hpp_ekor = hpp_kg baru x 1.25. Lalu HAPUS pembelian itu
+          (DELETE /api/purchases/{id} bila ada) -> harus kembali ke source "perkiraan" used 1.2.
+          Bila endpoint hapus pembelian tidak ada, cukup laporkan.
+
+      B. WHATSAPP:
+      B1. GET /api/whatsapp/settings owner & admin -> 200 (recipients berisi 6281289478221, auto_enabled,
+          auto_time "21:00", provider.configured == false, provider.mode == "manual"). Kasir -> 403.
+      B2. PUT /api/whatsapp/settings sebagai OWNER dengan recipients
+          [{"name":"Owner","number":"081289478221"},{"name":"Manajer","number":"+628123456789"}],
+          auto_enabled true, auto_time "20:30" -> 200 dan nomor TERNORMALISASI ke "6281289478221" &
+          "628123456789". PUT nomor "123" -> 400. PUT auto_time "25:00" -> 400. PUT sebagai admin -> 403.
+          SETELAH SELESAI kembalikan ke recipients [{"name":"Owner","number":"081289478221"}] & auto_time "21:00".
+      B3. POST /api/whatsapp/test sebagai OWNER -> 200, mode == "manual", sent_count == 0, results[] tiap item
+          punya link mulai "https://wa.me/62" dan berisi "?text=", text memuat "UJI COBA REKAP".
+          Sebagai admin -> 403. Sebagai kasir -> 403.
+      B4. GET /api/whatsapp/log?limit=5 owner & admin -> 200, list, entri terbaru dari B3 punya kind "test",
+          trigger "uji coba", mode "manual", dan TIDAK menyimpan field "link" di results (privasi/ukuran).
+          Kasir -> 403.
+      B5. POST /api/daily-closing/{cid}/whatsapp (owner) memakai id arsip DAN memakai tanggal sebagai cid
+          -> keduanya 200, mode "manual", sent_count 0, text memuat "REKAP TUTUP BUKU" dan "LABA BERSIH",
+          results[] punya link wa.me. cid asing -> 404. Kasir -> 403. Setelahnya GET /api/whatsapp/log harus
+          berisi entri kind "closing".
+      B6. POST /api/daily-closing (owner) tetap 200 dan responsnya menyertakan field "whatsapp"; proses tutup
+          buku TIDAK boleh gagal walau WhatsApp tidak terkirim.
+      B7. Cek log backend: ada "Berat/ekor & HPP/ekor disegarkan untuk N produk" dan "Penjadwal tutup buku
+          otomatis aktif", TIDAK ada traceback berulang.
+
+      C. REGRESI SINGKAT: login 3 role, GET /api/dashboard, GET /api/stock (atau setara), POST /api/sales per kg
+      dan per ekor + idempotency txn_id (tidak dobel), cancel sale mengembalikan stok, GET /api/daily-closing/preview,
+      GET /api/reports/profit-loss, GET /api/daily-closing/{id}/pdf (%PDF-), WS /api/ws hello.
+
+      Laporkan PASS/FAIL per nomor + angka aktual (hpp_ekor, avg_weight_used) yang Anda lihat.
+
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (14/14)
+      
+      Tested comprehensive backend functionality for Berkah Ayam Mili as requested:
+      
+      A. BERAT PERKIRAAN BAWAAN PER EKOR (6/6 PASS):
+      ✅ A1. GET /api/products - Ayam Kampung (perkiraan, 1.2, hpp_ekor=62,400), Ayam Pejantan (perkiraan, 1.1, hpp_ekor=36,300), 
+           Ayam Broiler (auto, 1.85, hpp_ekor=51,800), Sayap Ayam (potongan, hpp_ekor=0)
+      ✅ A2. GET /api/products/weight-guidance - Owner/Admin 200, Kasir 403, struktur lengkap
+      ✅ A3. POST avg-weight override 1.35 - source=manual, hpp_ekor=70,200
+      ✅ A4. POST avg-weight override 0 - kembali ke perkiraan (1.2, hpp_ekor=62,400)
+      ✅ A5. PUT products - override/perkiraan tidak hilang
+      ✅ A6. REGRESI PEMBELIAN - pembelian → auto (1.25), hapus → perkiraan (1.2)
+      
+      B. WHATSAPP (7/7 PASS):
+      ✅ B1. GET /api/whatsapp/settings - Owner/Admin 200, Kasir 403, provider.mode=manual (BENAR)
+      ✅ B2. PUT /api/whatsapp/settings - normalisasi nomor (081289478221→6281289478221), validasi 400, Admin 403
+      ✅ B3. POST /api/whatsapp/test - mode=manual, sent_count=0, wa.me links, Admin/Kasir 403
+      ✅ B4. GET /api/whatsapp/log - entri test ditemukan, field 'link' TIDAK disimpan (privasi)
+      ✅ B5. POST /api/daily-closing/{cid}/whatsapp - ID & tanggal 200, mode=manual, text memuat "REKAP TUTUP BUKU"
+      ✅ B6. POST /api/daily-closing - field whatsapp ada, proses tidak gagal
+      ✅ B7. Log backend - "Berat/ekor disegarkan untuk 14 produk", "Penjadwal aktif (21:00 WIB)", no traceback
+      
+      C. REGRESI SINGKAT (11/11 PASS):
+      ✅ C1. Login 3 role (owner, admin, kasir)
+      ✅ C2. GET /api/dashboard - 200
+      ✅ C3. GET /api/products - 200
+      ✅ C4. POST /api/sales per kg - 200
+      ✅ C5. Idempotency txn_id - same ID returned
+      ✅ C6. Cancel sale - 200, stock restored
+      ✅ C7. POST /api/sales per ekor - 200
+      ✅ C8. GET /api/daily-closing/preview - 200
+      ✅ C9. GET /api/reports/profit-loss - 200
+      ✅ C10. GET /api/daily-closing/{id}/pdf - 200, valid PDF (%PDF-)
+      ✅ C11. WS /api/ws - hello message received
+      
+      CRITICAL NOTES:
+      - Mode "manual" WhatsApp (wa.me 1-tap) adalah HASIL YANG BENAR karena user belum memberi kredensial
+      - Semua angka hpp_ekor sesuai formula: hpp_kg × avg_weight_used
+      - Normalisasi nomor WhatsApp bekerja: 08xx/+62xx → 62xx
+      - RBAC enforced: kasir 403 di weight-guidance/whatsapp, admin 403 di PUT whatsapp/settings
+      - Startup logs confirmed: refresh_all_avg_weights() dan auto_closing_worker() aktif
+      - Tidak ada regresi: pembelian, penjualan, tutup buku, PDF, WebSocket semua bekerja
+      
+      CONCLUSION: All backend features fully working. No issues found.
+    -agent: "main"
+    -message: |
+      UJI FRONTEND (user memberi izin lewat "proceed with best judgment"). JANGAN UBAH KODE.
+      Login: owner shezrofenia18@gmail.com / berkahayam1 · admin admin@berkahayam.com / admin123 ·
+      kasir kasir@berkahayam.com / kasir123 (lihat /app/memory/test_credentials.md).
+
+      A. PANDUAN BERAT PER EKOR (halaman /produk sebagai OWNER):
+      A1. Panel [data-testid="weight-guidance"] tampil, judul "Panduan Berat per Ekor", menyebut "2 produk".
+          Berisi baris untuk Ayam Kampung (perkiraan 1,2 kg · modal/ekor Rp 62.400) dan Ayam Pejantan
+          (1,1 kg · Rp 36.300). Tidak boleh ada NaN/undefined/Rp 0 pada baris ini.
+      A2. Tabel: Ayam Kampung & Ayam Pejantan menampilkan berat (1,20 kg / 1,10 kg) + badge kuning
+          "perkiraan" ([data-testid="badge-perkiraan-{id}"]) dan HPP/ekor BUKAN Rp 0.
+          Ayam Broiler menampilkan 1,85 kg tanpa badge perkiraan. Produk potongan/fillet: kolom Berat/ekor "-".
+      A3. Isi [data-testid="weight-input-<id Ayam Pejantan>"] = 1.25 lalu klik weight-save-<id>.
+          Harus muncul toast sukses, baris Ayam Pejantan di tabel jadi "1,25 kg" + badge "manual"
+          (badge "perkiraan" hilang) dan HPP/ekor = 33.000 x 1,25 = Rp 41.250.
+      A4. PENTING (kembalikan kondisi): buka edit Ayam Pejantan -> klik [data-testid="use-auto-weight"]
+          -> input jadi 0 -> Simpan. Baris harus kembali "1,10 kg" + badge "perkiraan" + HPP/ekor Rp 36.300.
+      A5. Klik weight-accept-<id Ayam Kampung> ("Pakai 1,2 kg") -> tersimpan sebagai manual 1,20 kg,
+          HPP/ekor tetap Rp 62.400, dan baris ini hilang dari panel panduan.
+          Lalu KEMBALIKAN: edit Ayam Kampung -> "Pakai Otomatis" -> Simpan -> badge "perkiraan" lagi.
+      A6. Klik [data-testid="toggle-weight-guidance"] -> isi panel tersembunyi; reload halaman ->
+          tetap tersembunyi (localStorage); klik lagi -> muncul kembali.
+      A7. Login ADMIN -> /produk: panel panduan tetap tampil & bisa menyimpan berat.
+          Login KASIR -> menu "Produk & Harga" tidak boleh ada / akses /produk dialihkan.
+
+      B. POS - PENANDA BERAT PERKIRAAN:
+      B1. Login OWNER -> /pos -> klik kartu "Ayam Pejantan" -> pilih "Per Ekor". Baris
+          [data-testid="entry-modal"] harus memuat "Modal efektif/ekor" DAN teks "berat perkiraan".
+          Pilih "Per Kg" -> teks "berat perkiraan" TIDAK muncul.
+      B2. Login KASIR -> ulangi: [data-testid="entry-modal"] TIDAK BOLEH ADA (RBAC, kasir tak lihat modal/laba).
+
+      C. PENGATURAN - REKAP WHATSAPP (OWNER):
+      C1. /pengaturan -> bagian "Rekap WhatsApp": badge [data-testid="wa-provider-badge"] = "Mode 1-tap"
+          (BENAR, kredensial belum diisi — bukan bug). Nomor 6281289478221 tampil. Jam kirim 21:00.
+      C2. Klik [data-testid="wa-test"]. Karena provider belum dikonfigurasi, aplikasi membuka tab baru
+          wa.me (izinkan popup; cukup verifikasi tidak ada error & muncul toast info). Setelah itu blok
+          [data-testid="wa-log"] harus muncul/terupdate dengan entri "uji coba".
+      C3. Tambah nomor via [data-testid="wa-add"], isi wa-name-1 = "Manajer", wa-number-1 = "081234567890",
+          klik wa-save -> toast sukses. Reload -> nomor tersimpan sebagai 6281234567890.
+          KEMBALIKAN: hapus nomor kedua (wa-del-1) -> wa-save -> tinggal 1 nomor 6281289478221.
+
+      D. REGRESI: kunjungi sebagai owner /dashboard, /pos, /riwayat, /produk, /stok, /pembelian, /produksi,
+      /pelanggan, /supplier, /keuangan, /target, /laporan, /tutup-buku, /audit, /pengguna, /pengaturan.
+      Laporkan halaman blank/error/NaN dan semua error konsol (kecuali /cdn-cgi/rum). Pastikan badge LIVE aktif.
+
+      Laporkan PASS/FAIL per nomor + angka aktual yang terlihat (HPP/ekor, berat) + screenshot untuk kegagalan.
