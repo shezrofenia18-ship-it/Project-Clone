@@ -11,16 +11,26 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatDate } from "@/lib/format";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Pencil } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 export default function Purchases() {
   const { data, reload } = useFetch("/purchases");
   const { data: suppliers, reload: rSup } = useFetch("/suppliers");
   const { data: products } = useFetch("/products");
   const [open, setOpen] = useState(false);
+  // Owner boleh MENGOREKSI pembelian yang sudah tersimpan (tanpa hapus & input ulang).
+  const [edit, setEdit] = useState(null);
+  const [del, setDel] = useState(null);
+  const { user } = useAuth();
+  const canEdit = user.role === "owner";
   // Pembelian & saldo hutang supplier ikut berubah seketika (mis. setelah bayar hutang).
   const reloadAll = useCallback(() => { reload(); rSup(); }, [reload, rSup]);
   useRealtimeReload(["purchases", "payables", "suppliers"], reloadAll);
+
+  const buyable = (products || []).filter((p) => !["sampingan", "fillet", "potongan"].includes(p.category));
 
   return (
     <div className="bam-fade">
@@ -31,31 +41,97 @@ export default function Purchases() {
           <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground">
             <th className="px-4 py-3">Tanggal</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 text-right">Berat</th>
             <th className="px-4 py-3 text-right">Modal Efektif/kg</th><th className="px-4 py-3 text-right">Total Modal</th><th className="px-4 py-3">Status</th>
+            {canEdit && <th className="px-4 py-3 text-right">Aksi</th>}
           </tr></thead>
           <tbody>
             {(data || []).map((p) => (
               <tr key={p.id} data-testid={`purchase-${p.id}`} className="border-t border-border hover:bg-accent/40">
-                <td className="px-4 py-3">{formatDate(p.date)}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  {formatDate(p.date)}
+                  {p.updated_at && (
+                    <span className="block text-[10px] text-muted-foreground" data-testid={`purchase-edited-${p.id}`}>
+                      dikoreksi oleh {p.updated_by}
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3 font-medium">{p.supplier_name}</td>
                 <td className="px-4 py-3 text-right tabular">{formatWeight(p.total_weight)}</td>
                 <td className="px-4 py-3 text-right tabular">{formatRupiah(p.effective_cost_kg)}</td>
                 <td className="px-4 py-3 text-right tabular font-semibold">{formatRupiah(p.total_modal)}</td>
                 <td className="px-4 py-3"><Badge className={p.payment_status === "lunas" ? "bg-success text-white" : "bg-warning text-warning-foreground"}>{p.payment_status}</Badge></td>
+                {canEdit && (
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button variant="outline" size="sm" className="h-8" data-testid={`edit-purchase-${p.id}`}
+                        onClick={() => setEdit(p)}>
+                        <Pencil className="w-3.5 h-3.5 mr-1" /> Koreksi
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" title="Hapus pembelian"
+                        data-testid={`delete-purchase-${p.id}`} onClick={() => setDel(p)}>
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </td>
+                )}
               </tr>
             ))}
-            {(data || []).length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Belum ada pembelian.</td></tr>}
+            {(data || []).length === 0 && <tr><td colSpan={canEdit ? 7 : 6} className="px-4 py-8 text-center text-muted-foreground">Belum ada pembelian.</td></tr>}
           </tbody>
         </table>
       </Card>
-      {open && <PurchaseDialog suppliers={suppliers || []} products={(products || []).filter((p) => !["sampingan", "fillet", "potongan"].includes(p.category))} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
+      {open && <PurchaseDialog suppliers={suppliers || []} products={buyable}
+        onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reloadAll(); }} />}
+      {edit && <PurchaseDialog suppliers={suppliers || []} products={buyable} initial={edit}
+        onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reloadAll(); }} />}
+      {del && <DeletePurchaseDialog purchase={del} onClose={() => setDel(null)}
+        onDone={() => { setDel(null); reloadAll(); }} />}
     </div>
   );
 }
 
-function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
-  const [supplier, setSupplier] = useState("");
-  const [items, setItems] = useState([{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }]);
-  const [paid, setPaid] = useState(0);
+function DeletePurchaseDialog({ purchase, onClose, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const hapus = async () => {
+    setBusy(true);
+    try {
+      await api.delete(`/purchases/${purchase.id}`);
+      toast.success("Pembelian dihapus, stok & pembukuan dikembalikan");
+      onDone();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="bg-popover max-w-md">
+        <DialogHeader><DialogTitle>Hapus pembelian ini?</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          Pembelian <b>{purchase.supplier_name}</b> tanggal {formatDate(purchase.date)} sebesar{" "}
+          <b>{formatRupiah(purchase.total_modal)}</b> ({formatWeight(purchase.total_weight)}) akan dihapus.
+          Stok, pengeluaran, dan hutang supplier ikut dikembalikan. Kalau hanya ingin membetulkan
+          angkanya, pakai tombol <b>Koreksi</b> saja.
+        </p>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Batal</Button>
+          <Button variant="destructive" data-testid="confirm-delete-purchase" disabled={busy} onClick={hapus}>
+            {busy ? "Menghapus..." : "Ya, Hapus"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
+  const editing = !!initial;
+  const [supplier, setSupplier] = useState(initial?.supplier_id || "");
+  const [date, setDate] = useState(initial?.date || todayISO());
+  const [items, setItems] = useState(() =>
+    editing && (initial.items || []).length
+      ? initial.items.map((it) => ({
+          _k: Math.random(), product_id: it.product_id, ekor: it.ekor || 0,
+          total_weight: it.total_weight || 0, total_price: it.subtotal || 0,
+        }))
+      : [{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }]);
+  const [paid, setPaid] = useState(initial?.paid ?? 0);
   const [busy, setBusy] = useState(false);
 
   const setItem = (i, k, v) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [k]: v } : it));
@@ -71,26 +147,49 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
     const valid = items.filter((it) => it.product_id && Number(it.total_weight) > 0);
     if (!valid.length) return toast.error("Tambahkan minimal 1 item");
     setBusy(true);
+    const payload = {
+      supplier_id: supplier,
+      date,
+      items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price) })),
+      paid: Number(paid),
+    };
     try {
-      await api.post("/purchases", {
-        supplier_id: supplier,
-        items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price) })),
-        paid: Number(paid),
-      });
-      toast.success("Pembelian tersimpan, stok bertambah"); onSaved();
+      if (editing) {
+        await api.put(`/purchases/${initial.id}`, payload);
+        toast.success("Pembelian dikoreksi, stok & pembukuan ikut disesuaikan");
+      } else {
+        await api.post("/purchases", payload);
+        toast.success("Pembelian tersimpan, stok bertambah");
+      }
+      onSaved();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="bg-popover max-w-2xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Pembelian Baru</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>{editing ? "Koreksi Pembelian" : "Pembelian Baru"}</DialogTitle>
+        </DialogHeader>
         <div className="space-y-4">
-          <div><Label className="text-xs">Supplier</Label>
-            <Select value={supplier} onValueChange={setSupplier}>
-              <SelectTrigger data-testid="pur-supplier" className="mt-1"><SelectValue placeholder="Pilih supplier" /></SelectTrigger>
-              <SelectContent className="bg-popover">{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-            </Select>
+          {editing && (
+            <p className="text-[11px] text-muted-foreground bg-accent rounded-lg p-2.5" data-testid="pur-edit-note">
+              Betulkan angka yang salah lalu simpan — stok, modal (HPP), pengeluaran, dan hutang
+              supplier otomatis disesuaikan. Koreksi ditolak bila hutang pembelian ini sudah
+              dibayar, atau bila pengurangan beratnya membuat stok jadi minus (ayamnya sudah terjual).
+            </p>
+          )}
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div><Label className="text-xs">Supplier</Label>
+              <Select value={supplier} onValueChange={setSupplier}>
+                <SelectTrigger data-testid="pur-supplier" className="mt-1"><SelectValue placeholder="Pilih supplier" /></SelectTrigger>
+                <SelectContent className="bg-popover">{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div><Label className="text-xs">Tanggal Pembelian</Label>
+              <Input type="date" data-testid="pur-date" value={date} max={todayISO()}
+                onChange={(e) => setDate(e.target.value)} className="mt-1" />
+            </div>
           </div>
           <div className="space-y-3">
             <Label className="text-xs">Item Ayam</Label>
@@ -156,7 +255,7 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
             )}
           </div>
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-purchase" disabled={busy} onClick={save}>{busy ? "Menyimpan..." : "Simpan"}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-purchase" disabled={busy} onClick={save}>{busy ? "Menyimpan..." : (editing ? "Simpan Koreksi" : "Simpan")}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

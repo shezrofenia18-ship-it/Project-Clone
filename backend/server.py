@@ -705,7 +705,8 @@ def _purchase_totals(body: "PurchaseBody", bird_value: float, weight_all: float,
     }
 
 
-def _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_all, tot, created_by) -> dict:
+def _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_all, tot, created_by,
+                  created_at: Optional[str] = None) -> dict:
     payable_amt = tot["payable"]
     return {
         "id": pid, "supplier_id": body.supplier_id, "supplier_name": supplier["name"],
@@ -717,7 +718,10 @@ def _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_a
         "effective_cost_ekor": tot["eff_cost_ekor"],
         "paid": body.paid, "payable": max(0, payable_amt),
         "payment_status": "lunas" if payable_amt <= 0 else "kredit",
-        "notes": body.notes, "created_by": created_by, "created_at": iso_now(),
+        "notes": body.notes, "created_by": created_by,
+        # Saat pembelian DIKOREKSI, created_at aslinya dipertahankan supaya urutan
+        # riwayat & laporan tidak berubah (hanya isinya yang dibetulkan).
+        "created_at": created_at or iso_now(),
     }
 
 
@@ -760,7 +764,8 @@ async def _record_purchase_ledger(body, user, pid, supplier, doc, tot, last_pric
         "created_by": user["name"], "created_at": iso_now()})
 
 
-async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
+async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str,
+                            created_at: Optional[str] = None):
     """Simpan satu pembelian: baris & total -> dokumen -> stok -> keuangan."""
     supplier = await db.suppliers.find_one({"id": body.supplier_id})
     if not supplier:
@@ -768,7 +773,7 @@ async def _persist_purchase(body: "PurchaseBody", user: dict, pid: str):
     items_out, products, bird_value, weight_all, ekor_all = await _purchase_lines(body)
     tot = _purchase_totals(body, bird_value, weight_all, ekor_all)
     doc = _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_all,
-                        tot, user["name"])
+                        tot, user["name"], created_at)
     await db.purchases.insert_one(doc)
     last_prices = await _apply_purchase_to_stock(body, user, pid, supplier, products, bird_value, tot)
     await _record_purchase_ledger(body, user, pid, supplier, doc, tot, last_prices)
@@ -790,6 +795,69 @@ async def _reverse_purchase(purchase: dict):
         "total_purchase": -purchase.get("total_modal", 0), "payable": -purchase.get("payable", 0)}})
 
 
+async def _guard_purchase_payment(pid: str):
+    """Tolak koreksi/hapus bila hutang pembelian ini sudah pernah dibayar."""
+    pay = await db.payables.find_one({"purchase_id": pid})
+    if pay and float(pay.get("paid", 0) or 0) > 0:
+        raise HTTPException(400, (
+            f"Pembelian ini sudah pernah dibayar hutangnya {formatted_rp(pay.get('paid'))}. "
+            "Koreksi dibatalkan supaya catatan kas & hutang tidak kacau. "
+            "Silakan hubungi/lunasi dulu urusan pembayarannya."))
+
+
+def formatted_rp(v) -> str:
+    try:
+        return "Rp " + f"{int(round(float(v or 0))):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "Rp 0"
+
+
+def _sum_by_product(rows, get_pid, get_kg, get_ekor) -> dict:
+    out: Dict[str, dict] = {}
+    for r in rows:
+        cur = out.setdefault(get_pid(r), {"kg": 0.0, "ekor": 0.0})
+        cur["kg"] += float(get_kg(r) or 0)
+        cur["ekor"] += float(get_ekor(r) or 0)
+    return out
+
+
+async def _guard_purchase_stock(existing: dict, new_items=None):
+    """Tolak koreksi/hapus bila pengurangan berat/ekor membuat stok jadi minus.
+
+    `new_items` = daftar item baru (PurchaseItem) saat koreksi, atau None saat pembelian
+    akan DIHAPUS seluruhnya.
+    """
+    old = _sum_by_product(existing.get("items", []) or [],
+                          lambda r: r.get("product_id"), lambda r: r.get("total_weight"),
+                          lambda r: r.get("ekor"))
+    new = _sum_by_product(new_items or [], lambda r: r.product_id,
+                          lambda r: r.total_weight, lambda r: r.ekor)
+    aksi = "Koreksi" if new_items is not None else "Penghapusan"
+    for prod_id in set(old) | set(new):
+        o = old.get(prod_id, {"kg": 0.0, "ekor": 0.0})
+        n = new.get(prod_id, {"kg": 0.0, "ekor": 0.0})
+        d_kg, d_ekor = n["kg"] - o["kg"], n["ekor"] - o["ekor"]
+        if d_kg >= 0 and d_ekor >= 0:
+            continue
+        product = await db.products.find_one({"id": prod_id})
+        if not product:
+            continue
+        stok_kg = float(product.get("stock_kg", 0) or 0)
+        stok_ekor = float(product.get("stock_ekor", 0) or 0)
+        nama = product.get("name", "Produk")
+        if d_kg < 0 and stok_kg + d_kg < -0.001:
+            raise HTTPException(400, (
+                f"{aksi} ditolak: stok {nama} sekarang tinggal {round(stok_kg, 2)} kg, "
+                f"tidak cukup untuk dikurangi {round(abs(d_kg), 2)} kg "
+                "(sebagian ayamnya sudah terjual atau sudah dipotong). "
+                "Kurangi angkanya lebih sedikit, atau catat penyesuaian stok dulu."))
+        if d_ekor < 0 and stok_ekor + d_ekor < -0.001:
+            raise HTTPException(400, (
+                f"{aksi} ditolak: stok {nama} sekarang tinggal {round(stok_ekor)} ekor, "
+                f"tidak cukup untuk dikurangi {round(abs(d_ekor))} ekor "
+                "(sebagian sudah terjual/dipotong)."))
+
+
 @api.post("/purchases")
 async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles("owner", "admin"))):
     pid = new_id()
@@ -803,13 +871,33 @@ async def create_purchase(body: PurchaseBody, user: dict = Depends(require_roles
 
 @api.put("/purchases/{pid}")
 async def update_purchase(pid: str, body: PurchaseBody, user: dict = Depends(require_roles("owner"))):
+    """KOREKSI pembelian yang sudah tersimpan (tanpa hapus & input ulang).
+
+    Caranya: efek pembelian lama dibatalkan lalu ditulis ulang dengan angka baru,
+    memakai id & created_at yang SAMA sehingga posisi di riwayat/laporan tidak berubah.
+    Dua penjaga dipasang supaya pembukuan tidak pernah jadi kacau:
+      1. Kalau hutang pembelian ini SUDAH pernah dibayar sebagian/penuh, koreksi ditolak
+         (pembayarannya harus diurus dulu, kalau tidak kas & hutang jadi tidak cocok).
+      2. Kalau pengurangan berat/ekor akan membuat stok minus (ayamnya sudah terjual
+         atau sudah dipotong), koreksi ditolak dengan pesan yang jelas.
+    """
     existing = await db.purchases.find_one({"id": pid})
     if not existing:
         raise HTTPException(404, "Pembelian tidak ditemukan")
+    await _guard_purchase_payment(pid)
+    await _guard_purchase_stock(existing, body.items)
+
     await _reverse_purchase(existing)
     await db.purchases.delete_one({"id": pid})
-    doc, tw, total_modal = await _persist_purchase(body, user, pid)
-    await add_activity("purchase", "Pembelian Diubah", f"{doc['supplier_name']} - {round(tw,1)} kg", total_modal, user["name"])
+    doc, tw, total_modal = await _persist_purchase(body, user, pid, existing.get("created_at"))
+    await db.purchases.update_one({"id": pid}, {"$set": {
+        "updated_at": iso_now(), "updated_by": user["name"],
+        "created_by": existing.get("created_by", user["name"]),
+    }})
+    doc.update({"updated_at": iso_now(), "updated_by": user["name"],
+                "created_by": existing.get("created_by", user["name"])})
+    await add_activity("purchase", "Pembelian Dikoreksi",
+                       f"{doc['supplier_name']} - {round(tw, 1)} kg", total_modal, user["name"])
     await log_audit(user, "update", "purchase", pid, clean(existing), {"total_modal": total_modal})
     await rt_emit(["purchases", "expenses", "payables", "suppliers", "stock", "products", "dashboard"], {"id": pid})
     return clean(doc)
@@ -820,6 +908,8 @@ async def delete_purchase(pid: str, user: dict = Depends(require_roles("owner"))
     existing = await db.purchases.find_one({"id": pid})
     if not existing:
         raise HTTPException(404, "Pembelian tidak ditemukan")
+    await _guard_purchase_payment(pid)
+    await _guard_purchase_stock(existing, None)
     await _reverse_purchase(existing)
     await db.purchases.delete_one({"id": pid})
     await add_activity("cancel", "Pembelian Dihapus", f"{existing['supplier_name']} dihapus", existing.get("total_modal", 0), user["name"])

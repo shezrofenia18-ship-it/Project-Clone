@@ -7602,3 +7602,98 @@ agent_communication:
       
       Console logs: No errors detected during testing.
 
+
+#====================================================================================================
+# ITERASI (2026-08-30 malam) — Koreksi (edit) Pembelian
+#====================================================================================================
+
+backend:
+  - task: "PUT /purchases/{id} — koreksi pembelian + penjaga (guard)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py (update_purchase, _guard_purchase_payment, _guard_purchase_stock, _persist_purchase created_at)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PUT /api/purchases/{id} (HANYA role owner) mengoreksi pembelian tersimpan:
+          efek lama dibatalkan (_reverse_purchase) lalu ditulis ulang dengan id & created_at
+          yang SAMA (posisi riwayat tidak berubah), ditambah field updated_at & updated_by,
+          created_by asli dipertahankan.
+          DUA PENJAGA BARU (juga dipakai DELETE):
+          1. _guard_purchase_payment -> 400 bila payable pembelian ini sudah pernah dibayar
+             (payables.paid > 0), pesan menyebut nominal yang sudah dibayar.
+          2. _guard_purchase_stock -> 400 bila pengurangan kg/ekor membuat stok minus
+             (ayam sudah terjual/dipotong). Dipakai juga saat DELETE (new_items=None).
+          Body PUT sama dengan POST (PurchaseBody), frontend kini mengirim `date` supaya
+          tanggal pembelian tidak pindah ke hari ini.
+
+frontend:
+  - task: "Pembelian: tombol Koreksi & Hapus (owner) + kolom Tanggal"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/pages/Purchases.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Kolom "Aksi" (hanya role owner): [data-testid=edit-purchase-{id}] "Koreksi" membuka
+          PurchaseDialog terisi data lama (supplier, tanggal, item, dibayar) -> PUT;
+          [data-testid=delete-purchase-{id}] membuka konfirmasi
+          [data-testid=confirm-delete-purchase] -> DELETE.
+          Dialog: judul "Koreksi Pembelian", catatan [data-testid=pur-edit-note], input
+          [data-testid=pur-date] (Tanggal Pembelian, max hari ini), tombol "Simpan Koreksi".
+          Baris yang pernah dikoreksi menampilkan "dikoreksi oleh <nama>"
+          ([data-testid=purchase-edited-{id}]). Admin TIDAK melihat kolom Aksi.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.8"
+  test_sequence: 14
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "PUT /purchases/{id} — koreksi pembelian + penjaga (guard)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Uji fitur KOREKSI PEMBELIAN (PUT /api/purchases/{id}). Login owner
+      (/app/memory/test_credentials.md). WAJIB: sebelum mulai, CATAT kondisi awal produk
+      yang dipakai (stock_kg, stock_ekor, hpp_kg, hpp_ekor, buy_price_kg, avg_weight_used)
+      dan saldo supplier (total_purchase, payable) — laporkan angkanya di hasil tes supaya
+      main agent bisa memulihkan bila ada yang tidak kembali.
+      Skenario:
+      1. Buat pembelian A: Ayam Pejantan, 10 ekor, 20 kg, Rp 600.000, paid 600.000.
+      2. PUT koreksi A jadi 12 ekor, 24 kg, Rp 720.000 (kirim juga field date yang sama)
+         -> 200. Cek: total_modal 720.000, effective_cost_kg 30.000, id & created_at SAMA
+         dengan sebelumnya, ada updated_at & updated_by, stok naik tepat +4 kg/+2 ekor
+         dibanding setelah langkah 1 (bukan dobel), expense "Pembelian Ayam" untuk
+         pembelian ini HANYA SATU dan nilainya 720.000, hpp produk mengikuti angka baru.
+      3. PUT koreksi turun jadi 6 ekor, 10 kg, Rp 300.000 -> 200, stok menyesuaikan turun.
+      4. Uji PENJAGA STOK: PUT dengan total_weight sangat kecil (mis. 0.1 kg) sehingga
+         pengurangannya melebihi stok yang ada -> harus 400 dengan pesan Indonesia yang
+         menyebut nama produk & stok tersisa. (Kalau stok masih cukup sehingga 200, buat
+         penjualan/penyesuaian dulu atau laporkan bahwa kondisi tidak bisa dipicu.)
+      5. Uji PENJAGA PEMBAYARAN: buat pembelian B dengan paid=0 (jadi hutang), lalu
+         POST /api/payables/{id}/pay sebagian, lalu PUT koreksi B -> harus 400 dengan pesan
+         bahwa hutangnya sudah dibayar. Cek juga DELETE /api/purchases/{B} -> 400 juga.
+      6. RBAC: PUT sebagai admin@berkahayam.com/admin123 -> 403; sebagai kasir -> 403.
+      7. BERSIHKAN: kembalikan kondisi awal. Untuk pembelian B yang terkunci penjaga,
+         hapus pembayaran hutangnya (boleh langsung lewat DB/mongo: hapus dokumen di
+         collection expenses kategori "Pembayaran Hutang" milik uji ini, reset payables.paid
+         ke 0) lalu DELETE pembelian B; hapus juga pembelian A. Lapor kondisi akhir vs awal,
+         khususnya hpp_kg/hpp_ekor/buy_price_kg produk uji (DELETE memang belum memulihkan
+         HPP — cukup LAPORKAN angkanya, jangan diperbaiki sendiri).
+      JANGAN ubah kode. JANGAN sentuh data demo lain (pembelian 28 Agu Ayam Broiler).
+
