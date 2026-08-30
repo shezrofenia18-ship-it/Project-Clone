@@ -20,7 +20,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square } from "lucide-react";
 
 // Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
 // ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
@@ -53,6 +53,58 @@ import useIsDesktop from "@/hooks/useIsDesktop";
 
 const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "potongan", "sampingan"];
 
+// Ukuran kartu produk bisa dipilih kasir sesuai perangkatnya (HP kecil, tablet 10",
+// monitor kasir). Pilihan disimpan PER PERANGKAT di localStorage.
+const CARD_SIZE_KEY = "bam_pos_card_size";
+const CARD_SIZES = {
+  kecil: {
+    grid: "grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 2xl:grid-cols-8 gap-1.5",
+    pad: "px-1.5 py-1", name: "text-[11px]", price: "text-[11px]", stock: "text-[9px]",
+  },
+  sedang: {
+    grid: "grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6 gap-2",
+    pad: "px-2 py-1.5", name: "text-[13px]", price: "text-[13px]", stock: "text-[10px]",
+  },
+  besar: {
+    grid: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3",
+    pad: "px-3 py-2", name: "text-sm", price: "text-sm", stock: "text-[11px]",
+  },
+};
+const SIZE_OPTIONS = [
+  { key: "kecil", label: "Kecil", Icon: Grid3x3 },
+  { key: "sedang", label: "Sedang", Icon: LayoutGrid },
+  { key: "besar", label: "Besar", Icon: Square },
+];
+
+function readCardSize() {
+  try {
+    const v = localStorage.getItem(CARD_SIZE_KEY);
+    return CARD_SIZES[v] ? v : "sedang";
+  } catch {
+    return "sedang";
+  }
+}
+
+function CardSizePicker({ value, onChange }) {
+  return (
+    <div data-testid="pos-card-size"
+      className="flex items-center gap-0.5 shrink-0 bg-card border border-border rounded-full p-0.5">
+      {SIZE_OPTIONS.map(({ key, label, Icon }) => (
+        <button
+          key={key} type="button" title={`Ukuran kartu: ${label}`} aria-label={`Ukuran kartu ${label}`}
+          data-testid={`pos-size-${key}`} onClick={() => onChange(key)}
+          className={`flex items-center gap-1 h-7 px-2 rounded-full text-[11px] font-semibold transition-colors ${
+            value === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+          }`}
+        >
+          <Icon className="w-3.5 h-3.5" />
+          <span className="hidden xl:inline">{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Local calendar date (YYYY-MM-DD) so a sale queued offline is still booked on the
 // day it actually happened, not on the day it finally syncs.
 const localDate = () => {
@@ -77,8 +129,14 @@ export default function POS() {
   const [receipt, setReceipt] = useState(null);
   const [debtOpen, setDebtOpen] = useState(false);
   const [pendingOpen, setPendingOpen] = useState(false);
+  const [cardSize, setCardSize] = useState(readCardSize);
+  const size = CARD_SIZES[cardSize] || CARD_SIZES.sedang;
   const { user } = useAuth();
   const { enqueue, online, pending } = useOffline();
+
+  useEffect(() => {
+    try { localStorage.setItem(CARD_SIZE_KEY, cardSize); } catch { /* mode privat: abaikan */ }
+  }, [cardSize]);
 
   useEffect(() => {
     const id = setInterval(reload, 15000);
@@ -187,32 +245,34 @@ export default function POS() {
             </Button>
           </div>
         )}
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2">
-          {CATS.map((c) => (
-            <button key={c} data-testid={`pos-cat-${c}`} onClick={() => setCat(c)}
-              className={`px-3 h-8 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
-                cat === c ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-accent"
-              }`}>
-              {c === "all" ? "Semua" : CATEGORY_LABELS[c]}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 pb-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0 flex-1">
+            {CATS.map((c) => (
+              <button key={c} data-testid={`pos-cat-${c}`} onClick={() => setCat(c)}
+                className={`px-3 h-8 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                  cat === c ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-accent"
+                }`}>
+                {c === "all" ? "Semua" : CATEGORY_LABELS[c]}
+              </button>
+            ))}
+          </div>
+          <CardSizePicker value={cardSize} onChange={setCardSize} />
         </div>
         <div className="flex-1 overflow-y-auto no-scrollbar">
-          {/* Kartu dipadatkan: HP 3 kolom, tablet 4, desktop 5, layar besar 6 — kasir
-              melihat lebih banyak produk sekaligus tanpa menggulir. */}
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6 gap-2 pb-24 lg:pb-1">
+          {/* Kartu dipadatkan & ukurannya bisa dipilih kasir (kecil/sedang/besar). */}
+          <div className={`grid ${size.grid} pb-24 lg:pb-1`}>
             {shown.map((p) => (
               <button key={p.id} data-testid={`pos-product-${p.id}`} onClick={() => setEntry(p)}
                 className="text-left bg-card border border-border rounded-lg overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
                 <div className="aspect-square bg-muted overflow-hidden">
                   {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover" /> : null}
                 </div>
-                <div className="px-2 py-1.5">
-                  <p className="font-semibold text-[13px] leading-tight truncate">{p.name}</p>
-                  <p className="text-primary font-bold text-[13px] leading-tight mt-0.5 tabular truncate">
+                <div className={size.pad}>
+                  <p className={`font-semibold ${size.name} leading-tight truncate`}>{p.name}</p>
+                  <p className={`text-primary font-bold ${size.price} leading-tight mt-0.5 tabular truncate`}>
                     {`${formatRupiah(priceOf(p, primaryUnit(p)))}/${primaryUnit(p)}`}
                   </p>
-                  <p className="text-[10px] text-muted-foreground leading-tight tabular truncate">{stockLabel(p)}</p>
+                  <p className={`${size.stock} text-muted-foreground leading-tight tabular truncate`}>{stockLabel(p)}</p>
                 </div>
               </button>
             ))}

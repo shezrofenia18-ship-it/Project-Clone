@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, formatTime, formatDate } from "@/lib/format";
+import { formatWeight, formatNumber, CATEGORY_LABELS, formatTime, formatDate } from "@/lib/format";
 import { SlidersHorizontal } from "lucide-react";
 
 // "mati" hanya dipertahankan agar riwayat lama tetap terbaca; pilihan barunya
@@ -29,11 +29,16 @@ export default function Stock() {
   useRealtimeReload(["stock", "products"], reloadAll);
 
   const active = (products || []).filter((p) => p.active !== false);
-  const totalValue = active.reduce((s, p) => s + (p.stock_kg || 0) * (p.hpp_kg || 0), 0);
+  // Nilai uang (rupiah) TIDAK ditampilkan di halaman Stok — permintaan owner supaya
+  // modal/HPP tidak terlihat di layar operasional. Nilai stok tetap ada di
+  // Laporan > Stok (khusus owner/admin) dan di PDF Laporan Nilai Stok.
+  const totalKg = active.reduce((s, p) => s + (p.stock_kg || 0), 0);
+  const totalEkor = active.reduce((s, p) => s + (p.stock_ekor || 0), 0);
 
   return (
     <div className="bam-fade">
-      <PageHeader title="Stok Ayam" subtitle={`Nilai stok: ${formatRupiah(totalValue)}`}
+      <PageHeader title="Stok Ayam"
+        subtitle={`Total stok: ${formatWeight(totalKg)} · ${formatNumber(totalEkor)} ekor`}
         actions={<Button data-testid="add-adjustment" onClick={() => setAdj(true)}><SlidersHorizontal className="w-4 h-4 mr-1" /> Penyesuaian Stok</Button>} />
 
       <Tabs defaultValue="stok">
@@ -53,7 +58,6 @@ export default function Stock() {
                     {p.units.includes("ekor") && <div><p className="text-[11px] text-muted-foreground">Ekor</p><p className="font-head font-extrabold text-xl tabular">{formatNumber(p.stock_ekor)}</p></div>}
                     {p.units.includes("pcs") && <div><p className="text-[11px] text-muted-foreground">Pcs</p><p className="font-head font-extrabold text-xl tabular">{formatNumber(p.stock_pcs)}</p></div>}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-2 tabular">Nilai: {formatRupiah((p.stock_kg || 0) * (p.hpp_kg || 0))}</p>
                   {low && <Badge className="mt-2 bg-warning text-warning-foreground">Stok menipis</Badge>}
                 </Card>
               );

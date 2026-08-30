@@ -55,15 +55,15 @@ export default function Purchases() {
 function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
   const [supplier, setSupplier] = useState("");
   const [items, setItems] = useState([{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }]);
-  const [transport, setTransport] = useState(0);
-  const [other, setOther] = useState(0);
   const [paid, setPaid] = useState(0);
   const [busy, setBusy] = useState(false);
 
   const setItem = (i, k, v) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [k]: v } : it));
   const birdValue = items.reduce((s, it) => s + Number(it.total_price), 0);
   const totalEkor = items.reduce((s, it) => s + Number(it.ekor), 0);
-  const totalModal = birdValue + Number(transport) + Number(other);
+  // Transport & biaya lain dihilangkan dari form (permintaan owner): total modal
+  // sekarang MURNI total harga ayam dari supplier.
+  const totalModal = birdValue;
   const totalWeight = items.reduce((s, it) => s + Number(it.total_weight), 0);
 
   const save = async () => {
@@ -75,7 +75,7 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
       await api.post("/purchases", {
         supplier_id: supplier,
         items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price) })),
-        transport_cost: Number(transport), other_cost: Number(other), paid: Number(paid),
+        paid: Number(paid),
       });
       toast.success("Pembelian tersimpan, stok bertambah"); onSaved();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
@@ -92,24 +92,40 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
               <SelectContent className="bg-popover">{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-3">
             <Label className="text-xs">Item Ayam</Label>
+            {/* Setiap kotak diberi judul + satuan (ekor / kg / Rp) supaya owner tidak
+                keliru memasukkan angka. Di HP kotaknya ditata bertingkat. */}
             {items.map((it, i) => (
-              <div key={it._k} className="space-y-1">
-                <div className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-4"><Select value={it.product_id} onValueChange={(v) => setItem(i, "product_id", v)}>
-                    <SelectTrigger data-testid={`pur-item-${i}`}><SelectValue placeholder="Produk" /></SelectTrigger>
-                    <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-                  </Select></div>
-                  <div className="col-span-2"><Input placeholder="Ekor" type="number" value={it.ekor} onChange={(e) => setItem(i, "ekor", e.target.value)} className="tabular" /></div>
-                  <div className="col-span-3"><Input placeholder="Berat kg" type="number" value={it.total_weight} onChange={(e) => setItem(i, "total_weight", e.target.value)} className="tabular" /></div>
-                  <div className="col-span-2"><Input placeholder="Total Rp" type="number" value={it.total_price} onChange={(e) => setItem(i, "total_price", e.target.value)} className="tabular" /></div>
-                  <div className="col-span-1"><Button variant="ghost" size="icon" onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}><Trash2 className="w-4 h-4 text-destructive" /></Button></div>
+              <div key={it._k} className="rounded-lg border border-border p-2.5 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-muted-foreground">Item {i + 1}</span>
+                  {items.length > 1 && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7" data-testid={`pur-remove-${i}`}
+                      onClick={() => setItems((a) => a.filter((_, idx) => idx !== i))}>
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-12 gap-2">
+                  <div className="col-span-2 sm:col-span-4">
+                    <Label className="text-[11px] text-muted-foreground">Produk</Label>
+                    <Select value={it.product_id} onValueChange={(v) => setItem(i, "product_id", v)}>
+                      <SelectTrigger data-testid={`pur-item-${i}`} className="mt-1"><SelectValue placeholder="Pilih produk" /></SelectTrigger>
+                      <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <UnitField label="Jumlah (ekor)" unit="ekor" className="col-span-1 sm:col-span-2"
+                    testid={`pur-ekor-${i}`} value={it.ekor} onChange={(v) => setItem(i, "ekor", v)} />
+                  <UnitField label="Berat Total (kg)" unit="kg" className="col-span-1 sm:col-span-3"
+                    testid={`pur-berat-${i}`} value={it.total_weight} onChange={(v) => setItem(i, "total_weight", v)} />
+                  <UnitField label="Total Harga (Rp)" unit="Rp" className="col-span-2 sm:col-span-3"
+                    testid={`pur-total-${i}`} value={it.total_price} onChange={(v) => setItem(i, "total_price", v)} />
                 </div>
                 {/* Kalkulasi otomatis berat 1 ekor: 15 ekor + 30 kg -> 2,00 kg/ekor.
                     Angka inilah yang dipakai memotong stok kg saat kasir jual per ekor. */}
                 {Number(it.ekor) > 0 && Number(it.total_weight) > 0 && (
-                  <p data-testid={`pur-avg-${i}`} className="text-[11px] text-muted-foreground pl-1">
+                  <p data-testid={`pur-avg-${i}`} className="text-[11px] text-muted-foreground pl-0.5">
                     Berat 1 ekor kiriman ini:{" "}
                     <span className="font-semibold text-foreground tabular">
                       {formatWeight(Number(it.total_weight) / Number(it.ekor), 2)}/ekor
@@ -121,10 +137,9 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
             ))}
             <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><Label className="text-xs">Transport</Label><Input type="number" value={transport} onChange={(e) => setTransport(e.target.value)} className="mt-1 tabular" /></div>
-            <div><Label className="text-xs">Biaya Lain</Label><Input type="number" value={other} onChange={(e) => setOther(e.target.value)} className="mt-1 tabular" /></div>
-            <div><Label className="text-xs">Dibayar</Label><Input data-testid="pur-paid" type="number" value={paid} onChange={(e) => setPaid(e.target.value)} className="mt-1 tabular" /></div>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <UnitField label="Dibayar Sekarang (Rp)" unit="Rp" testid="pur-paid"
+              value={paid} onChange={setPaid} hint="Sisanya otomatis dicatat sebagai hutang supplier." />
           </div>
           <div className="rounded-lg bg-accent p-3 text-sm space-y-1">
             <div className="flex justify-between"><span>Nilai Ayam (total dibayar)</span><span className="tabular">{formatRupiah(birdValue)}</span></div>
@@ -144,5 +159,23 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved }) {
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-purchase" disabled={busy} onClick={save}>{busy ? "Menyimpan..." : "Simpan"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// Kotak angka dengan judul di atas + satuan di dalam kotak (ekor / kg / Rp).
+function UnitField({ label, unit, value, onChange, testid, className = "", hint }) {
+  return (
+    <div className={className}>
+      <Label className="text-[11px] text-muted-foreground">{label}</Label>
+      <div className="relative mt-1">
+        <Input data-testid={testid} type="number" inputMode="decimal" value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="tabular pr-10 text-right" />
+        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-muted-foreground pointer-events-none">
+          {unit}
+        </span>
+      </div>
+      {hint && <p className="text-[10px] text-muted-foreground mt-1">{hint}</p>}
+    </div>
   );
 }
