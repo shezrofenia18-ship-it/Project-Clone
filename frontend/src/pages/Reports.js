@@ -66,12 +66,18 @@ function csvExport(filename, rows) {
   URL.revokeObjectURL(a.href);
 }
 
+function currentMonth() { return new Date().toISOString().slice(0, 7); }
+
 export default function Reports() {
   const [start, setStart] = useState(daysAgoISO(30));
   const [end, setEnd] = useState(todayISO());
   const [pl, setPl] = useState(null);
   const [sales, setSales] = useState(null);
   const [stock, setStock] = useState(null);
+  const [tab, setTab] = useState("pl");
+  // Laporan bulanan berdiri sendiri (pemilih bulan), untuk arsip pembukuan toko.
+  const [month, setMonth] = useState(currentMonth());
+  const [monthly, setMonthly] = useState(null);
 
   const load = useCallback(() => {
     api.get(`/reports/profit-loss?start=${start}&end=${end}`).then((r) => setPl(r.data));
@@ -79,21 +85,166 @@ export default function Reports() {
     api.get(`/reports/stock`).then((r) => setStock(r.data));
   }, [start, end]);
   useEffect(() => { load(); }, [load]);
+
+  const loadMonthly = useCallback(() => {
+    if (!month) return;
+    api.get(`/reports/monthly?month=${month}`)
+      .then((r) => setMonthly(r.data))
+      .catch(() => toast.error("Gagal memuat laporan bulanan"));
+  }, [month]);
+  useEffect(() => { loadMonthly(); }, [loadMonthly]);
+
   // Laporan ikut segar begitu ada penjualan/pembelian/pengeluaran baru.
-  useRealtimeReload(["sales", "expenses", "incomes", "purchases", "stock", "dashboard"], load);
+  useRealtimeReload(["sales", "expenses", "incomes", "purchases", "stock", "dashboard"],
+    useCallback(() => { load(); loadMonthly(); }, [load, loadMonthly]));
 
   return (
     <div className="bam-fade">
       <PageHeader title="Laporan" subtitle="Laba rugi, penjualan & nilai stok"
         actions={<Button variant="outline" data-testid="print-btn" onClick={() => window.print()}><Printer className="w-4 h-4 mr-1" /> Cetak</Button>} />
-      <Card className="p-4 mb-4 flex flex-wrap items-end gap-3">
-        <div><Label className="text-xs">Dari</Label><Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="mt-1" /></div>
-        <div><Label className="text-xs">Sampai</Label><Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="mt-1" /></div>
-        <Button data-testid="apply-filter" onClick={load}>Terapkan</Button>
-      </Card>
+      {tab !== "monthly" && (
+        <Card className="p-4 mb-4 flex flex-wrap items-end gap-3">
+          <div><Label className="text-xs">Dari</Label><Input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="mt-1" /></div>
+          <div><Label className="text-xs">Sampai</Label><Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="mt-1" /></div>
+          <Button data-testid="apply-filter" onClick={load}>Terapkan</Button>
+        </Card>
+      )}
 
-      <Tabs defaultValue="pl">
-        <TabsList><TabsTrigger value="pl" data-testid="tab-pl">Laba Rugi</TabsTrigger><TabsTrigger value="sales" data-testid="tab-sales">Penjualan</TabsTrigger><TabsTrigger value="stock" data-testid="tab-stock">Stok</TabsTrigger></TabsList>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="flex-wrap h-auto"><TabsTrigger value="pl" data-testid="tab-pl">Laba Rugi</TabsTrigger><TabsTrigger value="monthly" data-testid="tab-monthly">Bulanan (Arsip)</TabsTrigger><TabsTrigger value="sales" data-testid="tab-sales">Penjualan</TabsTrigger><TabsTrigger value="stock" data-testid="tab-stock">Stok</TabsTrigger></TabsList>
+
+        <TabsContent value="monthly">
+          <Card className="p-4 mb-4 flex flex-wrap items-end gap-3">
+            <div>
+              <Label className="text-xs">Bulan</Label>
+              <Input type="month" data-testid="monthly-month" value={month} max={currentMonth()}
+                onChange={(e) => setMonth(e.target.value)} className="mt-1 w-44" />
+            </div>
+            <Button variant="outline" data-testid="monthly-this" onClick={() => setMonth(currentMonth())}>Bulan Ini</Button>
+            <div className="ml-auto flex gap-2">
+              <PdfButton testid="pdf-monthly" path={`/reports/monthly/pdf?month=${month}`}
+                filename={`laba-rugi-bulanan_${month}.pdf`} />
+              {monthly && (
+                <Button variant="outline" size="sm" data-testid="export-monthly"
+                  onClick={() => csvExport(`laba-rugi-bulanan_${month}.csv`, [
+                    ["Tanggal", "Transaksi", "Berat (kg)", "Ekor", "Omzet (Rp)", "HPP (Rp)", "Laba Kotor (Rp)", "Beban (Rp)", "Laba Bersih (Rp)"],
+                    ...(monthly.daily || []).map((d) => [formatDate(d.date), d.txn_count, d.weight, d.ekor,
+                      Math.round(d.omzet), Math.round(d.hpp), Math.round(d.gross_profit), Math.round(d.opex), Math.round(d.net_profit)]),
+                    ["TOTAL", monthly.txn_count, monthly.weight, monthly.ekor, Math.round(monthly.omzet),
+                      Math.round(monthly.hpp), Math.round(monthly.gross_profit), Math.round(monthly.opex), Math.round(monthly.net_profit)],
+                  ])}><Download className="w-4 h-4 mr-1" /> Export CSV</Button>
+              )}
+            </div>
+          </Card>
+
+          {monthly && (
+            <>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                <MonthStat label="Omzet" value={formatRupiah(monthly.omzet)} growth={monthly.growth?.omzet} prev={monthly.prev?.label} testid="m-omzet" />
+                <MonthStat label="Laba Kotor" value={formatRupiah(monthly.gross_profit)} sub={`Margin ${formatPct(monthly.gross_margin)}`} testid="m-gross" />
+                <MonthStat label="Laba Bersih Usaha" value={formatRupiah(monthly.net_profit)} growth={monthly.growth?.net_profit} prev={monthly.prev?.label} testid="m-net" />
+                <MonthStat label="Transaksi" value={`${monthly.txn_count}`} sub={`${formatWeight(monthly.weight)} · ${monthly.ekor} ekor`} testid="m-txn" />
+              </div>
+
+              <div className="grid lg:grid-cols-2 gap-4 mb-4">
+                <Card className="p-6">
+                  <h3 className="font-head font-bold mb-1">Laba Rugi {monthly.label}</h3>
+                  <p className="text-xs text-muted-foreground mb-4">
+                    {formatDate(monthly.start)} — {formatDate(monthly.end)} · {monthly.active_days} hari ada transaksi
+                    · rata-rata {formatRupiah(monthly.avg_omzet_per_day)}/hari
+                  </p>
+                  <div className="space-y-2.5 text-sm" data-testid="monthly-pl">
+                    <Row label="Total Omzet" value={formatRupiah(monthly.omzet)} />
+                    <Row label="HPP" value={`- ${formatRupiah(monthly.hpp)}`} tone="text-muted-foreground" />
+                    <div className="border-t border-border pt-2.5"><Row label="Laba Kotor" value={formatRupiah(monthly.gross_profit)} bold tone="text-success" /></div>
+                    <Row label="Biaya Operasional" value={`- ${formatRupiah(monthly.opex)}`} tone="text-muted-foreground" />
+                    <div className="border-t border-border pt-2.5"><Row label="Laba Bersih Usaha" value={formatRupiah(monthly.net_profit)} bold tone="text-primary" /></div>
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <Badge variant="secondary">Margin Kotor {formatPct(monthly.gross_margin)}</Badge>
+                      <Badge variant="secondary">Margin Bersih {formatPct(monthly.net_margin)}</Badge>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-dashed border-border">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Arus Kas Bulan Ini</p>
+                      <Row label="Uang Masuk" value={formatRupiah(monthly.cash_in)} tone="text-success" />
+                      <Row label="Uang Keluar (termasuk beli ayam)" value={`- ${formatRupiah(monthly.cash_out)}`} tone="text-muted-foreground" />
+                      <div className="border-t border-border pt-2.5 mt-2">
+                        <Row label="Uang Bersih (Kas)" value={formatRupiah(monthly.net_cash)} bold
+                          tone={monthly.net_cash < 0 ? "text-destructive" : "text-success"} />
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-2">
+                        Modal ayam bulan ini {formatRupiah(monthly.modal_value)} · piutang baru {formatRupiah(monthly.piutang_baru)}.
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card className="p-6">
+                  <h3 className="font-head font-bold mb-4">Dibanding {monthly.prev?.label || "Bulan Lalu"}</h3>
+                  <div className="space-y-2.5 text-sm" data-testid="monthly-compare">
+                    <Row label={`Omzet ${monthly.prev?.label || ""}`} value={formatRupiah(monthly.prev?.omzet || 0)} />
+                    <Row label={`Laba Bersih ${monthly.prev?.label || ""}`} value={formatRupiah(monthly.prev?.net_profit || 0)} />
+                    <Row label={`Transaksi ${monthly.prev?.label || ""}`} value={`${monthly.prev?.txn_count || 0}`} />
+                    <div className="border-t border-border pt-3 flex flex-wrap gap-2">
+                      <GrowthBadge label="Omzet" value={monthly.growth?.omzet} />
+                      <GrowthBadge label="Laba Bersih" value={monthly.growth?.net_profit} />
+                    </div>
+                  </div>
+                  <h3 className="font-head font-bold mt-6 mb-3">Beban per Kategori</h3>
+                  <div className="space-y-1.5 text-sm">
+                    {(monthly.expenses_by_category || []).length === 0 && <p className="text-muted-foreground text-sm">Tidak ada beban tercatat.</p>}
+                    {(monthly.expenses_by_category || []).map((e) => (
+                      <div key={e.category} className="flex justify-between">
+                        <span className="text-muted-foreground">{e.category}</span>
+                        <span className="tabular">{formatRupiah(e.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              </div>
+
+              <Card className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground">
+                    <th className="px-4 py-3">Tanggal</th><th className="px-4 py-3 text-right">Trx</th>
+                    <th className="px-4 py-3 text-right">Berat</th><th className="px-4 py-3 text-right">Ekor</th>
+                    <th className="px-4 py-3 text-right">Omzet</th><th className="px-4 py-3 text-right">HPP</th>
+                    <th className="px-4 py-3 text-right">Laba Kotor</th><th className="px-4 py-3 text-right">Beban</th>
+                    <th className="px-4 py-3 text-right">Laba Bersih</th>
+                  </tr></thead>
+                  <tbody data-testid="monthly-daily">
+                    {(monthly.daily || []).map((d) => (
+                      <tr key={d.date} className="border-t border-border">
+                        <td className="px-4 py-2.5 whitespace-nowrap">{formatDate(d.date)}</td>
+                        <td className="px-4 py-2.5 text-right tabular">{d.txn_count}</td>
+                        <td className="px-4 py-2.5 text-right tabular">{formatWeight(d.weight)}</td>
+                        <td className="px-4 py-2.5 text-right tabular">{d.ekor}</td>
+                        <td className="px-4 py-2.5 text-right tabular">{formatRupiah(d.omzet)}</td>
+                        <td className="px-4 py-2.5 text-right tabular text-muted-foreground">{formatRupiah(d.hpp)}</td>
+                        <td className="px-4 py-2.5 text-right tabular text-success">{formatRupiah(d.gross_profit)}</td>
+                        <td className="px-4 py-2.5 text-right tabular text-muted-foreground">{formatRupiah(d.opex)}</td>
+                        <td className="px-4 py-2.5 text-right tabular font-semibold">{formatRupiah(d.net_profit)}</td>
+                      </tr>
+                    ))}
+                    {(monthly.daily || []).length === 0 && (
+                      <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Belum ada aktivitas pada bulan ini.</td></tr>
+                    )}
+                  </tbody>
+                  <tfoot><tr className="border-t-2 border-border font-bold">
+                    <td className="px-4 py-3">TOTAL</td>
+                    <td className="px-4 py-3 text-right tabular">{monthly.txn_count}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatWeight(monthly.weight)}</td>
+                    <td className="px-4 py-3 text-right tabular">{monthly.ekor}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(monthly.omzet)}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(monthly.hpp)}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(monthly.gross_profit)}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(monthly.opex)}</td>
+                    <td className="px-4 py-3 text-right tabular">{formatRupiah(monthly.net_profit)}</td>
+                  </tr></tfoot>
+                </table>
+              </Card>
+            </>
+          )}
+        </TabsContent>
 
         <TabsContent value="pl">
           {pl && (
@@ -198,4 +349,34 @@ export default function Reports() {
 
 function Row({ label, value, bold, tone }) {
   return <div className="flex justify-between"><span className={bold ? "font-bold" : "text-muted-foreground"}>{label}</span><span className={`tabular ${bold ? "font-bold" : ""} ${tone || ""}`}>{value}</span></div>;
+}
+
+function GrowthBadge({ label, value }) {
+  if (value === null || value === undefined) {
+    return <Badge variant="secondary">{label}: belum ada pembanding</Badge>;
+  }
+  const naik = value >= 0;
+  return (
+    <Badge className={naik ? "bg-success text-white" : "bg-destructive text-white"}>
+      {label} {naik ? "naik" : "turun"} {formatPct(Math.abs(value))}
+    </Badge>
+  );
+}
+
+function MonthStat({ label, value, sub, growth, prev, testid }) {
+  let info = sub;
+  if (growth !== null && growth !== undefined) {
+    info = `${growth >= 0 ? "+" : ""}${formatPct(growth)} vs ${prev || "bulan lalu"}`;
+  } else if (!sub && prev) {
+    info = `belum ada pembanding (${prev})`;
+  }
+  const tone = growth === null || growth === undefined ? "text-muted-foreground"
+    : (growth >= 0 ? "text-success" : "text-destructive");
+  return (
+    <Card className="p-4" data-testid={testid}>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="font-head font-extrabold text-xl tabular mt-0.5">{value}</p>
+      {info && <p className={`text-[11px] mt-0.5 ${growth === null || growth === undefined ? "text-muted-foreground" : tone}`}>{info}</p>}
+    </Card>
+  );
 }

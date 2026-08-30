@@ -7,6 +7,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 import uuid
 import asyncio
+import calendar
 import re
 import secrets
 import logging
@@ -908,6 +909,16 @@ async def create_production(body: ProductionBody, user: dict = Depends(require_r
 
 
 # ------------------------- Sales -------------------------
+# Kasir hanya boleh melihat riwayat transaksinya sendiri, dan HANYA 7 hari
+# terakhir (termasuk hari ini). Dibatasi di server supaya tidak bisa diakali
+# lewat URL/perangkat lain — bukan sekadar disembunyikan di tampilan.
+KASIR_HISTORY_DAYS = 7
+
+
+def kasir_history_min_date() -> str:
+    return (now_jkt() - timedelta(days=KASIR_HISTORY_DAYS - 1)).date().isoformat()
+
+
 @api.get("/sales")
 async def list_sales(date: Optional[str] = None, user: dict = Depends(get_current_user)):
     q = {}
@@ -915,8 +926,22 @@ async def list_sales(date: Optional[str] = None, user: dict = Depends(get_curren
         q["date"] = date
     if user["role"] == "kasir":
         q["cashier_id"] = user["id"]
+        floor = kasir_history_min_date()
+        if date:
+            if date < floor:
+                return []
+        else:
+            q["date"] = {"$gte": floor}
     s = await db.sales.find(q).sort("created_at", -1).to_list(2000)
     return [clean(x) for x in s]
+
+
+@api.get("/sales/access")
+async def sales_access(user: dict = Depends(get_current_user)):
+    """Batas riwayat yang boleh dilihat akun ini (dipakai UI untuk membatasi kalender)."""
+    if user["role"] == "kasir":
+        return {"limited": True, "days": KASIR_HISTORY_DAYS, "min_date": kasir_history_min_date()}
+    return {"limited": False, "days": None, "min_date": None}
 
 
 @api.post("/sales")
@@ -1106,14 +1131,25 @@ async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles
 async def list_expenses(user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     e = await db.expenses.find().sort("created_at", -1).to_list(2000)
     if user["role"] == "kasir":
-        e = [x for x in e if x.get("category") not in ("Pembelian Ayam", "Pembayaran Hutang")]
+        # Kasir HANYA melihat pengeluaran yang dia catat sendiri. Biaya toko lain
+        # (beli ayam, gaji, sewa, bayar hutang, dst.) urusan owner. Data tetap
+        # tersimpan utuh & tetap masuk laporan/dashboard/tutup buku owner.
+        def milik_kasir(x: dict) -> bool:
+            if x.get("created_by_id"):
+                return x["created_by_id"] == user["id"]
+            # dokumen lama (sebelum ada created_by_id) dicocokkan lewat nama
+            return x.get("created_by") == user["name"]
+
+        e = [x for x in e if milik_kasir(x)]
     return [clean(x) for x in e]
 
 
 @api.post("/expenses")
 async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
     doc = body.model_dump()
-    doc.update({"id": new_id(), "date": body.date or today_str(), "created_by": user["name"], "created_at": iso_now()})
+    doc.update({"id": new_id(), "date": body.date or today_str(),
+                "created_by": user["name"], "created_by_id": user["id"],
+                "created_by_role": user.get("role"), "created_at": iso_now()})
     if doc.get("proof_file_id") and not doc.get("proof_url"):
         doc["proof_url"] = f"/api/files/{doc['proof_file_id']}"
     await db.expenses.insert_one(doc)
@@ -1515,6 +1551,124 @@ async def report_stock(user: dict = Depends(get_current_user)):
             "total_value_pcs": round(sum(x["value_pcs"] for x in out), 2)}
 
 
+# ------------------------- Laporan Bulanan (arsip pembukuan) -------------------------
+BULAN_ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+            "Agustus", "September", "Oktober", "November", "Desember"]
+
+
+def month_bounds(month: Optional[str]) -> tuple:
+    """'2026-08' -> ('2026-08-01', '2026-08-31', 'Agustus 2026'). Default bulan ini (WIB)."""
+    ym = (month or "").strip() or now_jkt().strftime("%Y-%m")
+    if not re.fullmatch(r"\d{4}-\d{2}", ym):
+        raise HTTPException(400, "Format bulan harus YYYY-MM, contoh 2026-08")
+    y, m = int(ym[:4]), int(ym[5:7])
+    if not 1 <= m <= 12:
+        raise HTTPException(400, "Bulan tidak valid")
+    last = calendar.monthrange(y, m)[1]
+    return f"{ym}-01", f"{ym}-{last:02d}", f"{BULAN_ID[m - 1]} {y}"
+
+
+def prev_month_key(ym: str) -> str:
+    y, m = int(ym[:4]), int(ym[5:7])
+    m -= 1
+    if m == 0:
+        m, y = 12, y - 1
+    return f"{y:04d}-{m:02d}"
+
+
+async def _month_summary(month: str) -> dict:
+    start, end, label = month_bounds(month)
+    sales = await db.sales.find({"date": {"$gte": start, "$lte": end},
+                                "status": {"$ne": "batal"}}).to_list(50000)
+    exps = await db.expenses.find({"date": {"$gte": start, "$lte": end}}).to_list(50000)
+    incs = await db.incomes.find({"date": {"$gte": start, "$lte": end}}).to_list(50000)
+    return {"month": month, "label": label, "start": start, "end": end,
+            "fin": finance.summarize(sales, exps, incs),
+            "sales": sales, "expenses": exps, "incomes": incs}
+
+
+@api.get("/reports/monthly")
+async def report_monthly(month: Optional[str] = None,
+                         user: dict = Depends(require_roles("owner", "admin"))):
+    """Laba rugi SATU bulan penuh + rincian harian & perbandingan bulan lalu.
+
+    Rumusnya memakai finance.summarize (sama dengan Dashboard, Laporan harian,
+    dan Tutup Buku) supaya total bulanan selalu cocok dengan laporan hariannya.
+    """
+    ym = (month or "").strip() or now_jkt().strftime("%Y-%m")
+    cur = await _month_summary(ym)
+    prev = await _month_summary(prev_month_key(ym))
+    fin = cur["fin"]
+
+    # rincian per hari (hanya hari yang ada aktivitas)
+    days: Dict[str, Dict[str, list]] = {}
+    for key, rows in (("sales", cur["sales"]), ("expenses", cur["expenses"]), ("incomes", cur["incomes"])):
+        for row in rows:
+            d = (row.get("date") or "")[:10]
+            if not d:
+                continue
+            days.setdefault(d, {"sales": [], "expenses": [], "incomes": []})[key].append(row)
+    daily = []
+    for d in sorted(days):
+        b = days[d]
+        f = finance.summarize(b["sales"], b["expenses"], b["incomes"])
+        daily.append({"date": d, "txn_count": f["txn_count"], "weight": f["weight"],
+                      "ekor": f["ekor"], "omzet": f["omzet"], "hpp": f["hpp"],
+                      "gross_profit": f["gross_profit"], "opex": f["opex"],
+                      "net_profit": f["net_profit"], "cash_in": f["cash_in"],
+                      "cash_out": f["cash_out"], "net_cash": f["net_cash"]})
+
+    # performa produk sebulan (omzet, hpp, laba) — berguna untuk arsip pembukuan
+    prod: Dict[str, dict] = {}
+    for s in cur["sales"]:
+        for it in s.get("items", []) or []:
+            nm = it.get("name") or "-"
+            p = prod.setdefault(nm, {"name": nm, "omzet": 0.0, "hpp": 0.0,
+                                     "kg": 0.0, "ekor": 0.0, "pcs": 0.0})
+            p["omzet"] += float(it.get("subtotal") or 0)
+            p["hpp"] += float(it.get("hpp_total") or it.get("subtotal_hpp") or 0)
+            unit, qty = it.get("unit"), float(it.get("qty") or 0)
+            if unit == "kg":
+                p["kg"] += qty
+            elif unit == "ekor":
+                p["ekor"] += qty
+            elif unit == "pcs":
+                p["pcs"] += qty
+    products = sorted(prod.values(), key=lambda x: -x["omzet"])
+    for p in products:
+        p["omzet"] = round(p["omzet"], 2)
+        p["hpp"] = round(p["hpp"], 2)
+        p["laba"] = round(p["omzet"] - p["hpp"], 2)
+        p["kg"], p["ekor"], p["pcs"] = round(p["kg"], 3), round(p["ekor"], 2), round(p["pcs"], 2)
+
+    def growth(now_v, prev_v):
+        if not prev_v:
+            return None
+        return round((now_v - prev_v) / abs(prev_v) * 100, 2)
+
+    pf = prev["fin"]
+    active_days = len([d for d in daily if d["txn_count"]])
+    return {
+        "month": ym, "label": cur["label"], "start": cur["start"], "end": cur["end"],
+        "omzet": fin["omzet"], "hpp": fin["hpp"], "gross_profit": fin["gross_profit"],
+        "opex": fin["opex"], "net_profit": fin["net_profit"],
+        "gross_margin": fin["margin"], "net_margin": fin["net_margin"],
+        "expense_total": fin["expense_total"], "expenses_by_category": fin["expenses_by_category"],
+        "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
+        "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+        "txn_count": fin["txn_count"], "weight": fin["weight"], "ekor": fin["ekor"],
+        "piutang_baru": fin["piutang_baru"],
+        "active_days": active_days,
+        "avg_omzet_per_day": round(fin["omzet"] / active_days, 2) if active_days else 0,
+        "daily": daily, "products": products[:30],
+        "prev": {"month": prev["month"], "label": prev["label"], "omzet": pf["omzet"],
+                 "gross_profit": pf["gross_profit"], "net_profit": pf["net_profit"],
+                 "opex": pf["opex"], "txn_count": pf["txn_count"]},
+        "growth": {"omzet": growth(fin["omzet"], pf["omzet"]),
+                   "net_profit": growth(fin["net_profit"], pf["net_profit"])},
+    }
+
+
 # ------------------------- Reports: PDF (kop toko) -------------------------
 async def _store_info() -> dict:
     s = await db.settings.find().to_list(50)
@@ -1570,6 +1724,15 @@ async def report_stock_pdf(user: dict = Depends(require_roles("owner", "admin"))
     store = await _store_info()
     pdf = await run_in_threadpool(pdf_reports.stock_pdf, data, store, user["name"])
     return _pdf_response(pdf, f"nilai-stok_{today_str()}.pdf")
+
+
+@api.get("/reports/monthly/pdf")
+async def report_monthly_pdf(month: Optional[str] = None,
+                             user: dict = Depends(require_roles("owner", "admin"))):
+    data = await report_monthly(month, user)
+    store = await _store_info()
+    pdf = await run_in_threadpool(pdf_reports.monthly_pl_pdf, data, store, user["name"])
+    return _pdf_response(pdf, f"laba-rugi-bulanan_{data['month']}.pdf")
 
 
 # ------------------------- Tautan PDF publik (untuk lampiran WhatsApp) -------------------------

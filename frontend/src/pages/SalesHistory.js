@@ -16,6 +16,15 @@ import { Ban, Receipt, Printer, Share2 } from "lucide-react";
 
 export default function SalesHistory() {
   const { user } = useAuth();
+  const isKasir = user.role === "kasir";
+  // Kasir hanya boleh melihat 7 hari terakhir (dibatasi juga di server). Kalender
+  // dibatasi supaya kasir tidak bingung memilih tanggal yang hasilnya selalu kosong.
+  const minDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  }, []);
   // Default HARI INI (acuan WIB, sama dengan backend) supaya transaksi yang baru
   // dibuat langsung terlihat dan tidak tertimbun riwayat hari-hari sebelumnya.
   const [date, setDate] = useState(todayWib());
@@ -43,18 +52,20 @@ export default function SalesHistory() {
 
   return (
     <div className="bam-fade">
-      <PageHeader title="Riwayat Transaksi" subtitle="Daftar penjualan" />
+      <PageHeader title="Riwayat Transaksi"
+        subtitle={isKasir ? "Penjualan Anda dalam 7 hari terakhir" : "Daftar penjualan"} />
 
       <Card className="p-3 mb-3 flex flex-wrap items-end gap-3">
         <div>
           <p className="text-xs text-muted-foreground mb-1">Tanggal</p>
           <Input type="date" data-testid="hist-date" className="w-44" value={date}
+            min={isKasir ? minDate : undefined} max={isKasir ? todayWib() : undefined}
             onChange={(e) => setDate(e.target.value)} />
         </div>
         <Button variant={date ? "outline" : "default"} size="sm" data-testid="hist-today"
           onClick={() => setDate(todayWib())}>Hari Ini</Button>
         <Button variant={date ? "ghost" : "outline"} size="sm" data-testid="hist-all"
-          onClick={() => setDate("")}>Semua Tanggal</Button>
+          onClick={() => setDate("")}>{isKasir ? "7 Hari Terakhir" : "Semua Tanggal"}</Button>
         <div className="ml-auto text-right" data-testid="hist-summary">
           <p className="text-xs text-muted-foreground">
             {ringkasan.jumlah} transaksi{ringkasan.batal > 0 ? ` · ${ringkasan.batal} batal` : ""}
@@ -62,6 +73,13 @@ export default function SalesHistory() {
           <p className="text-lg font-bold tabular">{formatRupiah(ringkasan.total)}</p>
         </div>
       </Card>
+
+      {isKasir && (
+        <p className="text-[11px] text-muted-foreground mb-3 -mt-1" data-testid="hist-kasir-note">
+          Riwayat kasir dibatasi 7 hari terakhir (sejak {formatDate(minDate)}). Untuk riwayat lebih
+          lama, silakan minta ke owner.
+        </p>
+      )}
 
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">

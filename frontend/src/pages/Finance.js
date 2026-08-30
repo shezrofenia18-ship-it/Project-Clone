@@ -55,6 +55,12 @@ export default function Finance() {
         </TabsList>
 
         <TabsContent value="pengeluaran">
+          {isKasir && (
+            <p className="text-[11px] text-muted-foreground mb-2" data-testid="exp-kasir-note">
+              Daftar ini hanya menampilkan pengeluaran yang Anda catat sendiri. Biaya toko lainnya
+              dikelola oleh owner.
+            </p>
+          )}
           <div className="flex justify-end mb-3"><Button data-testid="add-expense" onClick={() => setExpOpen(true)}><Plus className="w-4 h-4 mr-1" /> Tambah Pengeluaran</Button></div>
           <Card className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -74,7 +80,9 @@ export default function Finance() {
                   <td className="px-4 py-2.5 text-right tabular font-semibold text-destructive">{formatRupiah(e.amount)}</td>
                 </tr>
               ))}
-              {(expenses || []).length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Belum ada pengeluaran.</td></tr>}
+              {(expenses || []).length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                {isKasir ? "Anda belum mencatat pengeluaran." : "Belum ada pengeluaran."}
+              </td></tr>}
               </tbody>
             </table>
           </Card>

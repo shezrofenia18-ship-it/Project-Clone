@@ -56,6 +56,15 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Dependencies diinstall ulang (pip requirements.txt + yarn install ~945 paket). backend & frontend RUNNING, login owner → dashboard OK.
 - `memory/test_credentials.md` dibuat ulang (sempat hilang).
 
+## Implemented (2026-08-30 — 5 permintaan owner)
+1. **POS Kasir dipadatkan & responsif** (`frontend/src/pages/POS.js`): grid produk 3 (HP) / 4 (tablet) / 5 (desktop) / 6 (≥1536px) kolom, foto `aspect-square`, teks 13px/10px; chip kategori h-8; banner offline tipis; sidebar keranjang 380→320px; bar bawah HP lebih tipis (tombol "Keranjang"); sheet keranjang 80vh; EntryDialog & dialog Pembayaran compact (max-w-sm, input/keypad h-10) → keypad + tombol "Tambah ke Keranjang" muat di HP tanpa scroll.
+2. **Modal efektif & laba/satuan DIHAPUS TOTAL dari POS** untuk semua role (helper `modalOf` dibuang; `data-testid="entry-modal"` tidak ada lagi). Peringatan "berat perkiraan" pindah ke baris "Stok berkurang" (tanpa nominal). Owner tetap melihat modal/laba di Produk & Harga, Laporan, Dashboard.
+3. **Laporan Laba Rugi BULANAN + PDF arsip**: `GET /api/reports/monthly?month=YYYY-MM` (owner/admin, default bulan ini WIB; rumus finance.summarize sama dgn dashboard/tutup buku) → ringkasan, `daily[]` per hari, `products[]` top 30, `prev{}` & `growth{}`; `GET /api/reports/monthly/pdf` → PDF landscape berkop toko (`pdf_reports.monthly_pl_pdf`: ringkasan, perbandingan bulan lalu, rincian harian + TOTAL, beban per kategori, arus kas, performa produk, tanda tangan). Frontend: tab **"Bulanan (Arsip)"** di `Reports.js` (pemilih bulan, 4 kartu, tabel harian, Unduh PDF, Export CSV; filter tanggal harian disembunyikan saat tab ini aktif → `Tabs` jadi controlled).
+4. **Pengeluaran kasir hanya miliknya**: `create_expense` menyimpan `created_by_id`/`created_by_role`; `list_expenses` untuk kasir difilter `created_by_id == user.id` (fallback nama untuk dokumen lama). Owner/admin tetap melihat SEMUA (termasuk input kasir) → laporan/dashboard/tutup buku owner tidak berubah.
+5. **Riwayat transaksi kasir dibatasi 7 hari** di SERVER (`KASIR_HISTORY_DAYS=7`, `kasir_history_min_date()`): tanpa `date` → `date >= hari ini-6`; `?date` lebih lama → `[]`. Endpoint bantu `GET /api/sales/access`. UI kasir: kalender min/max, tombol "7 Hari Terakhir", catatan penjelas. Owner/admin tidak dibatasi.
+
+Teruji: backend 22/22 PASS (termasuk regresi owner & RBAC 403 kasir untuk laporan bulanan), frontend 40/41 PASS di viewport HP 390 / tablet 820 & 1024 / desktop 1920 (checkout HP sampai struk, lalu dibatalkan owner). Data uji dibersihkan.
+
 ## Environment restore (2026-08-30)
 - Repo `shezrofenia18-ship-it/Project1` tersambung. Branch aktif `conflict_290826_1811` (HEAD e198d99) == `origin/conflict_290826_1811` — ini commit TERBARU (30 Ags). `origin/main` tertinggal 18 commit; hanya beda 1 commit config `.emergent/emergent.yml`.
 - Dependencies diinstall ulang: pip requirements.txt (reportlab jadi 5.0.1, export PDF diverifikasi tetap jalan) + yarn install. backend & frontend RUNNING; login owner → Dashboard OK.

@@ -404,6 +404,185 @@ def stock_pdf(data, store, printed_by=""):
     return _build(story, store, "Laporan Nilai Stok")
 
 
+# ------------------------- 3b. Laba Rugi BULANAN (arsip pembukuan) -------------------------
+def _m_pl_summary(data, W):
+    omzet = float(data.get("omzet", 0) or 0)
+    hpp = float(data.get("hpp", 0) or 0)
+    gross = float(data.get("gross_profit", 0) or 0)
+    opex = float(data.get("opex", 0) or 0)
+    net = float(data.get("net_profit", 0) or 0)
+    rows = [
+        ["Uraian", "Nilai", "% dari Omzet"],
+        ["Omzet Penjualan", rp(omzet), pct(100 if omzet else 0)],
+        ["Harga Pokok Penjualan (HPP)", "(" + rp(hpp) + ")", pct(hpp / omzet * 100 if omzet else 0)],
+        ["LABA KOTOR", rp(gross), pct(data.get("gross_margin", 0))],
+        ["Beban Operasional", "(" + rp(opex) + ")", pct(opex / omzet * 100 if omzet else 0)],
+        ["LABA BERSIH USAHA", rp(net), pct(data.get("net_margin", 0))],
+    ]
+    t = Table(rows, colWidths=[W * 0.5, W * 0.28, W * 0.22])
+    st = _table_style(3)
+    st.add("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold")
+    st.add("BACKGROUND", (0, 3), (-1, 3), colors.HexColor("#EEF3EF"))
+    st.add("FONTNAME", (0, 5), (-1, 5), "Helvetica-Bold")
+    st.add("FONTSIZE", (0, 5), (-1, 5), 9.5)
+    st.add("BACKGROUND", (0, 5), (-1, 5),
+           colors.HexColor("#EEF3EF") if net >= 0 else colors.HexColor("#FBEDEB"))
+    st.add("TEXTCOLOR", (1, 5), (1, 5), POS if net >= 0 else NEG)
+    st.add("LINEABOVE", (0, 3), (-1, 3), 0.9, INK)
+    st.add("LINEABOVE", (0, 5), (-1, 5), 0.9, INK)
+    t.setStyle(st)
+    return t
+
+
+def _m_compare(data, W):
+    """Perbandingan dengan bulan sebelumnya — inti laporan bulanan untuk owner."""
+    prev = data.get("prev") or {}
+    g = data.get("growth") or {}
+    plabel = prev.get("label") or "Bulan Lalu"
+
+    def row(label, now_v, prev_v, growth_v=None):
+        now_v, prev_v = float(now_v or 0), float(prev_v or 0)
+        selisih = now_v - prev_v
+        naik = "-" if growth_v is None else f"{'+' if growth_v >= 0 else ''}{num(growth_v, 1)}%"
+        return [label, rp(now_v), rp(prev_v), ("+" if selisih >= 0 else "-") + rp(abs(selisih)), naik]
+
+    rows = [["Uraian", data.get("label", "Bulan Ini"), plabel, "Selisih", "Naik/Turun"],
+            row("Omzet", data.get("omzet"), prev.get("omzet"), g.get("omzet")),
+            row("Laba Kotor", data.get("gross_profit"), prev.get("gross_profit")),
+            row("Beban Operasional", data.get("opex"), prev.get("opex")),
+            row("Laba Bersih Usaha", data.get("net_profit"), prev.get("net_profit"), g.get("net_profit")),
+            ["Jumlah Transaksi", num(data.get("txn_count")), num(prev.get("txn_count")),
+             num(float(data.get("txn_count") or 0) - float(prev.get("txn_count") or 0)), "-"]]
+    t = Table(rows, colWidths=[W * 0.24, W * 0.2, W * 0.2, W * 0.2, W * 0.16], repeatRows=1)
+    st = _table_style(5)
+    st.add("FONTNAME", (0, 4), (-1, 4), "Helvetica-Bold")
+    st.add("BACKGROUND", (0, 4), (-1, 4), colors.HexColor("#EEF3EF"))
+    t.setStyle(st)
+    return t
+
+
+def _m_daily(data, W):
+    daily = data.get("daily") or []
+    out = [Paragraph("Rincian Harian", S_SEC)]
+    if not daily:
+        out.append(Paragraph("Tidak ada aktivitas pada bulan ini.", S_SMALL))
+        return out
+    rows = [["Tanggal", "Trx", "Berat (kg)", "Ekor", "Omzet", "HPP", "Laba Kotor",
+             "Beban", "Laba Bersih"]]
+    for d in daily:
+        rows.append([tgl_singkat(d.get("date")), num(d.get("txn_count")),
+                     num(d.get("weight"), 2), num(d.get("ekor")),
+                     rp(d.get("omzet")), rp(d.get("hpp")), rp(d.get("gross_profit")),
+                     rp(d.get("opex")), rp(d.get("net_profit"))])
+    rows.append(["TOTAL BULAN", num(data.get("txn_count")), num(data.get("weight"), 2),
+                 num(data.get("ekor")), rp(data.get("omzet")), rp(data.get("hpp")),
+                 rp(data.get("gross_profit")), rp(data.get("opex")), rp(data.get("net_profit"))])
+    widths = [W * 0.1, W * 0.05, W * 0.09, W * 0.06, W * 0.14, W * 0.13, W * 0.14,
+              W * 0.13, W * 0.16]
+    t = Table(rows, colWidths=widths, repeatRows=1)
+    st = _table_style(9, money_from=1)
+    last = len(rows) - 1
+    st.add("FONTNAME", (0, last), (-1, last), "Helvetica-Bold")
+    st.add("BACKGROUND", (0, last), (-1, last), colors.HexColor("#EEF3EF"))
+    st.add("LINEABOVE", (0, last), (-1, last), 0.9, INK)
+    t.setStyle(st)
+    out.append(t)
+    return out
+
+
+def _m_expenses(data, W):
+    exps = data.get("expenses_by_category") or []
+    half = (W - 6 * mm) / 2
+    left = [Paragraph("Rincian Beban per Kategori", S_SEC)]
+    if exps:
+        rows = [["Kategori", "Jumlah"]]
+        for e in exps:
+            rows.append([Paragraph(str(e.get("category", "-")), S_CELL), rp(e.get("amount"))])
+        rows.append(["TOTAL (termasuk pembelian & bayar hutang)", rp(data.get("expense_total"))])
+        t = Table(rows, colWidths=[half * 0.62, half * 0.38], repeatRows=1)
+        st = _table_style(2)
+        st.add("FONTNAME", (0, len(rows) - 1), (-1, len(rows) - 1), "Helvetica-Bold")
+        st.add("LINEABOVE", (0, len(rows) - 1), (-1, len(rows) - 1), 0.9, INK)
+        t.setStyle(st)
+        left.append(t)
+    else:
+        left.append(Paragraph("Tidak ada beban tercatat pada bulan ini.", S_SMALL))
+
+    right = [Paragraph("Arus Kas Bulan Ini", S_SEC)]
+    krows = [["Uraian", "Nilai"],
+             ["Uang Masuk", rp(data.get("cash_in"))],
+             ["Uang Keluar (termasuk beli ayam)", "(" + rp(data.get("cash_out")) + ")"],
+             ["UANG BERSIH (KAS)", rp(data.get("net_cash"))],
+             ["Modal ayam bulan ini", rp(data.get("modal_value"))],
+             ["Piutang baru bulan ini", rp(data.get("piutang_baru"))]]
+    kt = Table(krows, colWidths=[half * 0.62, half * 0.38])
+    kst = _table_style(2)
+    kst.add("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold")
+    kst.add("BACKGROUND", (0, 3), (-1, 3), colors.HexColor("#EEF3EF"))
+    kst.add("LINEABOVE", (0, 3), (-1, 3), 0.9, INK)
+    kt.setStyle(kst)
+    right.append(kt)
+
+    grid = Table([[left, right]], colWidths=[half + 3 * mm, half + 3 * mm])
+    grid.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                              ("LEFTPADDING", (0, 0), (0, 0), 0),
+                              ("RIGHTPADDING", (-1, 0), (-1, 0), 0)]))
+    return grid
+
+
+def _m_products(data, W):
+    prods = (data.get("products") or [])[:15]
+    out = [Paragraph("Performa Produk (15 teratas)", S_SEC)]
+    if not prods:
+        out.append(Paragraph("Belum ada penjualan produk pada bulan ini.", S_SMALL))
+        return out
+    rows = [["Produk", "Kg", "Ekor", "Pcs", "Omzet", "HPP", "Laba", "Margin"]]
+    for p in prods:
+        om = float(p.get("omzet", 0) or 0)
+        rows.append([Paragraph(str(p.get("name", "-")), S_CELL), num(p.get("kg"), 2),
+                     num(p.get("ekor")), num(p.get("pcs")), rp(om), rp(p.get("hpp")),
+                     rp(p.get("laba")), pct(float(p.get("laba", 0) or 0) / om * 100 if om else 0)])
+    widths = [W * 0.24, W * 0.08, W * 0.07, W * 0.07, W * 0.15, W * 0.13, W * 0.13, W * 0.13]
+    t = Table(rows, colWidths=widths, repeatRows=1)
+    t.setStyle(_table_style(8, money_from=1))
+    out.append(t)
+    return out
+
+
+def monthly_pl_pdf(data, store, printed_by=""):
+    """Laporan laba rugi SATU bulan penuh, siap dicetak & diarsipkan owner."""
+    W = 267 * mm  # landscape A4 minus margins
+    start, end = data.get("start"), data.get("end")
+    story = _kop(store, "Laporan Laba Rugi Bulanan", start, end, printed_by, W)
+    story.append(Paragraph(
+        f"Bulan <b>{data.get('label', '-')}</b> · {int(data.get('active_days') or 0)} hari ada transaksi · "
+        f"rata-rata omzet {rp(data.get('avg_omzet_per_day'))}/hari aktif · "
+        f"{num(data.get('txn_count'))} transaksi · {num(data.get('weight'), 2)} kg · "
+        f"{num(data.get('ekor'))} ekor.", S_SMALL))
+    story.append(Spacer(1, 6))
+
+    half = (W - 6 * mm) / 2
+    ringkas = [Paragraph("Ringkasan Laba Rugi", S_SEC), _m_pl_summary(data, half)]
+    banding = [Paragraph("Perbandingan Bulan Sebelumnya", S_SEC), _m_compare(data, half)]
+    top = Table([[ringkas, banding]], colWidths=[half + 3 * mm, half + 3 * mm])
+    top.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                             ("LEFTPADDING", (0, 0), (0, 0), 0),
+                             ("RIGHTPADDING", (-1, 0), (-1, 0), 0)]))
+    story.append(top)
+
+    story += _m_daily(data, W)
+    story.append(_m_expenses(data, W))
+    story += _m_products(data, W)
+    story.append(Paragraph(
+        "Catatan: Laba Kotor = Omzet − HPP; Laba Bersih Usaha = Laba Kotor − Beban Operasional. "
+        "\"Pembelian Ayam\" dan \"Pembayaran Hutang\" tidak dihitung sebagai beban usaha karena "
+        "sudah termasuk di HPP/modal — keduanya hanya muncul di Arus Kas. Angka pada laporan ini "
+        "memakai rumus yang sama dengan Dashboard dan Tutup Buku Harian.", S_SMALL))
+    story += _signature(printed_by, W)
+    return _build(story, store, f"Laporan Laba Rugi Bulanan {data.get('label', '')}",
+                  orientation="landscape")
+
+
 # ------------------------- 4. Tutup Buku Harian -------------------------
 def _dc_intro(data, d):
     """Kalimat pembuka: siapa yang menutup buku dan kapan."""
