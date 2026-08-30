@@ -15,7 +15,7 @@ import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
 
 # Konfigurasi
-BASE_URL = "https://github-app-preview-5.preview.emergentagent.com/api"
+BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
 MONGO_URL = "mongodb://localhost:27017"
 DB_NAME = "test_database"
 

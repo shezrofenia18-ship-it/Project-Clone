@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 
 # Base URL from frontend/.env
-BASE_URL = "https://github-app-preview-5.preview.emergentagent.com/api"
+BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
 
 # Test credentials
 CREDENTIALS = {

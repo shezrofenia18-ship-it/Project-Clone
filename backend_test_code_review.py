@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 
 # Backend URL
-BASE_URL = "https://github-app-preview-5.preview.emergentagent.com/api"
+BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 CREDENTIALS = {

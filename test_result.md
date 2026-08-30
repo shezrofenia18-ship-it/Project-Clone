@@ -163,7 +163,7 @@ backend:
           ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (7/7)
           
           Test file: /app/backend_test_future_timestamps.py
-          Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+          Backend URL: https://github-app-launcher.preview.emergentagent.com/api
           Credentials: owner shezrofenia18@gmail.com / berkahayam1, kasir kasir@berkahayam.com / kasir123
           
           KONTEKS: Owner melaporkan "cek out ayam broiler 1 ekor, stok berkurang tetapi tidak muncul
@@ -370,7 +370,7 @@ backend:
           ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (9/9)
           
           Test file: /app/backend_test_whatsapp.py
-          Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+          Backend URL: https://github-app-launcher.preview.emergentagent.com/api
           
           KONTEKS PENTING: Kredensial Meta WhatsApp SENGAJA KOSONG (owner belum punya akun
           WhatsApp Business). Mode fallback "manual"/1-tap (wa.me) adalah perilaku yang BENAR.
@@ -565,7 +565,7 @@ backend:
           ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (10/10)
           
           Test file: /app/backend_test_whatsapp_pdf.py
-          Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+          Backend URL: https://github-app-launcher.preview.emergentagent.com/api
           
           KONTEKS PENTING: Kredensial Meta WhatsApp MASIH SENGAJA KOSONG (owner belum punya akun
           WhatsApp Business). Lampiran nyata ke WhatsApp belum bisa diuji; yang diuji adalah jalur
@@ -588,7 +588,7 @@ backend:
              - pdf_ready = True ✅
              - pdf_size = 5947 bytes (>1000) ✅
              - attach_pdf = True ✅
-             - public_base_url = "https://github-app-preview-5.preview.emergentagent.com" (tidak kosong) ✅
+             - public_base_url = "https://github-app-launcher.preview.emergentagent.com" (tidak kosong) ✅
              - template_doc_approved = False (BENAR, credentials empty) ✅
              - ready_for_auto = False (BENAR, credentials empty) ✅
           
@@ -612,7 +612,7 @@ backend:
           
           6. POST /api/daily-closing - pdf_url in whatsapp field ✅
              - whatsapp.pdf_url TIDAK KOSONG: 
-               "https://github-app-preview-5.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw" ✅
+               "https://github-app-launcher.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw" ✅
              - Pattern benar: <base>/api/public/laporan/<token> ✅
              - Token length = 43 chars (>30) ✅
              - whatsapp.text memuat baris "*PDF Laporan Penjualan:*" beserta pdf_url ✅
@@ -3192,7 +3192,7 @@ frontend:
           OFFLINE POS TESTING COMPLETE - 6/7 SCENARIOS PASSED, 1 CRITICAL ISSUE FOUND
           
           Test Environment:
-          - URL: https://github-app-preview-5.preview.emergentagent.com
+          - URL: https://github-app-launcher.preview.emergentagent.com
           - Tested as Kasir (kasir@berkahayam.com) and Owner (shezrofenia18@gmail.com)
           - Used Playwright context.set_offline(True/False) to simulate offline/online
           - App checks navigator.onLine every 6 seconds, auto-sync runs every 6 seconds when online
@@ -5742,7 +5742,7 @@ agent_communication:
 
     -agent: "main"
     -message: |
-      Uji ulang & SELESAIKAN SEMUA pengujian UI "Berkah Ayam Mili" di https://github-app-preview-5.preview.emergentagent.com
+      Uji ulang & SELESAIKAN SEMUA pengujian UI "Berkah Ayam Mili" di https://github-app-launcher.preview.emergentagent.com
 
       BUG YANG ANDA TEMUKAN SUDAH DIPERBAIKI (bug NYATA, bukan masalah skrip):
       Akar masalahnya, aplikasi ini punya TIGA salinan @radix-ui/react-dismissable-layer di node_modules (1.1.7 dari react-dialog, 1.1.19 dari cmdk & vaul). Karena tidak berbagi React context, gaya `pointer-events: none` yang Radix pasang di <body> saat dialog terbuka TIDAK selalu dibersihkan saat dialog ditutup. Akibatnya: setelah menambah produk lewat EntryDialog, klik berikutnya pada tombol "Lihat Keranjang" TERBLOKIR di level DOM (dan force=True Playwright TIDAK bisa menembus pointer-events pada ancestor) sehingga Sheet tidak pernah terbuka.
@@ -5774,7 +5774,7 @@ agent_communication:
     -message: |
       ✅ UI TESTING COMPLETE - PRIORITY #1 (CRITICAL BUG FIX) VERIFIED
       
-      Tested "Berkah Ayam Mili" POS application at https://github-app-preview-5.preview.emergentagent.com
+      Tested "Berkah Ayam Mili" POS application at https://github-app-launcher.preview.emergentagent.com
       Focus: Verify pointer-events bug fix for mobile/tablet cart functionality
       
       === PRIORITY #1: MOBILE/TABLET CART (CRITICAL BUG FIX) ===
@@ -6139,7 +6139,7 @@ agent_communication:
       
       ✅ PDF berhasil dibuat: 4845 bytes
       ✅ Tautan publik ber-token berhasil dibuat: 
-         https://github-app-preview-5.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw
+         https://github-app-launcher.preview.emergentagent.com/api/public/laporan/4LKci5eiQ67ynR1sVcSoNG5Q1EXLKlEgeIba3QKcfpw
       ✅ Token length: 43 chars (>30, secure)
       ✅ PDF berhasil diunduh TANPA auth: YES (200, application/pdf, %PDF header valid)
       ✅ Content-Disposition: inline; filename="laporan-penjualan_2026-08-29.pdf"
@@ -6227,7 +6227,7 @@ agent_communication:
       ✅ BACKEND CODE REVIEW VERIFICATION COMPLETE - ALL 55 TESTS PASSED (55/55)
       
       Test file: /app/backend_test_code_review.py
-      Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+      Backend URL: https://github-app-launcher.preview.emergentagent.com/api
       
       KONTEKS: Verifikasi tindak lanjut code review. Kredensial Meta WhatsApp MASIH SENGAJA KOSONG
       (owner belum punya akun WhatsApp Business). Mode fallback "manual"/1-tap adalah perilaku BENAR.
@@ -6272,7 +6272,7 @@ agent_communication:
          - pdf_ready = True ✅
          - pdf_size = 6138 bytes (>1000) ✅
          - ready_for_auto = False (BENAR, credentials empty) ✅
-         - public_base_url = "https://github-app-preview-5.preview.emergentagent.com" (tidak kosong) ✅
+         - public_base_url = "https://github-app-launcher.preview.emergentagent.com" (tidak kosong) ✅
       
       6. ✅ GET /api/whatsapp/template (4/4)
          - approved = False (BENAR, credentials empty) ✅
@@ -6508,7 +6508,7 @@ backend:
         -agent: "testing"
         -comment: |
           ✅ TESTED & WORKING (6/6 sub-tests passed)
-          - POST /api/expenses sebagai kasir: created (id=cf44ca7a-75b4-4174-bba1-205ba26e135f, amount=15000)
+          - POST /api/expenses sebagai kasir: created (id=github-app-launcher, amount=15000)
           - GET /api/expenses sebagai kasir: 2 items (only own expenses, no "Pembelian Ayam")
           - GET /api/expenses sebagai owner: 31 items (all expenses including kasir's + "Pembelian Ayam")
           - REGRESI PASSED: opex/expense bertambah tepat 15,000 di profit-loss & dashboard owner
@@ -6598,7 +6598,7 @@ agent_communication:
       ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (3/3)
       
       Test file: /app/backend_test_3_changes.py
-      Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+      Backend URL: https://github-app-launcher.preview.emergentagent.com/api
       Credentials: owner shezrofenia18@gmail.com / berkahayam1, kasir kasir@berkahayam.com / kasir123
       
       === TEST RESULTS ===
@@ -6648,7 +6648,7 @@ agent_communication:
             - Dashboard: opex=285,000, expense=285,000
          
          b. POST /api/expenses sebagai KASIR ✅
-            - Expense created: id=cf44ca7a-75b4-4174-bba1-205ba26e135f
+            - Expense created: id=github-app-launcher
             - Category: Es, Amount: 15,000, Description: "uji agent - pengeluaran kasir"
             - created_by: Kasir Andi, created_by_id: 6a93d67cd81caed954371dab
          
@@ -6805,7 +6805,7 @@ frontend:
         -comment: |
           ✅ POS RESPONSIF TESTING COMPLETE - MOSTLY PASS (13/14 checks)
           
-          Test URL: https://github-app-preview-5.preview.emergentagent.com/pos
+          Test URL: https://github-app-launcher.preview.emergentagent.com/pos
           Login: kasir@berkahayam.com / kasir123
           
           === A. POS RESPONSIF - 3 VIEWPORTS ===
@@ -6914,7 +6914,7 @@ frontend:
         -comment: |
           ✅ RIWAYAT KASIR 7 HARI TESTING COMPLETE - ALL PASS (9/9 checks)
           
-          Test URL: https://github-app-preview-5.preview.emergentagent.com/riwayat
+          Test URL: https://github-app-launcher.preview.emergentagent.com/riwayat
           
           === C. RIWAYAT TRANSAKSI KASIR = 7 HARI ===
           
@@ -6979,7 +6979,7 @@ frontend:
         -comment: |
           ✅ KEUANGAN KASIR TESTING COMPLETE - ALL PASS (7/7 checks)
           
-          Test URL: https://github-app-preview-5.preview.emergentagent.com/keuangan
+          Test URL: https://github-app-launcher.preview.emergentagent.com/keuangan
           
           === D. KEUANGAN KASIR ===
           
@@ -7054,7 +7054,7 @@ frontend:
         -comment: |
           ✅ LAPORAN BULANAN TESTING COMPLETE - ALL PASS (11/11 checks)
           
-          Test URL: https://github-app-preview-5.preview.emergentagent.com/laporan
+          Test URL: https://github-app-launcher.preview.emergentagent.com/laporan
           Login: shezrofenia18@gmail.com / berkahayam1 (OWNER)
           
           === E. LAPORAN BULANAN (OWNER) ===
@@ -7162,7 +7162,7 @@ backend:
           ✅ BACKEND REGRESSION TEST COMPLETE - ALL TESTS PASSED (9/9)
           
           Test file: /app/backend_test_purchase_regression.py
-          Backend URL: https://github-app-preview-5.preview.emergentagent.com/api
+          Backend URL: https://github-app-launcher.preview.emergentagent.com/api
           Credentials: shezrofenia18@gmail.com / berkahayam1 (owner)
           
           KONTEKS: Frontend form "Pembelian Baru" TIDAK lagi mengirim field transport_cost & other_cost
@@ -7476,7 +7476,7 @@ agent_communication:
       Backend purchase API production-ready for frontend changes.
     -agent: "main"
     -message: |
-      Uji UI app "Berkah Ayam Mili" di https://github-app-preview-5.preview.emergentagent.com.
+      Uji UI app "Berkah Ayam Mili" di https://github-app-launcher.preview.emergentagent.com.
       Kredensial: owner shezrofenia18@gmail.com / berkahayam1 ; kasir kasir@berkahayam.com / kasir123.
       
       A. POS: opsi ukuran kartu (Kecil/Sedang/Besar)
@@ -7521,7 +7521,7 @@ agent_communication:
     -message: |
       ✅ UI TESTING COMPLETE - ALL 3 FEATURES PASSED (A, B, C)
       
-      Test URL: https://github-app-preview-5.preview.emergentagent.com
+      Test URL: https://github-app-launcher.preview.emergentagent.com
       Credentials: owner shezrofenia18@gmail.com / berkahayam1, kasir kasir@berkahayam.com / kasir123
       
       === A. POS CARD SIZE OPTIONS ===

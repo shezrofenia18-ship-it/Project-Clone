@@ -363,3 +363,10 @@ FALSE POSITIVE (bukti, bukan asumsi):
 Teruji: backend **55/55 PASS** (termasuk pemastian kredensial kosong tetap 400 bukan 500/502,
 bentuk data /whatsapp/log tidak berubah, tautan PDF publik, semua PDF, penjualan+pembatalan,
 webhook idempoten, RBAC). Artefak uji dibersihkan; setting dipulihkan (15:00, attach_pdf ON).
+
+## Environment restore (2026-08-30 — sesi lanjutan)
+- Repo `shezrofenia18-ship-it/Project2` sudah tersambung; `git fetch` menunjukkan local `main` == `origin/main` (HEAD `0e8607e`, 0 ahead / 0 behind) — tidak ada commit remote yang tertinggal. 15 commit terakhir diverifikasi (terbaru: "Auto-generated changes" 30/08 09:47, sebelumnya "## 3 Permintaan Selesai & Teruji", "## 5 Permintaan Selesai & Teruji").
+- Dependencies diinstall ulang: pip `requirements.txt` (reportlab naik ke 5.0.1 — PDF tetap valid) + `yarn install` (node_modules sempat hilang total, selesai 37s).
+- backend & frontend RUNNING via supervisor. Verifikasi: login owner 200 (token 236 char), `/api/dashboard` 200, `/api/reports/profit-loss/pdf` 200 (3.461 byte, header %PDF). Frontend "Compiled successfully", port 3000 = 200.
+- Live preview diverifikasi visual: halaman Masuk tampil, login owner → Dashboard Owner dengan data nyata (omzet Rp 3.358.010 / 14 transaksi, 56,9 kg, laba kotor Rp 683.475, margin 20,35%, grafik 7 hari, performa produk, aktivitas toko).
+- `memory/test_credentials.md` dibuat ulang (sempat hilang lagi) berisi owner utama + 4 akun demo seed.

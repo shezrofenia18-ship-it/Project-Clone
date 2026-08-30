@@ -15,7 +15,7 @@ import os
 from datetime import datetime
 
 # Backend URL dari frontend/.env
-BACKEND_URL = "https://github-app-preview-5.preview.emergentagent.com/api"
+BACKEND_URL = "https://github-app-launcher.preview.emergentagent.com/api"
 
 # Credentials dari /app/memory/test_credentials.md
 CREDENTIALS = {
