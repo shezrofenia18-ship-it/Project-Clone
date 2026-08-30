@@ -5,6 +5,18 @@ import { DayPicker } from "react-day-picker"
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
 
+// Ikon navigasi didefinisikan DI LUAR Calendar. Kalau ditulis inline di dalam
+// prop `components`, React melihat tipe komponen baru setiap render dan
+// membongkar-ulang seluruh subtree DOM (state hilang, boros render).
+// Objeknya juga dibekukan di module scope agar referensinya stabil.
+const IconLeft = ({ className, ...props }) => (
+  <ChevronLeft className={cn("h-4 w-4", className)} {...props} />
+);
+const IconRight = ({ className, ...props }) => (
+  <ChevronRight className={cn("h-4 w-4", className)} {...props} />
+);
+const CALENDAR_ICONS = { IconLeft, IconRight };
+
 function Calendar({
   className,
   classNames,
@@ -55,14 +67,7 @@ function Calendar({
         day_hidden: "invisible",
         ...classNames,
       }}
-      components={{
-        IconLeft: ({ className, ...props }) => (
-          <ChevronLeft className={cn("h-4 w-4", className)} {...props} />
-        ),
-        IconRight: ({ className, ...props }) => (
-          <ChevronRight className={cn("h-4 w-4", className)} {...props} />
-        ),
-      }}
+      components={CALENDAR_ICONS}
       {...props} />
   );
 }

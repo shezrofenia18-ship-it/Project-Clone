@@ -33,6 +33,10 @@ const CommandDialog = ({
 }
 
 const CommandInput = React.forwardRef(({ className, ...props }, ref) => (
+  // `cmdk-input-wrapper` adalah atribut penanda milik library cmdk (dipakai
+  // selektor CSS-nya `[cmdk-input-wrapper]`). Bukan properti React yang tidak
+  // dikenal secara keliru — kalau dihapus, styling input pencarian rusak.
+  // eslint-disable-next-line react/no-unknown-property
   <div className="flex items-center border-b px-3" cmdk-input-wrapper="">
     <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
     <CommandPrimitive.Input
