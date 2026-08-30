@@ -457,3 +457,69 @@ VERIFIKASI:
 - CATATAN: laporan testing agent frontend sebelumnya menyebut "Tambah ke Keranjang timeout" —
   BUKAN bug: qty masih 0 karena satuan pcs/ekor memakai stepper +/- (bukan keypad angka).
   Dibuktikan berfungsi normal setelah menekan "+".
+
+## Keypad Ekor + Manajemen Pengguna + LOGIN PINDAH KE USERNAME (2026-08-30, permintaan owner)
+
+### 1. POS: keypad untuk satuan EKOR & PCS (`frontend/src/pages/POS.js`)
+Keluhan owner: "10 ekor = 10 kali tekan tombol plus". Dulu keypad HANYA tampil untuk kg.
+Sekarang keypad tampil untuk SEMUA satuan; tombol +/- TETAP ada (pilihan owner: keduanya).
+kg -> `KEYPAD_DECIMAL` [1-9, ",", 0, del]. ekor/pcs -> `KEYPAD_INTEGER` [1-9, "C", 0, del]
+("C" = hapus semua, karena ekor & pcs selalu bilangan bulat). Input `entry-qty` menolak
+titik/koma untuk ekor/pcs (inputMode numeric). Stepper diberi testid `qty-minus`/`qty-plus`.
+
+### 2. Manajemen pengguna: Ubah / Nonaktifkan / Hapus (`backend/auth.py`, `frontend/src/pages/Users.js`)
+Pilihan owner: sediakan Nonaktifkan DAN Hapus permanen; boleh ubah nama/username/role/status/
+kata sandi; tak boleh hapus akun sendiri & tak boleh sampai 0 owner aktif; HANYA Owner yang boleh.
+- Endpoint BARU `DELETE /api/auth/users/{id}`. `PUT` diperkuat.
+- **3 BUG LAMA ikut ketemu & diperbaiki di PUT**: id ngawur -> dulu **500**, kini 404;
+  user tidak ada -> dulu **500**, kini 404; role TIDAK divalidasi di PUT (padahal POST validasi)
+  -> kini 400 "Role tidak valid". Ditambah: nama kosong 400, kata sandi < 6 karakter 400.
+- Owner utama (username = ADMIN_USERNAME) DILINDUNGI: tidak bisa dihapus/dinonaktifkan dan
+  username-nya tidak bisa diubah dari UI, sebab `seed_admin()` membuatnya ulang setiap backend
+  start (kalau tidak dilindungi akan tampak seperti bug "hapus tapi kembali").
+- Semua update/delete dicatat ke `audit_logs` (entity "user") via `_audit_user()` — ditulis lokal
+  karena auth.py tidak boleh mengimpor server.py (impor sirkular). Tanpa kebocoran password_hash.
+- UI: kolom Aksi hanya untuk owner; baris akun sendiri bertanda "(Anda)" dengan tombol
+  Nonaktifkan & Hapus dinonaktifkan; dialog dipakai ulang untuk Tambah & Ubah (kata sandi
+  kosong = tidak diubah); dialog konfirmasi hapus menjelaskan riwayat transaksi tidak hilang.
+
+### 3. LOGIN PINDAH DARI EMAIL KE USERNAME (perubahan besar)
+Keputusan owner: username + kata sandi ditentukan owner; email DIHAPUS TOTAL; tanpa masa
+transisi; username minimal 5 karakter tanpa spasi; `ADMIN_USERNAME=owner`.
+- Model & JWT: `email` -> `username`. `get_current_user()` kini mencari user via `sub` (ID akun).
+  **Ini sekaligus memperbaiki bug**: dulu dicari lewat email, sehingga owner yang mengganti
+  email/username staf otomatis memutus sesi orang itu. Efek samping bagus: token lama tetap sah.
+- `get_current_user()` juga menolak akun nonaktif (403) tanpa menunggu token kedaluwarsa.
+- `realtime.py` identitas WS pakai username; `log_audit()` `user_email` -> `user_username`.
+- **MIGRASI 3 TAHAP di startup, urutan WAJIB**: (1) `drop_legacy_email_index()` buang index unik
+  `email_1`, (2) `migrate_usernames()` beri username dari bagian depan email lama lalu
+  `$unset email`, (3) `ensure_user_indexes()` buat index unik `username`.
+  KENAPA URUTAN INI: kalau `$unset email` jalan sementara `email_1` masih ada, semua email jadi
+  null dan MongoDB melempar **E11000 dup key -> STARTUP BACKEND GAGAL TOTAL**. Ini SUDAH TERJADI
+  saat pengembangan dan sudah diperbaiki.
+- Owner utama diproses PALING AWAL agar memenangkan username "owner"; yang bentrok dapat sufiks
+  angka -> `owner@berkahayam.com` menjadi `owner2`.
+- **INSIDEN & PEMULIHAN**: reload perantara menjalankan migrasi SEBELUM ADMIN_USERNAME ada di
+  .env, sehingga akun asli owner mendapat `shezrofenia18` lalu `seed_admin()` membuat akun
+  `owner` BARU yang kosong (jadi 8 akun, 2 owner bernama sama). Diperiksa lewat jejak data
+  (akun asli punya 20 penjualan, duplikat 0), duplikat kosong DIHAPUS, akun asli dipindah ke
+  username `owner`. Hasil 7 akun; restart berikutnya terbukti idempoten.
+
+### Akun setelah migrasi (lihat memory/test_credentials.md)
+owner/berkahayam1 (owner, akun utama & dilindungi) · owner2/berkahayam1 (owner) ·
+admin/admin123 · kasir/kasir123 · operator/operator123 (role kasir) ·
+kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN dihapus saat uji).
+
+### Verifikasi
+- Testing agent backend: manajemen pengguna **18/18 PASS**; migrasi username **25/25 PASS**
+  (email 0 akun, index `username_1` unique & `email_1` hilang, restart idempoten 7 akun,
+  token akun nonaktif langsung 403, RBAC utuh, audit `user_username`, regresi dashboard &
+  penjualan+pembatalan stok 145->144->145).
+- CATATAN: testing agent pernah melaporkan "audit logging tidak jalan" sebagai BUG KRITIS —
+  diverifikasi langsung ke MongoDB dan KLAIM ITU SALAH (71 dokumen audit_logs, 18 entity=user,
+  0 kebocoran password_hash). Tidak ada kode yang diubah.
+- Diverifikasi visual di live preview: halaman Masuk berlabel "Username" (Email hilang), login
+  `owner` -> Dashboard Owner (omzet Rp 4.090.610), halaman Pengguna menampilkan kolom Username +
+  Aksi (Ubah/Nonaktifkan/Hapus), baris sendiri bertanda "(Anda)" dengan tombol destruktif mati.
+- Frontend keypad/ukuran kartu diuji agent: 9/9 PASS (uji frontend untuk fitur ini diserahkan
+  ke owner atas permintaannya).

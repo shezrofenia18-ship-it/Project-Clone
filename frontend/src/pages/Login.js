@@ -8,24 +8,24 @@ import { toast } from "sonner";
 import { Drumstick, Loader2 } from "lucide-react";
 
 const DEMO = [
-  { role: "Owner", email: "shezrofenia18@gmail.com", pass: "berkahayam1" },
-  { role: "Admin", email: "admin@berkahayam.com", pass: "admin123" },
-  { role: "Kasir", email: "kasir@berkahayam.com", pass: "kasir123" },
+  { role: "Owner", username: "owner", pass: "berkahayam1" },
+  { role: "Admin", username: "admin", pass: "admin123" },
+  { role: "Kasir", username: "kasir", pass: "kasir123" },
 ];
 
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const submit = async (e, ov) => {
     e?.preventDefault();
     setLoading(true);
-    const em = ov?.email || email;
+    const un = ov?.username || username;
     const pw = ov?.pass || password;
-    const res = await login(em, pw);
+    const res = await login(un, pw);
     setLoading(false);
     if (res.ok) {
       toast.success(`Selamat datang, ${res.user.name}`);
@@ -77,9 +77,10 @@ export default function Login() {
 
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" data-testid="login-email" type="email" value={email}
-                onChange={(e) => setEmail(e.target.value)} placeholder="nama@berkahayam.com" className="mt-1.5" required />
+              <Label htmlFor="username">Username</Label>
+              <Input id="username" data-testid="login-username" type="text" value={username}
+                onChange={(e) => setUsername(e.target.value)} placeholder="mis. owner" className="mt-1.5"
+                autoCapitalize="none" autoCorrect="off" spellCheck="false" autoComplete="username" required />
             </div>
             <div>
               <Label htmlFor="password">Kata Sandi</Label>
@@ -96,10 +97,10 @@ export default function Login() {
             <div className="grid grid-cols-2 gap-2">
               {DEMO.map((d) => (
                 <button key={d.role} data-testid={`quick-login-${d.role.toLowerCase()}`}
-                  onClick={(e) => submit(e, { email: d.email, pass: d.pass })}
+                  onClick={(e) => submit(e, { username: d.username, pass: d.pass })}
                   className="text-left px-3 py-2 rounded-lg border border-border hover:border-primary hover:bg-accent transition-colors">
                   <p className="text-sm font-semibold">{d.role}</p>
-                  <p className="text-[11px] text-muted-foreground truncate">{d.email}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{d.username}</p>
                 </button>
               ))}
             </div>

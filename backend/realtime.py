@@ -104,7 +104,7 @@ def _decode(token: Optional[str]) -> Optional[Dict[str, Any]]:
         return None
     return {
         "id": payload.get("sub"),
-        "email": payload.get("email"),
+        "username": payload.get("username"),
         "role": payload.get("role"),
     }
 

@@ -28,6 +28,9 @@ from auth import (
     get_current_user,
     require_roles,
     seed_admin,
+    drop_legacy_email_index,
+    migrate_usernames,
+    ensure_user_indexes,
     now_jkt,
 )
 from seed import seed_demo, ensure_potong_parts
@@ -134,7 +137,7 @@ async def add_notification(ntype: str, title: str, message: str, level: str = "i
 async def log_audit(user: dict, action: str, entity: str, entity_id: str, before=None, after=None):
     await db.audit_logs.insert_one({
         "id": new_id(), "user": user.get("name") if user else "system",
-        "user_email": user.get("email") if user else None, "role": user.get("role") if user else None,
+        "user_username": user.get("username") if user else None, "role": user.get("role") if user else None,
         "action": action, "entity": entity, "entity_id": entity_id,
         "before": before, "after": after, "created_at": iso_now(),
     })
@@ -420,9 +423,6 @@ class ProductionBody(BaseModel):
     date: Optional[str] = None
     input_ekor: float
     outputs: List[ProdOutput]
-    labor_cost: float = 0
-    packaging_cost: float = 0
-    other_cost: float = 0
     operator: str = ""
     notes: str = ""
 
@@ -964,37 +964,53 @@ async def list_productions(user: dict = Depends(require_roles("owner", "admin", 
 
 @api.post("/productions")
 async def create_production(body: ProductionBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+    """Catat pemotongan ayam: stok ekor berkurang, stok pcs tiap bagian bertambah.
+
+    KEPUTUSAN OWNER (2026-08-30): memotong ayam TIDAK punya biaya tambahan
+    (tenaga kerja/kemasan/lainnya dihapus), dan produksi TIDAK LAGI MENIMPA
+    `hpp_pcs` produk. HPP per pcs sepenuhnya diatur owner di halaman Produk &
+    Harga. Sebelumnya SELURUH nilai ayam dibebankan ke output PERTAMA saja,
+    sehingga muncul angka sampah (Dada Ayam HPP Rp 47.045 padahal dijual
+    Rp 13.000) dan laporan menampilkan kerugian yang tidak nyata.
+    """
     source = await db.products.find_one({"id": body.source_product_id})
     if not source:
         raise HTTPException(404, "Produk sumber tidak ditemukan")
-    total_output = sum(o.pcs for o in body.outputs)
-    material_value = round(body.input_ekor * float(source.get("hpp_ekor", 0) or 0), 2)
-    total_cost = round(material_value + body.labor_cost + body.packaging_cost + body.other_cost, 2)
-    pid = new_id()
+    if body.input_ekor <= 0:
+        raise HTTPException(400, "Jumlah ayam harus lebih dari 0")
+
+    # Ambil hanya bagian yang benar-benar diisi (> 0). Form baru menampilkan
+    # SEMUA bagian sekaligus, jadi kiriman berisi banyak baris bernilai 0.
+    lines = [o for o in body.outputs if o.pcs and o.pcs > 0]
+    if not lines:
+        raise HTTPException(400, "Isi jumlah pcs minimal satu bagian")
+
     outputs_out = []
-    for o in body.outputs:
+    products_cache = {}
+    for o in lines:
         op = await db.products.find_one({"id": o.product_id})
-        outputs_out.append({"product_id": o.product_id, "name": op["name"] if op else "", "pcs": o.pcs})
+        if not op:
+            raise HTTPException(404, "Produk hasil potong tidak ditemukan")
+        products_cache[o.product_id] = op
+        outputs_out.append({"product_id": o.product_id, "name": op["name"], "pcs": o.pcs})
+
+    total_output = sum(o.pcs for o in lines)
+    # Nilai ayam yang dipotong. Tidak ada biaya tambahan, jadi total_cost = nilai ayam.
+    material_value = round(body.input_ekor * float(source.get("hpp_ekor", 0) or 0), 2)
+    pid = new_id()
     doc = {
         "id": pid, "source_product_id": body.source_product_id, "source_name": source["name"],
         "date": body.date or today_str(), "input_ekor": body.input_ekor, "outputs": outputs_out,
-        "material_value": material_value, "labor_cost": body.labor_cost,
-        "packaging_cost": body.packaging_cost, "other_cost": body.other_cost, "total_cost": total_cost,
+        "material_value": material_value, "total_cost": material_value,
         "operator": body.operator or user["name"], "notes": body.notes,
         "created_by": user["name"], "created_at": iso_now(),
     }
     await db.productions.insert_one(doc)
     await apply_stock(source, -body.input_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
-    main_out = body.outputs[0] if body.outputs else None
-    for o in body.outputs:
-        op = await db.products.find_one({"id": o.product_id})
-        if not op:
-            continue
-        await apply_stock(op, 0, 0, "produksi", user["name"], pid, delta_pcs=o.pcs)
-        if main_out and o.product_id == main_out.product_id and o.pcs:
-            await db.products.update_one({"id": o.product_id}, {"$set": {"hpp_pcs": round(total_cost / o.pcs, 2)}})
+    for o in lines:
+        await apply_stock(products_cache[o.product_id], 0, 0, "produksi", user["name"], pid, delta_pcs=o.pcs)
     await add_activity("production", "Produksi Potong Selesai", f"{source['name']} {body.input_ekor} ekor -> {total_output} pcs", 0, doc["operator"])
-    await log_audit(user, "create", "production", pid, None, {"total_cost": total_cost})
+    await log_audit(user, "create", "production", pid, None, {"material_value": material_value})
     return clean(doc)
 
 
@@ -2772,7 +2788,14 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
+    # URUTAN PENTING (3 tahap): (1) index unik lama `email_1` DIBUANG dulu, kalau
+    # tidak `$unset email` akan memicu E11000 dup key email:null dan startup gagal.
+    # (2) semua akun diberi username. (3) baru index unik `username` dibuat.
+    await drop_legacy_email_index()
+    renamed = await migrate_usernames()
+    await ensure_user_indexes()
+    if renamed:
+        logger.info("Migrasi login email -> username: %s akun diberi username", renamed)
     await db.sales.create_index("txn_id", unique=True, sparse=True)
     await db.sales.create_index("date")
     await db.daily_closings.create_index("date", unique=True)

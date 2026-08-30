@@ -50,9 +50,9 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (email, password) => {
+  const login = useCallback(async (username, password) => {
     try {
-      const { data } = await api.post("/auth/login", { email, password });
+      const { data } = await api.post("/auth/login", { username, password });
       localStorage.setItem("bam_token", data.token);
       writeCachedUser(data.user);
       setUser(data.user);

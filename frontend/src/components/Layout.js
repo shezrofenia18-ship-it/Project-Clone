@@ -227,7 +227,7 @@ export default function Layout({ children }) {
               <DropdownMenuContent align="end" className="w-48 bg-popover">
                 <DropdownMenuLabel>
                   <p className="text-sm">{user.name}</p>
-                  <p className="text-xs text-muted-foreground font-normal">{user.email}</p>
+                  <p className="text-xs text-muted-foreground font-normal">{user.username}</p>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem data-testid="logout-btn" onClick={logout} className="text-destructive">

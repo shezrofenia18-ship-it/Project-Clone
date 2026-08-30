@@ -27,6 +27,10 @@ import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Walle
 // ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
 const UNIT_INPUT_LABEL = { kg: "Berat (kg)", ekor: "Jumlah (ekor)", pcs: "Jumlah (pcs)" };
 const UNIT_BUTTON_LABEL = { kg: "Per Kg", ekor: "Per Ekor", pcs: "Per Pcs" };
+// Keypad angka POS. Satuan kg boleh berdesimal (pakai koma); ekor & pcs SELALU
+// bilangan bulat, jadi slot koma diganti "C" (hapus semua) yang lebih berguna.
+const KEYPAD_DECIMAL = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "del"];
+const KEYPAD_INTEGER = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "del"];
 const priceOf = (p, u) => Number(({ kg: p.price_kg, ekor: p.price_ekor, pcs: p.price_pcs })[u] || 0);
 // Ayam utuh (produk yang punya satuan "ekor") HANYA boleh dijual per ekor.
 // Owner membeli ayam dengan ditimbang (mis. 15 ekor = 30 kg -> 2 kg/ekor), lalu
@@ -547,10 +551,19 @@ function EntryDialog({ product, onClose, onAdd }) {
   const stockOut = unit === "ekor" && avgWeight > 0 ? qtyNum * avgWeight : 0;
   const estimateWeight = unit === "ekor" && product.avg_weight_source === "perkiraan";
 
+  // Keypad kini juga tampil untuk satuan EKOR & PCS supaya kasir bisa MENGETIK
+  // jumlahnya langsung — sebelumnya hanya ada tombol +/- yang harus ditekan
+  // berulang (10 ekor = 10 kali tekan). Tombol +/- tetap disediakan untuk
+  // penyesuaian cepat 1-2 satuan.
   const press = (k) => {
-    if (k === "del") return setQty((q) => q.slice(0, -1));
-    if (k === "." || k === ",") { if (!String(qty).includes(".")) setQty((q) => (q === "" ? "0." : q + ".")); return; }
-    setQty((q) => q + k);
+    if (k === "del") return setQty((q) => String(q).slice(0, -1));
+    if (k === "clear") return setQty("");
+    if (k === "." || k === ",") {
+      if (!isWeight) return; // ekor & pcs tidak berdesimal
+      if (!String(qty).includes(".")) setQty((q) => (q === "" ? "0." : q + "."));
+      return;
+    }
+    setQty((q) => String(q) + k);
   };
 
   const confirm = () => {
@@ -579,8 +592,10 @@ function EntryDialog({ product, onClose, onAdd }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-[11px] flex items-center gap-1"><ScanLine className="w-3 h-3" /> {unitLabel}</Label>
-              <Input data-testid="entry-qty" value={qty} onChange={(e) => setQty(e.target.value.replace(/[^0-9.,]/g, ""))}
-                placeholder="0" className="mt-1 h-10 text-lg font-bold tabular text-center" inputMode="decimal" />
+              <Input data-testid="entry-qty" value={qty}
+                onChange={(e) => setQty(e.target.value.replace(isWeight ? /[^0-9.,]/g : /[^0-9]/g, ""))}
+                placeholder="0" className="mt-1 h-10 text-lg font-bold tabular text-center"
+                inputMode={isWeight ? "decimal" : "numeric"} />
             </div>
             <div>
               <Label className="text-[11px]">Harga / {unit}</Label>
@@ -589,22 +604,23 @@ function EntryDialog({ product, onClose, onAdd }) {
             </div>
           </div>
 
-          {isWeight ? (
-            <div className="grid grid-cols-4 gap-1.5">
-              {["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "del"].map((k) => (
-                <button key={k} data-testid={`keypad-${k}`} onClick={() => press(k === "," ? "." : k)}
-                  className="h-10 rounded-lg bg-accent hover:bg-primary hover:text-primary-foreground font-bold text-base transition-colors flex items-center justify-center">
-                  {k === "del" ? <Delete className="w-4 h-4" /> : k}
-                </button>
-              ))}
-            </div>
-          ) : (
+          {!isWeight && (
             <div className="flex items-center justify-center gap-4 py-0.5">
-              <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => setQty((q) => String(Math.max(0, (Number(q) || 0) - 1)))}><Minus className="w-4 h-4" /></Button>
+              <Button variant="outline" size="icon" className="h-9 w-9" data-testid="qty-minus" onClick={() => setQty((q) => String(Math.max(0, (Number(q) || 0) - 1)))}><Minus className="w-4 h-4" /></Button>
               <span className="font-head font-extrabold text-2xl tabular w-14 text-center">{qtyNum || 0}</span>
-              <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => setQty((q) => String((Number(q) || 0) + 1))}><Plus className="w-4 h-4" /></Button>
+              <Button variant="outline" size="icon" className="h-9 w-9" data-testid="qty-plus" onClick={() => setQty((q) => String((Number(q) || 0) + 1))}><Plus className="w-4 h-4" /></Button>
             </div>
           )}
+
+          <div className="grid grid-cols-4 gap-1.5">
+            {(isWeight ? KEYPAD_DECIMAL : KEYPAD_INTEGER).map((k) => (
+              <button key={k} data-testid={`keypad-${k}`} onClick={() => press(k === "," ? "." : k)}
+                title={k === "clear" ? "Hapus semua" : undefined}
+                className="h-10 rounded-lg bg-accent hover:bg-primary hover:text-primary-foreground font-bold text-base transition-colors flex items-center justify-center">
+                {k === "del" ? <Delete className="w-4 h-4" /> : k === "clear" ? "C" : k}
+              </button>
+            ))}
+          </div>
 
           {stockOut > 0 && (
             <p data-testid="entry-stock-out" className="text-[11px] text-muted-foreground px-0.5 leading-tight">
