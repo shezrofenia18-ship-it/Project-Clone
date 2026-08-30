@@ -370,3 +370,90 @@ webhook idempoten, RBAC). Artefak uji dibersihkan; setting dipulihkan (15:00, at
 - backend & frontend RUNNING via supervisor. Verifikasi: login owner 200 (token 236 char), `/api/dashboard` 200, `/api/reports/profit-loss/pdf` 200 (3.461 byte, header %PDF). Frontend "Compiled successfully", port 3000 = 200.
 - Live preview diverifikasi visual: halaman Masuk tampil, login owner → Dashboard Owner dengan data nyata (omzet Rp 3.358.010 / 14 transaksi, 56,9 kg, laba kotor Rp 683.475, margin 20,35%, grafik 7 hari, performa produk, aktivitas toko).
 - `memory/test_credentials.md` dibuat ulang (sempat hilang lagi) berisi owner utama + 4 akun demo seed.
+
+## Tindak lanjut Code Review "Environment 7637b074" (2026-08-30)
+Laporan ini ~90% mengulang review sebelumnya. Diverifikasi ulang dengan BUKTI, bukan asumsi:
+**3 DITERAPKAN, sisanya FALSE POSITIVE (ditolak dengan bukti).**
+
+DITERAPKAN:
+1. `maintenance.py::_parse()` — `dt = None` sebelum try, `except (ValueError, TypeError,
+   OverflowError)`, guard `if dt is None`. Catatan: `dt` sebetulnya SUDAH selalu terikat
+   (jalur except melakukan `return`), jadi klaim "used before assignment" tidak akurat; tapi
+   modul ini jalan saat STARTUP backend sehingga ketahanan terhadap `created_at` rusak berharga.
+2. `maintenance.py::_collect_future()` — `_parse` tadinya dipanggil DUA KALI per dokumen
+   (hingga 20.000 dok/koleksi) + mencampur `r.get("created_at")` dengan `r["created_at"]`.
+   Kini satu kali parse via loop, `ts is not None and ts > now`. Perilaku tak berubah.
+3. `frontend/src/pages/POS.js` — 2 blok catch localStorage (ukuran kartu POS) kini memakai
+   `devWarn` dari `src/lib/log.js` (sunyi di produksi). SENGAJA TIDAK memakai toast ke pengguna
+   seperti disarankan review: gagal simpan preferensi tampilan bukan gangguan transaksi.
+
+FALSE POSITIVE (dibuktikan):
+- **39 "missing hook dependencies"**: dijalankan eslint 9.23.0 + eslint-plugin-react-hooks 5.2.0
+  ASLI (exhaustive-deps + rules-of-hooks + no-empty allowEmptyCatch:false) atas seluruh `src/`
+  (92 entri file) -> **0 warning, 0 error**. Saran-sarannya tidak masuk akal: `localStorage`
+  (global browser, non-reaktif), `id` (variabel yang DIBUAT di dalam effect), `i`/`s`/`e`/`r`
+  (parameter callback reduce/map), `api`/`apiError`/`priceOf` (import level-modul, stabil).
+  Contoh POS.js:528 `[unit, priceFor]` sudah lengkap. Menambahkannya = loop render.
+- **24 "`is` vs `==`"**: hitung nyata 21 (`server.py` 7, `auth.py` 5, `reconcile.py` 4,
+  `pdf_reports.py` 3, `finance.py` 2, `maintenance.py` 0 — bukan 24). SEMUA berbentuk
+  `is None`/`is not None`/`is False` = idiom PEP 8 BENAR. `grep 'is +["\x270-9]'` = 0 hasil.
+  Mengubah `body.active is not None` -> `==` justru MERUSAK penonaktifan pengguna.
+- **localStorage -> httpOnly cookie**: ditolak (sama seperti sesi lalu) karena merusak Mode
+  Offline POS (sesi kasir wajib bertahan offline+reload — bug yang sudah diperbaiki di FASE 1).
+  `POS.js:81` menyimpan preferensi UKURAN KARTU, bukan data sensitif. Sink XSS di `src/`
+  (`dangerouslySetInnerHTML`/`innerHTML`/`eval`) = **0 hasil**.
+- **"POS.js:138 empty catch"**: blok berisi komentar; eslint `no-empty` = 0 warning. Tetap
+  ditambah logging (butir 3 di atas) karena logging-nya memang belum ada.
+- **Refactor kompleksitas** `create_sale()` 38 / `dashboard()` 23 / `cleanup_test_data.main()` 31
+  dll: TETAP DITUNDA. Jalur uang & angka bisnis; refactor demi metrik tanpa manfaat terlihat
+  berisiko regresi. Ditawarkan sebagai tugas terpisah dengan uji penuh.
+
+Teruji (testing agent, backend **6/6 PASS**, 0 regresi): startup bersih tanpa traceback;
+**IDEMPOTENSI** restart backend tidak menggeser `created_at` (5 penjualan, identik hingga
+mikrodetik); tidak ada dokumen bertanggal masa depan (10 penjualan); PDF laba-rugi 3.461 B /
+penjualan 13.733 B / stok 3.998 B semua %PDF; idempotency txn_id (POST 2x -> sale_id sama,
+stok 120->119 ekor tidak dobel, pemasukan 1 entry) & cancel memulihkan stok ke 120 ekor/225,50 kg;
+RBAC utuh (admin & kasir login 200, endpoint owner 403). Artefak uji dibersihkan.
+
+## Refactor jalur uang: create_sale() & dashboard() (2026-08-30, diminta owner)
+Sebelumnya ditunda karena berisiko; owner meminta dikerjakan dengan uji penuh. Strategi:
+ambil BASELINE output API dulu, refactor tanpa ubah perilaku, lalu bandingkan.
+
+- `create_sale()` 115 baris / 28 variabel lokal -> orkestrator **26 baris** + 7 helper:
+  `_sale_validate`, `_sale_line_out` (MURNI, tanpa DB), `_sale_collect_items`, `_sale_money`
+  (MURNI), `_sale_document`, `_sale_apply_stock`, `_sale_record_side_effects`.
+  Kompleksitas mccabe (flake8 C901): **17 -> 2**.
+- `dashboard()` 74 baris -> orkestrator + 5 helper: `_dashboard_chart` (async),
+  `_perf_by_category`, `_stock_overview`, `_price_highlights`, `_target_progress` (4 terakhir MURNI).
+  Kompleksitas mccabe: **10 -> 1**.
+- **PERBAIKAN KINERJA NYATA**: grafik 7 hari tadinya 7 QUERY TERPISAH ke MongoDB tiap dashboard
+  dibuka, padahal frontend polling dashboard tiap 8 detik. Kini SATU query `$in` + kelompok di memori.
+- ATURAN YANG DIJAGA: urutan operasi & SETIAP pembulatan disalin apa adanya. Stok tetap dipotong
+  SEBELUM dokumen penjualan disimpan (supaya penjaga stok membatalkan transaksi sebelum uang tercatat).
+
+Catatan angka review vs alat standar: review menyebut create_sale 38 & dashboard 23; mccabe
+(flake8) menunjukkan 17 & 10 sebelum refactor. Angka review konsisten ~2x lebih tinggi.
+
+VERIFIKASI:
+- Perbandingan output `/api/dashboard` sebelum vs sesudah: **26 dari 27 kunci IDENTIK**.
+  Satu-satunya beda `stock_value` (12.894.896,73 -> 12.696.896,73) TERBUKTI bukan dari refactor:
+  audit_logs menunjukkan 2 aksi `update` produk "Ati Ampela" oleh pengguna lewat UI (18:06:28 &
+  18:08:05 WIB; units ['kg','pcs']->['pcs'], hpp_kg 18000->0, price_kg 28000->0, price_pcs 4000->2000).
+  Rumus LAMA & BARU dijalankan atas data yang SAMA -> hasil identik (12.696.896,73), dan
+  12.894.896,73 - 198.000 = 12.696.896,73 tepat. `/api/reports/profit-loss` identik 100%.
+- Testing agent: **18/18 PASS**. Jual per ekor/kg/pcs; kunci ayam-utuh (unit kg -> 400);
+  validasi keranjang kosong & piutang tanpa pelanggan (400); produk tak ada (404); diskon &
+  kembalian; piutang + tagihan + saldo pelanggan; kekurangan bayar non-piutang tetap bikin tagihan;
+  idempotensi txn_id (sale_id sama, stok & pemasukan tidak dobel); penjualan offline
+  (created_at=offline_at, synced_at, aktivitas "Penjualan Offline Tersinkron"); notifikasi
+  Transaksi Besar >= 1 jt; pembatalan memulihkan stok PERSIS; penjaga stok negatif (400);
+  dashboard 27 kunci; chart 7 entri urut & omzet hari ini cocok; products_perf terurut menurun;
+  PDF semua 200/%PDF; RBAC kasir -> dashboard 403.
+  Stok awal == akhir: Broiler 155 ekor/285,01 kg, Fillet 24,70 kg, Ceker 120 pcs. Artefak dibersihkan.
+- Diverifikasi visual di live preview: Dashboard Owner normal (omzet Rp 3.345.610, 15 transaksi,
+  grafik 7 hari, Performa Produk, Target). POS: 14 kartu produk, dialog entry, "+" stepper,
+  "Tambah ke Keranjang" -> toast + keranjang 1 item Rp 55.000, catatan "Stok berkurang 1,75 kg
+  (1 ekor x 1,75 kg/ekor)".
+- CATATAN: laporan testing agent frontend sebelumnya menyebut "Tambah ke Keranjang timeout" —
+  BUKAN bug: qty masih 0 karena satuan pcs/ekor memakai stepper +/- (bukan keypad angka).
+  Dibuktikan berfungsi normal setelah menekan "+".

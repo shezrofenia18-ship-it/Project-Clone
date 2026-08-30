@@ -37,9 +37,17 @@ def _parse(value: Any):
     """Baca ISO datetime; kembalikan None bila bukan waktu yang bisa dipakai."""
     if not isinstance(value, str) or len(value) < 10:
         return None
+    # `dt` diinisialisasi SEBELUM try supaya tidak ambigu bagi pembaca/analisis
+    # statis, dan agar kegagalan parse apa pun (bukan hanya ValueError) berakhir
+    # sebagai None alih-alih melempar ke pemanggil. Modul ini dipakai saat startup
+    # backend, jadi satu dokumen dengan `created_at` rusak tidak boleh menggagalkan
+    # seluruh proses perbaikan data.
+    dt = None
     try:
         dt = datetime.fromisoformat(value)
-    except ValueError:
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if dt is None:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=JKT)
 
@@ -56,7 +64,15 @@ async def _collect_future(db, now: datetime) -> Dict[str, List[dict]]:
             {"created_at": {"$gt": now_iso}},
             {"id": 1, "created_at": 1, "date": 1},
         ).to_list(20000)
-        rows = [r for r in rows if _parse(r.get("created_at")) and _parse(r["created_at"]) > now]
+        # Satu kali parse per dokumen (sebelumnya `_parse` dipanggil dua kali per
+        # baris) dan tidak lagi mencampur `r.get(...)` dengan `r[...]` yang rapuh
+        # bila field `created_at` hilang.
+        kept = []
+        for r in rows:
+            ts = _parse(r.get("created_at"))
+            if ts is not None and ts > now:
+                kept.append(r)
+        rows = kept
         if rows:
             found[name] = rows
     return found

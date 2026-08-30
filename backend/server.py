@@ -1034,87 +1034,125 @@ async def sales_access(user: dict = Depends(get_current_user)):
     return {"limited": False, "days": None, "min_date": None}
 
 
-@api.post("/sales")
-async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
-    txn_id = body.txn_id or new_id()
-    existing = await db.sales.find_one({"txn_id": txn_id})
-    if existing:
-        return clean(existing)
+# --- Penjualan dipecah menjadi tahap-tahap kecil ---------------------------
+# `create_sale` adalah JALUR UANG paling kritis di aplikasi ini (stok, HPP,
+# laba, piutang, kas). Sebelumnya satu fungsi 115 baris dengan 28 variabel
+# lokal, sehingga sulit dibaca & diuji. Sekarang dipecah per tahap dengan
+# ATURAN KETAT: perilaku TIDAK berubah — urutan penulisan ke database,
+# urutan validasi, dan SETIAP pembulatan dipertahankan apa adanya.
+
+
+def _sale_validate(body: SaleBody) -> None:
+    """Tolak permintaan yang mustahil diproses, sebelum menyentuh stok & uang."""
     if not body.items:
         raise HTTPException(400, "Keranjang kosong")
     if body.payment_method == "piutang" and not body.customer_id:
         raise HTTPException(400, "Transaksi piutang harus memilih pelanggan")
-    allow_neg = bool(await get_setting("allow_negative_stock", False))
-    customer = await db.customers.find_one({"id": body.customer_id}) if body.customer_id else None
 
-    items_out = []
-    subtotal = total_hpp = total_weight = total_ekor = 0.0
-    weight_from_ekor = 0.0
-    products_cache = {}
+
+def _sale_line_out(product: dict, it: SaleItem) -> dict:
+    """Satu baris penjualan. MURNI (tanpa database) supaya mudah diuji.
+
+    Menentukan HPP per satuan sesuai unit dan berat nyata yang keluar dari stok.
+    """
+    # Ayam utuh hanya boleh dijual per ekor (keputusan owner). Dikunci di server
+    # supaya transaksi offline lama / klien lain tidak bisa menyelipkan jual kg.
+    if it.unit == "kg" and is_whole_chicken(product):
+        raise HTTPException(400, f"{product['name']} hanya bisa dijual per ekor, bukan per kg")
+    avg_w = 0.0
+    if it.unit == "kg":
+        hpp_unit = float(product.get("hpp_kg", 0) or 0)
+    elif it.unit == "ekor":
+        hpp_unit = float(product.get("hpp_ekor", 0) or 0)
+        avg_w = effective_avg_weight(product)
+    else:
+        hpp_unit = float(product.get("hpp_pcs", 0) or 0)
+    # Berat nyata yang keluar dari stok. Untuk per-ekor = qty x berat rata-rata/ekor,
+    # DISIMPAN di baris penjualan supaya pembatalan mengembalikan angka yang sama
+    # walaupun berat rata-rata sudah berubah karena pembelian baru.
+    line_weight = sale_line_weight(product, it.unit, it.qty)
+    return {"product_id": it.product_id, "name": product["name"], "unit": it.unit,
+            "qty": it.qty, "price": it.price, "subtotal": round(it.qty * it.price, 2),
+            "hpp_unit": hpp_unit, "hpp_total": round(hpp_unit * it.qty, 2),
+            "category": product["category"],
+            "weight_kg": line_weight, "avg_weight_used": avg_w}
+
+
+async def _sale_collect_items(body: SaleBody):
+    """Ambil produk tiap baris, bangun baris penjualan + akumulasi totalnya.
+
+    Balikan: (items_out, products_cache, tot). `tot` memakai nilai yang SUDAH
+    dibulatkan per baris, sama seperti versi sebelumnya.
+    """
+    items_out: List[dict] = []
+    products_cache: dict = {}
+    tot = {"subtotal": 0.0, "hpp": 0.0, "weight_kg_unit": 0.0, "ekor": 0.0, "weight_from_ekor": 0.0}
     for it in body.items:
         product = await db.products.find_one({"id": it.product_id})
         if not product:
             raise HTTPException(404, "Produk tidak ditemukan")
         products_cache[it.product_id] = product
-        # Ayam utuh hanya boleh dijual per ekor (keputusan owner). Dikunci di server
-        # supaya transaksi offline lama / klien lain tidak bisa menyelipkan jual kg.
-        if it.unit == "kg" and is_whole_chicken(product):
-            raise HTTPException(400, f"{product['name']} hanya bisa dijual per ekor, bukan per kg")
-        line = round(it.qty * it.price, 2)
-        avg_w = 0.0
+        out = _sale_line_out(product, it)
+        tot["subtotal"] += out["subtotal"]
+        tot["hpp"] += out["hpp_total"]
         if it.unit == "kg":
-            hpp_unit = float(product.get("hpp_kg", 0) or 0)
-            total_weight += it.qty
+            tot["weight_kg_unit"] += it.qty
         elif it.unit == "ekor":
-            hpp_unit = float(product.get("hpp_ekor", 0) or 0)
-            total_ekor += it.qty
-            avg_w = effective_avg_weight(product)
-        else:
-            hpp_unit = float(product.get("hpp_pcs", 0) or 0)
-        # Berat nyata yang keluar dari stok. Untuk per-ekor = qty x berat rata-rata/ekor,
-        # DISIMPAN di baris penjualan supaya pembatalan mengembalikan angka yang sama
-        # walaupun berat rata-rata sudah berubah karena pembelian baru.
-        line_weight = sale_line_weight(product, it.unit, it.qty)
-        if it.unit == "ekor":
-            weight_from_ekor += line_weight
-        hpp_total = round(hpp_unit * it.qty, 2)
-        subtotal += line
-        total_hpp += hpp_total
-        items_out.append({"product_id": it.product_id, "name": product["name"], "unit": it.unit,
-                          "qty": it.qty, "price": it.price, "subtotal": line,
-                          "hpp_unit": hpp_unit, "hpp_total": hpp_total, "category": product["category"],
-                          "weight_kg": line_weight, "avg_weight_used": avg_w})
+            tot["ekor"] += it.qty
+            tot["weight_from_ekor"] += out["weight_kg"]
+        items_out.append(out)
+    return items_out, products_cache, tot
+
+
+def _sale_money(tot: dict, body: SaleBody) -> dict:
+    """Semua angka uang penjualan. MURNI, supaya bisa dicocokkan dengan struk."""
+    subtotal = tot["subtotal"]
     total = round(subtotal - body.discount, 2)
     paid = body.paid if body.paid else 0
+    # Non-piutang tanpa nominal bayar dianggap dibayar penuh (perilaku POS lama).
     if body.payment_method != "piutang" and paid == 0:
         paid = total
     receivable = round(total - paid, 2)
     change = round(paid - total, 2) if paid > total else 0
     if receivable < 0:
         receivable = 0
-    gross_profit = round(total - total_hpp, 2)
-    margin = round(gross_profit / total * 100, 2) if total else 0
+    gross_profit = round(total - tot["hpp"], 2)
+    return {"subtotal": round(subtotal, 2), "total": total, "paid": paid, "change": change,
+            "receivable": receivable, "gross_profit": gross_profit,
+            "margin": round(gross_profit / total * 100, 2) if total else 0}
 
-    sid = new_id()
-    doc = {
-        "id": sid, "txn_id": txn_id, "date": body.date or today_str(),
+
+def _sale_document(body: SaleBody, txn_id: str, user: dict, customer: Optional[dict],
+                   items_out: List[dict], tot: dict, money: dict) -> dict:
+    """Susun dokumen penjualan yang akan disimpan."""
+    receivable = money["receivable"]
+    return {
+        "id": new_id(), "txn_id": txn_id, "date": body.date or today_str(),
         "cashier_id": user["id"], "cashier_name": user["name"],
         "customer_id": body.customer_id, "customer_name": customer["name"] if customer else "Umum",
-        "items": items_out, "subtotal": round(subtotal, 2), "discount": body.discount,
-        "total": total, "paid": paid, "change": change, "receivable": receivable,
-        "payment_method": body.payment_method, "payment_status": "lunas" if receivable <= 0 else "piutang",
-        "total_hpp": round(total_hpp, 2), "gross_profit": gross_profit, "margin_pct": margin,
+        "items": items_out, "subtotal": money["subtotal"], "discount": body.discount,
+        "total": money["total"], "paid": money["paid"], "change": money["change"],
+        "receivable": receivable,
+        "payment_method": body.payment_method,
+        "payment_status": "lunas" if receivable <= 0 else "piutang",
+        "total_hpp": round(tot["hpp"], 2), "gross_profit": money["gross_profit"],
+        "margin_pct": money["margin"],
         # total_weight = berat TERUKUR yang keluar dari stok: item per-kg + hasil
         # konversi item per-ekor (qty x berat rata-rata/ekor). Dipecah agar tetap
         # bisa ditelusuri dari mana kg-nya berasal.
-        "total_weight": round(total_weight + weight_from_ekor, 3),
-        "total_weight_kg_unit": round(total_weight, 3),
-        "total_weight_ekor": round(weight_from_ekor, 3),
-        "total_ekor": total_ekor,
+        "total_weight": round(tot["weight_kg_unit"] + tot["weight_from_ekor"], 3),
+        "total_weight_kg_unit": round(tot["weight_kg_unit"], 3),
+        "total_weight_ekor": round(tot["weight_from_ekor"], 3),
+        "total_ekor": tot["ekor"],
         "status": "selesai", "created_at": body.offline_at or iso_now(),
         "offline": bool(body.offline_at),
         "synced_at": iso_now() if body.offline_at else None,
     }
+
+
+async def _sale_apply_stock(body: SaleBody, items_out: List[dict], products_cache: dict,
+                            sid: str, user: dict, allow_neg: bool) -> None:
+    """Potong stok tiap baris penjualan."""
     for it, out in zip(body.items, items_out):
         product = products_cache[it.product_id]
         d_ekor = -it.qty if it.unit == "ekor" else 0
@@ -1122,12 +1160,21 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
         # sehingga kedua angka stok selalu bergerak bersama.
         d_kg = -float(out.get("weight_kg", 0) or 0)
         d_pcs = -it.qty if it.unit == "pcs" else 0
-        await apply_stock(product, d_ekor, d_kg, "penjualan", user["name"], sid, allow_negative=allow_neg, delta_pcs=d_pcs)
-    await db.sales.insert_one(doc)
+        await apply_stock(product, d_ekor, d_kg, "penjualan", user["name"], sid,
+                          allow_negative=allow_neg, delta_pcs=d_pcs)
+
+
+async def _sale_record_side_effects(doc: dict, body: SaleBody, user: dict,
+                                    customer: Optional[dict], items_out: List[dict],
+                                    money: dict) -> None:
+    """Pemasukan, saldo pelanggan, tagihan piutang, aktivitas, notifikasi, audit, realtime."""
+    sid = doc["id"]
+    total, paid, receivable = money["total"], money["paid"], money["receivable"]
     await db.incomes.insert_one({"id": new_id(), "date": doc["date"], "category": "Penjualan Ayam",
                                  "amount": paid, "source": "pos", "ref": sid, "created_at": iso_now()})
     if customer:
-        await db.customers.update_one({"id": customer["id"]}, {"$inc": {"total_purchase": total, "receivable": receivable}})
+        await db.customers.update_one({"id": customer["id"]},
+                                      {"$inc": {"total_purchase": total, "receivable": receivable}})
     if receivable > 0:
         # Setiap kekurangan bayar WAJIB punya tagihan, walau pembelinya "Umum".
         # Tanpa ini, piutang hanya tercatat di dokumen penjualan dan tidak pernah
@@ -1135,20 +1182,52 @@ async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner"
         await db.receivables.insert_one({"id": new_id(),
                                          "customer_id": customer["id"] if customer else None,
                                          "customer_name": customer["name"] if customer else "Umum",
-                                         "sale_id": sid, "amount": total, "paid": paid, "remaining": receivable,
-                                         "due_date": None, "status": "belum_lunas", "date": doc["date"],
+                                         "sale_id": sid, "amount": total, "paid": paid,
+                                         "remaining": receivable, "due_date": None,
+                                         "status": "belum_lunas", "date": doc["date"],
                                          "created_at": iso_now()})
     if body.offline_at:
         await add_activity("sale", "Penjualan Offline Tersinkron",
-                           f"{user['name']} menjual {len(items_out)} item (dibuat saat offline)", total, user["name"])
+                           f"{user['name']} menjual {len(items_out)} item (dibuat saat offline)",
+                           total, user["name"])
         await add_notification("offline_sync", "Transaksi Offline Tersinkron",
                                f"Rp {int(total):,} oleh {user['name']}", "info")
     else:
-        await add_activity("sale", "Penjualan Baru", f"{user['name']} menjual {len(items_out)} item", total, user["name"])
+        await add_activity("sale", "Penjualan Baru", f"{user['name']} menjual {len(items_out)} item",
+                           total, user["name"])
     if total >= 1000000:
         await add_notification("big_sale", "Transaksi Besar", f"{user['name']} - Rp {int(total):,}", "success")
     await log_audit(user, "create", "sale", sid, None, {"total": total})
-    await rt_emit(["sales", "dashboard", "stock", "receivables", "incomes", "customers"], {"total": total, "id": sid})
+    await rt_emit(["sales", "dashboard", "stock", "receivables", "incomes", "customers"],
+                  {"total": total, "id": sid})
+
+
+@api.post("/sales")
+async def create_sale(body: SaleBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+    """Buat penjualan. Orkestrator tipis; tiap tahap ada di helper `_sale_*` di atas.
+
+    URUTAN OPERASI SENGAJA DIPERTAHANKAN dari versi sebelumnya:
+    idempotensi -> validasi -> baris item -> hitung uang -> susun dokumen ->
+    POTONG STOK -> simpan penjualan -> efek samping (pemasukan/piutang/aktivitas).
+    Stok dipotong SEBELUM dokumen disimpan supaya penjaga stok yang menolak
+    membatalkan transaksi sebelum ada uang/dokumen tercatat.
+    """
+    txn_id = body.txn_id or new_id()
+    existing = await db.sales.find_one({"txn_id": txn_id})
+    if existing:
+        # Idempoten: transaksi offline yang dikirim ulang TIDAK boleh dobel.
+        return clean(existing)
+    _sale_validate(body)
+    allow_neg = bool(await get_setting("allow_negative_stock", False))
+    customer = await db.customers.find_one({"id": body.customer_id}) if body.customer_id else None
+
+    items_out, products_cache, tot = await _sale_collect_items(body)
+    money = _sale_money(tot, body)
+    doc = _sale_document(body, txn_id, user, customer, items_out, tot, money)
+
+    await _sale_apply_stock(body, items_out, products_cache, doc["id"], user, allow_neg)
+    await db.sales.insert_one(doc)
+    await _sale_record_side_effects(doc, body, user, customer, items_out, money)
     return clean(doc)
 
 
@@ -1436,32 +1515,41 @@ async def run_reconcile(user: dict = Depends(require_roles("owner"))):
     return res
 
 
-# ------------------------- Dashboard -------------------------
-@api.get("/dashboard")
-async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
-    d = today_str()
-    sales_today = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(5000)
-    exp_today = await db.expenses.find({"date": d}).to_list(2000)
-    inc_today = await db.incomes.find({"date": d}).to_list(2000)
-    # SATU rumus untuk Dashboard, Laporan, & Tutup Buku (lihat finance.py).
-    fin = finance.summarize(sales_today, exp_today, inc_today)
-    omzet, hpp, laba, margin = fin["omzet"], fin["hpp"], fin["gross_profit"], fin["margin"]
-    weight, ekor = fin["weight"], fin["ekor"]
-    net_profit = fin["net_profit"]
-    target = await db.targets.find_one({"date": d}) or {}
-    t_omzet = target.get("target_omzet", 0)
-    achievement = round(omzet / t_omzet * 100, 2) if t_omzet else 0
+# --- Dashboard dipecah menjadi bagian-bagian kecil -------------------------
+# Semua helper di bawah MURNI (kecuali `_dashboard_chart` yang perlu database),
+# sehingga angka dashboard bisa diuji tanpa menjalankan seluruh endpoint.
+# Perilaku & pembulatan dipertahankan sama dengan versi sebelumnya.
 
+
+async def _dashboard_chart(days: int = 7) -> List[dict]:
+    """Grafik omzet & laba `days` hari terakhir (termasuk hari ini).
+
+    PERBAIKAN KINERJA: sebelumnya melakukan SATU query per hari (7 round-trip ke
+    MongoDB setiap kali dashboard dibuka, dan dashboard di-polling tiap 8 detik).
+    Sekarang cukup SATU query `$in` lalu dikelompokkan di memori. Hasil angkanya
+    identik.
+    """
+    stamps = [now_jkt() - timedelta(days=i) for i in range(days - 1, -1, -1)]
+    day_keys = [t.strftime("%Y-%m-%d") for t in stamps]
+    rows = await db.sales.find(
+        {"date": {"$in": day_keys}, "status": {"$ne": "batal"}}
+    ).to_list(20000)
+    grouped: dict = {k: [] for k in day_keys}
+    for s in rows:
+        if s.get("date") in grouped:
+            grouped[s["date"]].append(s)
     chart = []
-    for i in range(6, -1, -1):
-        day = (now_jkt() - timedelta(days=i)).strftime("%Y-%m-%d")
-        day_sales = await db.sales.find({"date": day, "status": {"$ne": "batal"}}).to_list(5000)
-        chart.append({"date": day, "label": (now_jkt() - timedelta(days=i)).strftime("%d/%m"),
+    for t, key in zip(stamps, day_keys):
+        day_sales = grouped[key]
+        chart.append({"date": key, "label": t.strftime("%d/%m"),
                       "omzet": round(sum(s["total"] for s in day_sales), 2),
                       "laba": round(sum(s["total"] - s["total_hpp"] for s in day_sales), 2)})
+    return chart
 
-    all_sales = await db.sales.find({"status": {"$ne": "batal"}}).to_list(10000)
-    perf = {}
+
+def _perf_by_category(all_sales: List[dict]) -> List[dict]:
+    """Performa penjualan per kategori produk (omzet, volume, laba, margin)."""
+    perf: dict = {}
     for s in all_sales:
         for it in s["items"]:
             cat = it.get("category", "sampingan")
@@ -1474,44 +1562,80 @@ async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
                 p["ekor"] += it["qty"]
             elif it["unit"] == "pcs":
                 p["pcs"] += it["qty"]
-    products_perf = []
+    out = []
     for cat, p in perf.items():
         laba_p = round(p["penjualan"] - p["hpp"], 2)
-        products_perf.append({"category": cat, "penjualan": round(p["penjualan"], 2),
-                              "weight": round(p["weight"], 2), "ekor": p["ekor"], "pcs": p["pcs"], "laba": laba_p,
-                              "margin": round(laba_p / p["penjualan"] * 100, 2) if p["penjualan"] else 0})
-    products_perf.sort(key=lambda x: x["penjualan"], reverse=True)
+        out.append({"category": cat, "penjualan": round(p["penjualan"], 2),
+                    "weight": round(p["weight"], 2), "ekor": p["ekor"], "pcs": p["pcs"],
+                    "laba": laba_p,
+                    "margin": round(laba_p / p["penjualan"] * 100, 2) if p["penjualan"] else 0})
+    out.sort(key=lambda x: x["penjualan"], reverse=True)
+    return out
+
+
+def _stock_overview(prods: List[dict]):
+    """Nilai stok (kg x HPP) + daftar produk yang stoknya kritis."""
+    critical, stock_value = [], 0
+    for p in prods:
+        stock_kg = float(p.get("stock_kg", 0) or 0)
+        stock_value += stock_kg * float(p.get("hpp_kg", 0) or 0)
+        min_kg = float(p.get("min_stock_kg", 0) or 0)
+        if min_kg > 0 and stock_kg <= min_kg:
+            critical.append({"name": p["name"], "stock_kg": p.get("stock_kg", 0), "min_stock_kg": min_kg})
+    return critical, stock_value
+
+
+def _price_highlights(prods: List[dict]) -> List[dict]:
+    """Harga terkini produk utama (produk sampingan tidak ditampilkan)."""
+    return [{"name": p["name"], "category": p["category"], "price_kg": p.get("price_kg", 0),
+             "buy_price_kg": p.get("buy_price_kg", 0), "hpp_kg": p.get("hpp_kg", 0)}
+            for p in prods if p["category"] != "sampingan"][:8]
+
+
+def _target_progress(target: dict, omzet: float) -> dict:
+    """Blok target harian + persentase pencapaian omzet."""
+    t_omzet = target.get("target_omzet", 0)
+    return {"omzet": t_omzet, "weight": target.get("target_weight", 0),
+            "ekor": target.get("target_ekor", 0), "laba": target.get("target_laba", 0),
+            "achievement": round(omzet / t_omzet * 100, 2) if t_omzet else 0}
+
+
+# ------------------------- Dashboard -------------------------
+@api.get("/dashboard")
+async def dashboard(user: dict = Depends(require_roles("owner", "admin"))):
+    """Ringkasan bisnis hari ini. Orkestrator tipis; hitungan ada di helper di atas."""
+    d = today_str()
+    sales_today = await db.sales.find({"date": d, "status": {"$ne": "batal"}}).to_list(5000)
+    exp_today = await db.expenses.find({"date": d}).to_list(2000)
+    inc_today = await db.incomes.find({"date": d}).to_list(2000)
+    # SATU rumus untuk Dashboard, Laporan, & Tutup Buku (lihat finance.py).
+    fin = finance.summarize(sales_today, exp_today, inc_today)
+    target = await db.targets.find_one({"date": d}) or {}
+
+    chart = await _dashboard_chart(7)
+    all_sales = await db.sales.find({"status": {"$ne": "batal"}}).to_list(10000)
+    products_perf = _perf_by_category(all_sales)
 
     prods = await db.products.find({"active": True}).to_list(1000)
-    critical = []
-    stock_value = 0
-    for p in prods:
-        stock_value += float(p.get("stock_kg", 0) or 0) * float(p.get("hpp_kg", 0) or 0)
-        min_kg = float(p.get("min_stock_kg", 0) or 0)
-        if min_kg > 0 and float(p.get("stock_kg", 0) or 0) <= min_kg:
-            critical.append({"name": p["name"], "stock_kg": p.get("stock_kg", 0), "min_stock_kg": min_kg})
+    critical, stock_value = _stock_overview(prods)
 
     recent = sorted(sales_today, key=lambda s: s["created_at"], reverse=True)[:8]
     activities = await db.activities.find().sort("created_at", -1).to_list(12)
-    prices = [{"name": p["name"], "category": p["category"], "price_kg": p.get("price_kg", 0),
-               "buy_price_kg": p.get("buy_price_kg", 0), "hpp_kg": p.get("hpp_kg", 0)}
-              for p in prods if p["category"] != "sampingan"][:8]
 
-    return {"omzet": round(omzet, 2), "hpp": round(hpp, 2), "laba": laba, "margin": margin,
-            "weight": round(weight, 2), "ekor": ekor, "txn_count": len(sales_today),
+    return {"omzet": round(fin["omzet"], 2), "hpp": round(fin["hpp"], 2),
+            "laba": fin["gross_profit"], "margin": fin["margin"],
+            "weight": round(fin["weight"], 2), "ekor": fin["ekor"], "txn_count": len(sales_today),
             # "expense" = biaya operasional saja (beli ayam sudah masuk HPP, tidak dikurangi 2x)
             "expense": fin["opex"], "opex": fin["opex"], "expense_total": fin["expense_total"],
-            "net_profit": net_profit, "net_margin": fin["net_margin"],
+            "net_profit": fin["net_profit"], "net_margin": fin["net_margin"],
             # arus kas: di sinilah uang beli ayam & pelunasan hutang ikut dihitung
             "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
             "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
             "piutang_baru": fin["piutang_baru"], "kas_dari_penjualan": fin["kas_dari_penjualan"],
-            "target": {"omzet": t_omzet, "weight": target.get("target_weight", 0),
-                       "ekor": target.get("target_ekor", 0), "laba": target.get("target_laba", 0),
-                       "achievement": achievement},
+            "target": _target_progress(target, fin["omzet"]),
             "chart": chart, "products_perf": products_perf, "critical_stock": critical,
             "stock_value": round(stock_value, 2), "recent_sales": [clean(r) for r in recent],
-            "activities": [clean(a) for a in activities], "prices": prices}
+            "activities": [clean(a) for a in activities], "prices": _price_highlights(prods)}
 
 
 @api.get("/dashboard/monthly")

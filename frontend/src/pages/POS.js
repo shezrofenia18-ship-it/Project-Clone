@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { useOffline } from "@/context/OfflineContext";
+import { devWarn } from "@/lib/log";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
 import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square } from "lucide-react";
@@ -80,7 +81,10 @@ function readCardSize() {
   try {
     const v = localStorage.getItem(CARD_SIZE_KEY);
     return CARD_SIZES[v] ? v : "sedang";
-  } catch {
+  } catch (err) {
+    // Mode privat/penyimpanan diblokir: bukan kondisi error bagi kasir, cukup
+    // pakai ukuran bawaan. Tetap dicatat di konsol saat pengembangan.
+    devWarn("pos:readCardSize", err);
     return "sedang";
   }
 }
@@ -135,7 +139,13 @@ export default function POS() {
   const { enqueue, online, pending } = useOffline();
 
   useEffect(() => {
-    try { localStorage.setItem(CARD_SIZE_KEY, cardSize); } catch { /* mode privat: abaikan */ }
+    try {
+      localStorage.setItem(CARD_SIZE_KEY, cardSize);
+    } catch (err) {
+      // Kuota penuh / mode privat: preferensi tampilan gagal disimpan. TIDAK
+      // ditampilkan ke kasir (bukan gangguan transaksi), hanya dicatat saat dev.
+      devWarn("pos:saveCardSize", err);
+    }
   }, [cardSize]);
 
   useEffect(() => {
