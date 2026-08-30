@@ -35,6 +35,7 @@ import whatsapp
 import pdf_reports
 import finance
 import reconcile
+import maintenance
 from finance import MODAL_CATEGORIES, OPEX_EXCLUDE
 
 logging.basicConfig(level=logging.INFO)
@@ -2413,6 +2414,12 @@ async def startup():
         await reconcile.repair_on_startup(db)
     except Exception as e:
         logger.error(f"Rekonsiliasi data gagal: {e}")
+    # Dokumen bertanggal MASA DEPAN (mis. jam demo 20:00 padahal sekarang 10:50)
+    # membuat transaksi asli kasir tertimbun di Riwayat Transaksi. Idempoten.
+    try:
+        await maintenance.repair_future_timestamps(db)
+    except Exception as e:
+        logger.error(f"Perbaikan waktu masa depan gagal: {e}")
     # Nomor penerima rekap WhatsApp default (bisa diubah owner di Pengaturan).
     if await db.settings.find_one({"key": "wa_recipients"}) is None:
         await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": [

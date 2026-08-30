@@ -173,6 +173,26 @@ def _sale_items(prod_ids: dict) -> dict:
     return {"items": items, "subtotal": subtotal, "hpp": total_hpp, "weight": tw, "ekor": te}
 
 
+def _clamp_past(dt):
+    """Pastikan waktu demo TIDAK PERNAH melewati "sekarang".
+
+    Bug yang pernah terjadi: transaksi demo hari ini diberi jam acak 7-20 tanpa
+    melihat jam sekarang, sehingga ada dokumen bertanggal MASA DEPAN. Akibatnya
+    penjualan ASLI kasir tertimbun di bawah baris demo pada Riwayat Transaksi
+    (yang urut dari terbaru) dan terlihat seolah hilang.
+    """
+    now = _now()
+    if dt <= now:
+        return dt
+    # Tarik ke dalam jam operasional yang sudah lewat pada hari itu.
+    earliest = dt.replace(hour=7, minute=0, second=0, microsecond=0)
+    latest = now - timedelta(minutes=1)
+    if latest <= earliest:
+        return latest
+    span = int((latest - earliest).total_seconds())
+    return earliest + timedelta(seconds=random.randint(0, span))
+
+
 def _sale_payment(cust_docs: list, subtotal: float, day_offset: int) -> dict:
     """Metode bayar, uang diterima, pelanggan, kasir, dan jam transaksi."""
     method = random.choice(METHODS)
@@ -180,8 +200,8 @@ def _sale_payment(cust_docs: list, subtotal: float, day_offset: int) -> dict:
     paid = total if method != "piutang" else round(total * 0.6, 2)
     cust = random.choice(cust_docs) if random.random() > 0.4 else None
     cashier = random.choice(CASHIERS)
-    created = (_now() - timedelta(days=day_offset)).replace(
-        hour=random.randint(7, 20), minute=random.randint(0, 59)).isoformat()
+    created = _clamp_past((_now() - timedelta(days=day_offset)).replace(
+        hour=random.randint(7, 20), minute=random.randint(0, 59))).isoformat()
     return {"method": method, "total": total, "paid": paid,
             "receivable": round(total - paid, 2), "cust": cust,
             "cashier": cashier, "created": created}

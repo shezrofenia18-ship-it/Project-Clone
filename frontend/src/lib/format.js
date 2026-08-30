@@ -77,3 +77,21 @@ export const PAYMENT_METHODS = ["cash", "transfer", "qris", "debit", "ewallet", 
 export const PAYMENT_LABELS = {
   cash: "Tunai", transfer: "Transfer", qris: "QRIS", debit: "Debit", ewallet: "E-Wallet", piutang: "Piutang",
 };
+
+// Tanggal "hari ini" menurut zona WIB (Asia/Jakarta), BUKAN zona perangkat.
+// Backend menyimpan field `date` dalam WIB, jadi filter tanggal di UI harus
+// memakai acuan yang sama agar transaksi hari ini tidak terlihat hilang.
+export function todayWib() {
+  const now = new Date();
+  const wib = new Date(now.getTime() + (now.getTimezoneOffset() + 7 * 60) * 60000);
+  return wib.toISOString().slice(0, 10);
+}
+
+// Transaksi dianggap "baru" bila terjadi dalam 15 menit terakhir. Dipakai untuk
+// menandai transaksi yang baru saja dibuat kasir agar mudah ditemukan.
+export function isRecent(iso, minutes = 15) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t < minutes * 60000 && Date.now() - t > -60000;
+}
