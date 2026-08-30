@@ -1,0 +1,12 @@
+# Perintah start untuk hosting yang membaca Procfile (Railway, Render, Heroku,
+# Dokku, Fly.io). Emergent TIDAK memakai file ini — di Emergent backend
+# dijalankan oleh supervisor pada 0.0.0.0:8001, jadi file ini aman ada di sini.
+#
+# $PORT WAJIB dipakai: hosting menentukan sendiri nomor portnya. Menulis angka
+# tetap (mis. 8001) membuat hosting menganggap aplikasi gagal start.
+#
+# --workers 1 disengaja: aplikasi ini punya penjadwal tutup buku otomatis dan
+# manajer WebSocket yang menyimpan state di dalam memori proses. Kalau workernya
+# lebih dari satu, rekap tutup buku bisa terkirim BERKALI-KALI (satu per worker)
+# dan siaran realtime hanya sampai ke sebagian perangkat.
+web: uvicorn server:app --host 0.0.0.0 --port $PORT --workers 1

@@ -128,22 +128,81 @@ mongodump --uri="$MONGO_URL" --db=test_database \
 
 ---
 
-## Langkah 4 — Ganti penyimpanan foto (WAJIB)
+## Langkah 4 — Nyalakan penyimpanan foto (cukup isi env, TANPA ubah kode)
 
-Saat ini upload foto memakai **Object Storage milik Emergent**, yang hanya hidup
-di dalam Emergent. Di luar Emergent, `POST /api/upload` akan gagal.
+Penyimpanan foto sudah dibuat **portabel**. Backend memilih penyedia sendiri
+saat start, jadi Anda **tidak perlu menyentuh kode** sama sekali.
 
-Yang terpengaruh:
-- Foto produk (folder `products`)
-- Foto bukti pengeluaran (folder `proofs`)
+Urutan pemilihan otomatis (`STORAGE_BACKEND="auto"`, bawaan):
 
-Kode yang perlu diubah: fungsi `init_storage()`, `put_object()`, dan `get_object()`
-di `backend/server.py` (sekitar baris 48–90).
+| Kondisi env | Penyedia terpilih |
+|---|---|
+| `S3_BUCKET` + `S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` terisi | **s3** (Cloudflare R2 / AWS S3) |
+| hanya `EMERGENT_LLM_KEY` terisi | **emergent** (khusus di dalam Emergent) |
+| tidak ada keduanya | **local** (disk server) |
 
-> **Catatan:** `EMERGENT_LLM_KEY` di file env **bukan** kunci AI.
-> Aplikasi ini tidak punya fitur AI sama sekali (nol library AI diimpor) —
-> kunci itu semata-mata dipakai untuk masuk ke object storage Emergent.
-> Jadi Anda **tidak perlu** membeli API key OpenAI/Anthropic/Google.
+Bisa juga dipaksa manual: `STORAGE_BACKEND=s3` / `emergent` / `local`.
+
+### Menyalakan Cloudflare R2
+
+1. Dashboard Cloudflare → **R2** → **Create bucket** (mis. `berkah-ayam-mili`)
+2. **Manage R2 API Tokens** → buat token dengan izin **Object Read & Write**
+3. Isi 4 variabel ini di hosting backend Anda:
+   ```
+   S3_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+   S3_BUCKET=berkah-ayam-mili
+   S3_ACCESS_KEY_ID=<dari langkah 2>
+   S3_SECRET_ACCESS_KEY=<dari langkah 2>
+   ```
+4. Restart backend. Selesai.
+
+> `S3_REGION` tidak perlu diisi — kode mendeteksi endpoint R2 dan otomatis
+> memakai `auto` (R2 mewajibkan nilai itu).
+
+### Cara memastikan penyedia mana yang aktif
+
+Saat start, backend mencetak barisnya di log:
+
+```
+INFO:berkah:Penyimpanan berkas siap -> s3 (bucket=berkah-ayam-mili, endpoint=https://xxx.r2.cloudflarestorage.com, region=auto)
+```
+
+Kalau kredensial salah, backend **tetap hidup** (kasir masih bisa jualan) tapi
+log akan menulis `Penyimpanan berkas GAGAL disiapkan` — itu petunjuk paling cepat.
+
+> ⚠️ Jangan pakai `local` untuk toko sungguhan di Railway/Render. Disk di sana
+> bersifat sementara: semua foto **hilang** setiap kali aplikasi redeploy.
+
+> **Catatan:** `EMERGENT_LLM_KEY` **bukan** kunci AI. Aplikasi ini tidak punya
+> fitur AI sama sekali (nol library AI diimpor) — kunci itu semata-mata tiket
+> masuk ke object storage Emergent. Anda **tidak perlu** membeli API key
+> OpenAI/Anthropic/Google.
+
+### Memindahkan foto lama
+
+Foto yang sudah ada tersimpan di storage Emergent dan tidak ikut pindah otomatis.
+Jumlahnya biasanya sedikit (foto produk & bukti pengeluaran). Cara termudah:
+unggah ulang lewat menu **Produk & Harga** setelah R2 aktif.
+
+---
+
+## Berkas pendukung deploy yang sudah disiapkan
+
+| Berkas | Fungsi |
+|---|---|
+| `backend/.env.example` | Template semua env backend, bertanda [GANTI]/[SALIN]/[BARU] |
+| `frontend/.env.example` | Template env frontend |
+| `backend/Procfile` | Perintah start untuk Railway/Render/Heroku (memakai `$PORT`) |
+| `backend/runtime.txt` | Menetapkan Python 3.11 |
+| `backend/storage.py` | Lapisan penyimpanan portabel (s3/emergent/local) |
+| `frontend/vercel.json` | Build config + rewrite SPA untuk Vercel |
+| `frontend/yarn.lock` | Mengunci versi paket agar build di hosting sama persis |
+
+> **Penting soal `--workers`:** `Procfile` sengaja memakai `--workers 1`.
+> Aplikasi ini punya penjadwal tutup buku dan manajer WebSocket yang menyimpan
+> state di memori proses. Kalau workernya lebih dari satu, **rekap tutup buku
+> bisa terkirim berkali-kali** dan siaran realtime hanya sampai ke sebagian
+> perangkat.
 
 ---
 
@@ -157,7 +216,7 @@ di `backend/server.py` (sekitar baris 48–90).
 - [ ] Transaksi POS berhasil sampai struk muncul
 - [ ] Unduh PDF laporan berhasil (penjualan, laba rugi, stok)
 - [ ] Sinkronisasi realtime jalan (buka 2 tab, ubah stok di satu tab)
-- [ ] Upload foto produk berhasil (setelah Langkah 4)
+- [ ] Upload foto produk berhasil (lihat log: penyedia yang aktif = `s3`)
 - [ ] Rekap WhatsApp terkirim
 
 ---
@@ -173,4 +232,6 @@ di `backend/server.py` (sekitar baris 48–90).
 | Login selalu gagal walau password benar | `JWT_SECRET` berubah setelah token lama dibuat. Hapus data situs di browser lalu login ulang. |
 | Tidak bisa konek MongoDB Atlas | IP belum di-whitelist (`0.0.0.0/0`), atau password belum di-URL-encode. |
 | **Tutup buku otomatis tidak jalan** | Backend di-deploy ke layanan *serverless* (Vercel/Netlify). Pindahkan ke Railway/Render. |
-| Upload foto error | Langkah 4 belum dikerjakan. |
+| **Rekap WhatsApp terkirim berkali-kali** | Backend jalan dengan lebih dari 1 worker. Pastikan `--workers 1` seperti di `Procfile`. |
+| Upload foto error | Cek log startup: penyedia yang aktif apa? Kalau `emergent` padahal di luar Emergent, berarti env `S3_*` belum terisi. |
+| Foto hilang setelah redeploy | Penyedia yang aktif `local`. Isi env `S3_*` supaya berpindah ke R2/S3. |

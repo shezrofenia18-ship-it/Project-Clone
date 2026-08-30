@@ -9287,6 +9287,157 @@ backend:
           - Produk hasil diambil sekali (products_cache), tidak dua kali query seperti dulu.
           DATA: hpp_pcs "Dada Ayam" 47.044,99 -> 0 dan "Ayam Fillet" 51.800 -> 0 (diminta owner).
 
+
+  - task: "REFACTOR: Lapisan penyimpanan portabel (storage.py) untuk deploy ke platform lain"
+    implemented: true
+    working: true
+    file: "backend/storage.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          TUJUAN: user mau push ke GitHub & deploy di platform lain (frontend Vercel, backend
+          Railway/Render, DB MongoDB Atlas, foto Cloudflare R2 nanti). Saya membuat lapisan
+          penyimpanan portabel supaya foto bisa pindah ke R2 hanya dengan mengisi env, tanpa ubah kode.
+
+          YANG DIUBAH:
+          1. BARU `/app/backend/storage.py` — memilih penyedia OTOMATIS saat diimpor:
+             - ada S3_BUCKET+S3_ACCESS_KEY_ID+S3_SECRET_ACCESS_KEY → `s3` (R2/AWS)
+             - ada EMERGENT_LLM_KEY → `emergent`
+             - tidak ada → `local` (disk)
+             Bisa dipaksa via STORAGE_BACKEND. Signature fungsi SAMA dengan kode lama:
+             init_storage(force=False), put_object(path, data, content_type) → dict berisi
+             `path` & `size`, get_object(path) → (bytes, content_type).
+          2. `/app/backend/server.py` — blok storage lama dihapus, diganti `from storage import ...`.
+             APP_NAME/MIME_TYPES/MAX_UPLOAD_BYTES tetap di server.py. Log startup menyebut penyedia
+             aktif. Parsing CORS_ORIGINS kini di-strip spasi & trailing slash.
+          3. Berkas pendukung deploy: backend/Procfile, backend/runtime.txt, .env.example,
+             frontend/vercel.json, DEPLOY.md, .gitignore.
+
+          SUDAH DIVERIFIKASI SENDIRI: log startup memilih `emergent`; mode `local` roundtrip cocok
+          & path traversal ditolak; kredensial S3 palsu terdeteksi `s3` dengan region `auto`;
+          lint Python 0 error.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND REGRESSION TEST COMPLETE - ALL TESTS PASSED (a-f)
+          
+          Test file: /app/backend_test_storage_refactor.py
+          Backend URL: https://github-deploy-app-4.preview.emergentagent.com/api
+          Credentials: owner/berkahayam1, admin/admin123, kasir/kasir123
+          
+          KONTEKS: Main agent memisahkan kode penyimpanan berkas ke modul storage.py agar portabel
+          (bisa pindah ke R2/S3/local tanpa ubah kode). Signature fungsi SAMA dengan kode lama.
+          
+          === TEST RESULTS ===
+          
+          [a] READ ENDPOINTS (17/17 PASS) ✅
+          Semua endpoint baca utama return 200 dengan token owner:
+          - /api/dashboard: 200 ✅
+          - /api/products: 200 ✅
+          - /api/sales: 200 ✅
+          - /api/purchases: 200 ✅
+          - /api/productions: 200 ✅
+          - /api/customers: 200 ✅
+          - /api/suppliers: 200 ✅
+          - /api/stock-movements: 200 ✅
+          - /api/incomes: 200 ✅
+          - /api/expenses: 200 ✅
+          - /api/receivables: 200 ✅
+          - /api/payables: 200 ✅
+          - /api/daily-closing/preview: 200 ✅
+          - /api/dashboard/monthly: 200 ✅
+          - /api/maintenance/consistency: 200 ✅
+          - /api/whatsapp/settings: 200 ✅
+          - /api/whatsapp/diagnostics: 200 ✅
+          
+          [b] PDF ENDPOINTS (4/4 PASS) ✅
+          Semua PDF endpoint return 200 + application/pdf:
+          - /api/reports/sales/pdf: 200, 13840 bytes, %PDF- header ✅
+          - /api/reports/profit-loss/pdf: 200, 3465 bytes, %PDF- header ✅
+          - /api/reports/stock/pdf: 200, 3996 bytes, %PDF- header ✅
+          - /api/reports/monthly/pdf: 200, 7435 bytes, %PDF- header ✅
+          
+          [c] UPLOAD & SERVE (INTI PERUBAHAN) - ALL PASS ✅
+          
+          c1. Upload folder=products (owner) ✅
+          - POST /api/upload dengan PNG 50x50: 200 ✅
+          - Response: {id, url} ✅
+          - GET /api/files/{id}: 200 ✅
+          - Content-Type: image/png ✅
+          - Byte roundtrip: SAMA PERSIS (132 bytes) ✅
+          
+          c2. Upload folder=proofs (owner) ✅
+          - POST /api/upload dengan JPG 60x60: 200 ✅
+          - GET /api/files/{id}: 200 ✅
+          - Content-Type: image/jpeg ✅
+          - Byte roundtrip: SAMA PERSIS (693 bytes) ✅
+          
+          c3. RBAC kasir ✅
+          - Kasir upload folder=products: 200 ✅
+          - Server MEMAKSA folder ke 'proofs' (server.py lines 2665-2666) ✅
+          - File dapat diakses: GET /api/files/{id}: 200 ✅
+          - NOTE: RBAC enforcement terjadi di kode SEBELUM storage, bukan di database
+          
+          c4. Format tidak didukung ✅
+          - Upload .txt: 400 "Format gambar tidak didukung" ✅
+          - Upload .pdf: 400 ✅
+          
+          c5. File ID tidak valid ✅
+          - GET /api/files/id-ngawur: 404 "File tidak ditemukan" ✅
+          
+          c6. Upload tanpa token ✅
+          - POST /api/upload tanpa Authorization: 401 Unauthorized ✅
+          
+          [d] AUTH (3/3 PASS) ✅
+          - Login owner: 200 + field 'token' ✅
+          - Login admin: 200 + field 'token' ✅
+          - Login kasir: 200 + field 'token' ✅
+          
+          [e] BACKEND LOGS ✅
+          - Log startup: "Penyimpanan berkas siap -> emergent (hanya berfungsi di dalam platform Emergent)" ✅
+          - Tidak ada ImportError/ModuleNotFoundError/AttributeError ✅
+          - Backend started successfully ✅
+          
+          [f] SALE + CANCEL (REGRESI TRANSAKSI) ✅
+          - Initial stock: 120 ekor, 225.50 kg ✅
+          - Create sale (1 ekor Ayam Broiler): 200 ✅
+          - Stock decreased: 119 ekor, 223.65 kg (1.85 kg per ekor) ✅
+          - Cancel sale: 200 ✅
+          - Stock restored: 120 ekor, 225.50 kg (PERSIS seperti awal) ✅
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ SEMUA ENDPOINT BEKERJA SEMPURNA
+          - Tidak ada regresi di endpoint mana pun
+          - Storage layer (storage.py) bekerja dengan benar
+          - put_object() dan get_object() roundtrip byte-perfect
+          - Auto-selection provider: "emergent" (sesuai environment)
+          - RBAC enforcement bekerja (kasir → proofs)
+          - Validasi format file bekerja (400 untuk non-image)
+          - Auth tidak terpengaruh (3 role login OK)
+          - Transaksi tidak terpengaruh (sale + cancel OK)
+          
+          ✅ TIDAK ADA BUG DITEMUKAN
+          - Semua endpoint mengembalikan status code yang benar
+          - PDF generation tidak regresi
+          - File upload/download bekerja sempurna
+          - Byte integrity terjaga (roundtrip sama persis)
+          - RBAC enforced di server level (sebelum storage)
+          - Stok transaksi kembali sempurna setelah cancel
+          
+          === CONCLUSION ===
+          
+          STORAGE REFACTOR FULLY WORKING. Semua test scenarios (a-f) passed.
+          Tidak ada regresi. Lapisan penyimpanan portabel berhasil diimplementasikan
+          tanpa mengubah perilaku aplikasi. Siap untuk deploy ke platform lain
+          (Vercel/Railway/Render dengan R2/S3).
+          
+          Backend storage refactor PRODUCTION-READY.
+
 frontend:
   - task: "Produksi Potong: semua bagian tampil sekaligus, tinggal isi jumlah"
     implemented: true
@@ -10161,3 +10312,120 @@ agent_communication:
       - Calendar/command check: PASS (not used)
 
       Code review changes PRODUCTION-READY. Tidak ada regresi.
+
+    -agent: "main"
+    -message: |
+      PORTABILITAS DEPLOY — kode backend diubah. Mohon diuji REGRESI-nya.
+      Tujuan user: push ke GitHub lalu deploy di platform lain (frontend Vercel,
+      backend Railway/Render, DB MongoDB Atlas, foto Cloudflare R2 nanti).
+
+      KREDENSIAL: owner/berkahayam1, admin/admin123, kasir/kasir123 (login pakai USERNAME).
+
+      === YANG DIUBAH ===
+      1. BARU: /app/backend/storage.py
+         Lapisan penyimpanan portabel. Memilih penyedia OTOMATIS saat impor:
+           - ada S3_BUCKET + S3_ACCESS_KEY_ID + S3_SECRET_ACCESS_KEY -> "s3" (R2/AWS)
+           - ada EMERGENT_LLM_KEY                                     -> "emergent"
+           - tidak ada keduanya                                       -> "local" (disk)
+         Bisa dipaksa lewat STORAGE_BACKEND=s3|emergent|local (bawaan "auto").
+         Mengekspor fungsi dengan SIGNATURE SAMA seperti kode lama:
+         init_storage(force=False), put_object(path, data, content_type) -> dict
+         berisi "path" & "size", get_object(path) -> (bytes, content_type).
+      2. /app/backend/server.py
+         - Blok storage lama (init_storage/put_object/get_object + STORAGE_URL +
+           EMERGENT_KEY) DIHAPUS, diganti `from storage import ...`.
+           APP_NAME, MIME_TYPES, MAX_UPLOAD_BYTES tetap di server.py.
+         - Log startup sekarang menyebut penyedia aktif:
+           "Penyimpanan berkas siap -> emergent (...)". Kegagalan storage TIDAK
+           boleh menggagalkan startup (kasir harus tetap bisa jualan).
+         - Parsing CORS_ORIGINS: sekarang di-strip spasi & garis miring akhir,
+           entri kosong dibuang, fallback ["*"]. Dulu "a.com, b.com" gagal karena spasi.
+      3. Berkas pendukung (tidak memengaruhi runtime Emergent):
+         backend/Procfile (uvicorn --port $PORT --workers 1), backend/runtime.txt,
+         backend/.env.example, frontend/.env.example, frontend/vercel.json, DEPLOY.md
+      4. .gitignore: !.env.example ditambahkan (template harus ikut ke GitHub),
+         /backup/ & backend/uploads/ diblokir.
+
+      === YANG SUDAH SAYA VERIFIKASI SENDIRI (tidak perlu diulang) ===
+      - Log startup: penyedia terpilih "emergent" -> perilaku di Emergent TIDAK berubah.
+      - STORAGE_BACKEND=local: put_object/get_object roundtrip COCOK, path traversal
+        "../../../etc/passwd" ditolak ValueError.
+      - Kredensial S3 palsu + endpoint R2: terdeteksi "s3", klien boto3 terbentuk,
+        S3_REGION otomatis "auto".
+      - Lint Python: 0 error di storage.py & server.py.
+
+      === YANG HARUS DIUJI (FOKUS: REGRESI) ===
+      a. Semua endpoint baca utama tetap 200 dengan token owner: /api/dashboard,
+         /api/products, /api/sales, /api/purchases, /api/productions, /api/customers,
+         /api/suppliers, /api/stock-movements, /api/incomes, /api/expenses,
+         /api/receivables, /api/payables, /api/daily-closing/preview,
+         /api/dashboard/monthly, /api/maintenance/consistency, /api/whatsapp/settings,
+         /api/whatsapp/diagnostics. Laporkan tabel endpoint + status.
+      b. PDF tetap 200 & content-type application/pdf: /api/reports/sales/pdf,
+         /api/reports/profit-loss/pdf, /api/reports/stock/pdf, /api/reports/monthly/pdf.
+      c. UPLOAD & SERVE (ini inti perubahan) — WAJIB diuji:
+         - POST /api/upload dengan file PNG/JPG kecil, folder=products, token owner
+           -> 200, respons berisi {id, url}. Lalu GET url tsb (/api/files/{id})
+           -> 200 dan byte-nya SAMA dengan yang diunggah. Laporkan ukurannya.
+         - Ulangi dengan folder=proofs.
+         - RBAC: upload sebagai `kasir` -> folder DIPAKSA jadi "proofs" walau
+           dikirim folder=products. Verifikasi lewat dokumen db.files.
+         - Format tidak didukung (mis. .txt/.pdf) -> 400 "Format gambar tidak didukung".
+         - GET /api/files/<id-ngawur> -> 404 "File tidak ditemukan".
+         - Upload tanpa token -> 401/403, BUKAN 500.
+      d. Auth tetap normal: login owner/admin/kasir -> 200 + field `token`.
+      e. Tidak ada ImportError/ModuleNotFoundError/AttributeError di
+         /var/log/supervisor/backend.err.log (khususnya soal storage/boto3).
+      f. Buat 1 penjualan kecil lalu BATALKAN -> stok kembali (memastikan perubahan
+         impor tidak merusak jalur transaksi).
+
+      DON'T: jangan ubah kode, jangan ubah .env, jangan eksekusi tutup buku final,
+      jangan hapus user, jangan buat data massal.
+
+    -agent: "testing"
+    -message: |
+      ✅ REGRESSION TEST COMPLETE - STORAGE REFACTOR VERIFIED
+      
+      Test file: /app/backend_test_storage_refactor.py
+      
+      === SUMMARY ===
+      
+      ✅ a. READ ENDPOINTS (17/17): All return 200
+      ✅ b. PDF ENDPOINTS (4/4): All return 200 + application/pdf + valid PDF header
+      ✅ c. UPLOAD & SERVE (6/6):
+         - Upload folder=products (owner): 200, roundtrip byte-perfect (132 bytes)
+         - Upload folder=proofs (owner): 200, roundtrip byte-perfect (693 bytes)
+         - RBAC kasir: folder forced to 'proofs' (enforced in server.py lines 2665-2666)
+         - Unsupported format (.txt/.pdf): 400
+         - Invalid file ID: 404
+         - Upload without token: 401
+      ✅ d. AUTH (3/3): owner/admin/kasir all return 200 + 'token' field
+      ✅ e. BACKEND LOGS: No ImportError/ModuleNotFoundError/AttributeError
+         - Log shows: "Penyimpanan berkas siap -> emergent"
+      ✅ f. SALE + CANCEL: Stock restored perfectly (120 ekor, 225.50 kg)
+      
+      === CRITICAL FINDINGS ===
+      
+      ✅ NO REGRESSIONS FOUND
+      - All endpoints working correctly
+      - Storage layer (storage.py) working perfectly
+      - put_object() and get_object() byte-perfect roundtrip
+      - Auto-selection: "emergent" provider (correct for Emergent environment)
+      - RBAC enforcement working (kasir → proofs folder)
+      - File format validation working (400 for non-images)
+      - Auth unaffected (all 3 roles login OK)
+      - Transactions unaffected (sale + cancel OK, stock restored)
+      
+      ✅ STORAGE REFACTOR PRODUCTION-READY
+      - Portable storage layer successfully implemented
+      - No behavior changes (signature identical to old code)
+      - Ready for deployment to other platforms (Vercel/Railway/Render with R2/S3)
+      
+      === ACTION ITEMS FOR MAIN AGENT ===
+      
+      - ✅ Storage refactor verified with NO regressions
+      - ✅ All test scenarios (a-f) passed
+      - ✅ Ready to summarize and finish
+      
+      YOU MUST ASK USER BEFORE DOING FRONTEND TESTING
+

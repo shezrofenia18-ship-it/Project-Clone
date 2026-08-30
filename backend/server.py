@@ -46,46 +46,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("berkah")
 
 # ------------------------- object storage -------------------------
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+# Implementasi dipindah ke storage.py agar PORTABEL: penyimpanan foto bisa
+# berganti antara Cloudflare R2 / AWS S3 / Emergent / disk lokal hanya dengan
+# mengubah environment variable, TANPA mengubah kode di sini.
+from storage import init_storage, put_object, get_object  # noqa: E402
+import storage as storage_mod  # noqa: E402
+
 APP_NAME = "berkah-ayam-mili"
 MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
               "gif": "image/gif", "webp": "image/webp"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-_storage_key = None
-
-
-def init_storage(force: bool = False):
-    global _storage_key
-    if _storage_key and not force:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
-
-
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key, "Content-Type": content_type},
-                        data=data, timeout=120)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(f"{STORAGE_URL}/objects/{path}",
-                            headers={"X-Storage-Key": key, "Content-Type": content_type},
-                            data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_object(path: str):
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 app = FastAPI(title="Berkah Ayam Mili API")
 api = APIRouter(prefix="/api")
@@ -2777,10 +2747,17 @@ async def _public_base_url() -> str:
         logger.warning("Gagal membaca URL publik dari frontend/.env: %s", e)
     return _public_base["url"]
 
+# CORS_ORIGINS ditulis sebagai daftar dipisah koma di environment hosting.
+# Spasi & koma berlebih SENGAJA dibersihkan, karena panel Railway/Render/Vercel
+# sering membuat orang menulis "https://a.com, https://b.com" — spasi itu dulu
+# membuat origin tidak pernah cocok dan semua permintaan diblokir CORS.
+_cors_raw = (os.environ.get("CORS_ORIGINS") or "*").strip()
+_cors_origins = [o.strip().rstrip("/") for o in _cors_raw.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -2829,9 +2806,12 @@ async def startup():
                 str(await get_setting("wa_auto_time", "21:00"))[:5])
     try:
         init_storage()
-        logger.info("Object storage initialized")
+        logger.info("Penyimpanan berkas siap -> %s", storage_mod.describe())
     except Exception as e:
-        logger.error(f"Storage init failed: {e}")
+        # Penyimpanan bermasalah TIDAK boleh menggagalkan startup: kasir harus
+        # tetap bisa melayani penjualan walau upload foto sedang mati.
+        logger.error("Penyimpanan berkas GAGAL disiapkan (%s): %s",
+                     storage_mod.active_backend(), e)
     logger.info("Berkah Ayam Mili API started")
 
 

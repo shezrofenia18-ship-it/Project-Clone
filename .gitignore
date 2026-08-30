@@ -100,3 +100,6 @@ frontend/node_modules/.cache/default-development/5.pack
 # Backup database (berisi data keuangan & hash password) - JANGAN masuk GitHub.
 # Unduh lewat editor/Download Code, bukan lewat repo publik.
 /backup/
+
+# Foto yang diunggah saat memakai penyimpanan "local" (mode ngoprek di laptop).
+backend/uploads/
