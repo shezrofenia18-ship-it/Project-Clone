@@ -8,7 +8,6 @@ import POS from "@/pages/POS";
 import Products from "@/pages/Products";
 import Stock from "@/pages/Stock";
 import Purchases from "@/pages/Purchases";
-import Slaughter from "@/pages/Slaughter";
 import Production from "@/pages/Production";
 import Customers from "@/pages/Customers";
 import Suppliers from "@/pages/Suppliers";
@@ -74,7 +73,6 @@ function App() {
           <Route path="/produk" element={<Protected roles={R_OWNER_ADMIN}><Products /></Protected>} />
           <Route path="/stok" element={<Protected roles={R_OPS}><Stock /></Protected>} />
           <Route path="/pembelian" element={<Protected roles={R_OWNER_ADMIN}><Purchases /></Protected>} />
-          <Route path="/pemotongan" element={<Protected roles={R_OPS}><Slaughter /></Protected>} />
           <Route path="/produksi" element={<Protected roles={R_OPS}><Production /></Protected>} />
           <Route path="/pelanggan" element={<Protected roles={R_POS}><Customers /></Protected>} />
           <Route path="/supplier" element={<Protected roles={R_OWNER_ADMIN}><Suppliers /></Protected>} />

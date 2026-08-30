@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, createContext, useContext } from "react";
 import api, { apiError } from "@/lib/api";
 import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { Card } from "@/components/ui/card";
@@ -21,7 +21,7 @@ import { useOffline } from "@/context/OfflineContext";
 import { devWarn } from "@/lib/log";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square, Hand } from "lucide-react";
 
 // Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
 // ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
@@ -113,6 +113,51 @@ function CardSizePicker({ value, onChange }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// MODE SENTUH (tablet kasir)
+// Kasir yang memakai tablet butuh area sentuh jauh lebih besar daripada
+// pengguna mouse: keypad, tombol bayar, filter kategori, dan tombol hapus item.
+// Mode ini DIMATIKAN secara bawaan supaya tampilan di HP & komputer TIDAK
+// berubah, dan disimpan PER PERANGKAT di localStorage — jadi tablet di meja
+// kasir cukup diatur sekali saja.
+// Pemakaian: `const touch = useTouch();` lalu `tcls(touch, "kelas-besar", "kelas-normal")`.
+// ---------------------------------------------------------------------------
+const TOUCH_KEY = "bam_pos_touch";
+const TouchCtx = createContext(false);
+const useTouch = () => useContext(TouchCtx);
+// Pemilih kelas Tailwind: dipisah jadi fungsi agar JSX tidak penuh ternary.
+const tcls = (touch, big, normal) => (touch ? big : normal);
+
+function readTouch() {
+  try {
+    return localStorage.getItem(TOUCH_KEY) === "1";
+  } catch (err) {
+    // Mode privat / penyimpanan diblokir: bukan gangguan transaksi, cukup
+    // pakai bawaan (mati). Dicatat hanya saat pengembangan.
+    devWarn("pos:readTouch", err);
+    return false;
+  }
+}
+
+function TouchToggle({ value, onChange }) {
+  return (
+    <button
+      type="button" data-testid="pos-touch-toggle" aria-pressed={value}
+      title={value ? "Mode sentuh AKTIF — tombol diperbesar untuk tablet" : "Aktifkan mode sentuh (tablet)"}
+      aria-label="Mode sentuh untuk tablet"
+      onClick={() => onChange(!value)}
+      className={`flex items-center gap-1.5 shrink-0 rounded-full border font-semibold transition-colors ${
+        value
+          ? "bg-primary text-primary-foreground border-primary"
+          : "bg-card text-muted-foreground border-border hover:bg-accent"
+      } ${value ? "h-11 px-4 text-sm" : "h-8 px-3 text-[11px]"}`}
+    >
+      <Hand className={value ? "w-5 h-5" : "w-3.5 h-3.5"} />
+      <span className="hidden sm:inline">Sentuh</span>
+    </button>
+  );
+}
+
 // Local calendar date (YYYY-MM-DD) so a sale queued offline is still booked on the
 // day it actually happened, not on the day it finally syncs.
 const localDate = () => {
@@ -138,7 +183,12 @@ export default function POS() {
   const [debtOpen, setDebtOpen] = useState(false);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [cardSize, setCardSize] = useState(readCardSize);
-  const size = CARD_SIZES[cardSize] || CARD_SIZES.sedang;
+  const [touch, setTouch] = useState(readTouch);
+  const baseSize = CARD_SIZES[cardSize] || CARD_SIZES.sedang;
+  // Mode sentuh: jumlah kolom TETAP mengikuti pilihan kasir (biar dia bisa
+  // memilih sendiri berapa produk yang terlihat), tapi padding & ukuran teks
+  // kartu dinaikkan ke tingkat "besar" supaya nyaman ditekan dengan jari.
+  const size = touch ? { ...baseSize, ...CARD_SIZES.besar, grid: baseSize.grid } : baseSize;
   const { user } = useAuth();
   const { enqueue, online, pending } = useOffline();
 
@@ -151,6 +201,16 @@ export default function POS() {
       devWarn("pos:saveCardSize", err);
     }
   }, [cardSize]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TOUCH_KEY, touch ? "1" : "0");
+    } catch (err) {
+      // Sama seperti ukuran kartu: kegagalan menyimpan preferensi tampilan
+      // TIDAK ditampilkan ke kasir agar tidak mengganggu pelayanan.
+      devWarn("pos:saveTouch", err);
+    }
+  }, [touch]);
 
   useEffect(() => {
     const id = setInterval(reload, 15000);
@@ -233,6 +293,7 @@ export default function POS() {
   };
 
   return (
+    <TouchCtx.Provider value={touch}>
     <div className="bam-fade -m-4 lg:-m-6 h-[calc(100vh-4rem)] flex flex-col lg:flex-row">
       {/* products */}
       <div className="flex-1 flex flex-col min-h-0 p-3 lg:p-4">
@@ -263,13 +324,16 @@ export default function POS() {
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0 flex-1">
             {CATS.map((c) => (
               <button key={c} data-testid={`pos-cat-${c}`} onClick={() => setCat(c)}
-                className={`px-3 h-8 rounded-full text-xs font-semibold whitespace-nowrap transition-colors ${
+                className={`rounded-full font-semibold whitespace-nowrap transition-colors ${
+                  tcls(touch, "px-5 h-12 text-base", "px-3 h-8 text-xs")
+                } ${
                   cat === c ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-accent"
                 }`}>
                 {c === "all" ? "Semua" : CATEGORY_LABELS[c]}
               </button>
             ))}
           </div>
+          <TouchToggle value={touch} onChange={setTouch} />
           <CardSizePicker value={cardSize} onChange={setCardSize} />
         </div>
         <div className="flex-1 overflow-y-auto no-scrollbar">
@@ -337,7 +401,7 @@ export default function POS() {
             </button>
             <Button
               data-testid="pos-mobile-review" onClick={() => setCartOpen(true)}
-              className="h-10 px-4 rounded-lg font-bold text-sm shrink-0"
+              className={`rounded-lg font-bold shrink-0 ${tcls(touch, "h-14 px-6 text-base", "h-10 px-4 text-sm")}`}
             >
               Keranjang
             </Button>
@@ -368,7 +432,7 @@ export default function POS() {
       {entry && <EntryDialog product={entry} onClose={() => setEntry(null)} onAdd={addToCart} />}
 
       <Dialog open={checkout} onOpenChange={setCheckout}>
-        <DialogContent className="bg-popover max-w-sm p-4 gap-3">
+        <DialogContent className={`bg-popover p-4 gap-3 ${tcls(touch, "max-w-md", "max-w-sm")}`}>
           <DialogHeader className="space-y-0.5"><DialogTitle className="text-base">Pembayaran</DialogTitle>
             <DialogDescription className="text-[11px]">Pilih metode pembayaran dan masukkan nominal.</DialogDescription>
           </DialogHeader>
@@ -379,10 +443,12 @@ export default function POS() {
             </div>
             <div>
               <Label className="text-[11px]">Metode Pembayaran</Label>
-              <div className="grid grid-cols-3 gap-1.5 mt-1">
+              <div className={`grid grid-cols-3 mt-1 ${tcls(touch, "gap-2", "gap-1.5")}`}>
                 {PAYMENT_METHODS.map((m) => (
                   <button key={m} data-testid={`pay-${m}`} onClick={() => setMethod(m)}
-                    className={`h-9 rounded-lg text-xs font-semibold border transition-colors ${
+                    className={`rounded-lg font-semibold border transition-colors ${
+                      tcls(touch, "h-14 text-sm", "h-9 text-xs")
+                    } ${
                       method === m ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-accent"
                     }`}>{PAYMENT_LABELS[m]}</button>
                 ))}
@@ -391,7 +457,8 @@ export default function POS() {
             <div>
               <Label htmlFor="paid" className="text-[11px]">{method === "piutang" ? "Uang Muka (DP)" : "Uang Diterima"}</Label>
               <Input id="paid" data-testid="pos-paid" type="number" value={paid} onChange={(e) => setPaid(e.target.value)}
-                placeholder={formatRupiah(total)} className="mt-1 h-10 text-base tabular" />
+                placeholder={formatRupiah(total)}
+                className={`mt-1 tabular ${tcls(touch, "h-14 text-xl font-bold text-center", "h-10 text-base")}`} />
               {paid && Number(paid) >= total && method !== "piutang" && (
                 <p className="text-xs text-success mt-1">Kembalian: {formatRupiah(Number(paid) - total)}</p>
               )}
@@ -401,8 +468,11 @@ export default function POS() {
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button variant="outline" size="sm" onClick={() => setCheckout(false)}>Batal</Button>
-            <Button data-testid="pos-confirm" size="sm" disabled={busy} onClick={submitSale} className="font-bold">
+            <Button variant="outline" size={tcls(touch, "default", "sm")}
+              className={tcls(touch, "h-14 px-6 text-base", "")}
+              onClick={() => setCheckout(false)}>Batal</Button>
+            <Button data-testid="pos-confirm" size={tcls(touch, "default", "sm")} disabled={busy} onClick={submitSale}
+              className={`font-bold ${tcls(touch, "h-14 px-6 text-base", "")}`}>
               {busy ? "Memproses..." : "Selesaikan Transaksi"}
             </Button>
           </DialogFooter>
@@ -413,10 +483,12 @@ export default function POS() {
       {debtOpen && <ReceivableDialog onClose={() => setDebtOpen(false)} />}
       {pendingOpen && <PendingSales onClose={() => setPendingOpen(false)} />}
     </div>
+    </TouchCtx.Provider>
   );
 }
 
 function CartPanel({ cart, removeItem, customers, customerId, setCustomerId, total, onCheckout, onPayDebt, compact = false }) {
+  const touch = useTouch();
   return (
     <>
       {!compact && (
@@ -434,16 +506,18 @@ function CartPanel({ cart, removeItem, customers, customerId, setCustomerId, tot
           </div>
         )}
         {cart.map((i) => (
-          <div key={i.key} data-testid={`cart-item-${i.product_id}`} className="flex items-center gap-1.5 p-2 rounded-lg bg-accent/60">
+          <div key={i.key} data-testid={`cart-item-${i.product_id}`} className={`flex items-center gap-1.5 rounded-lg bg-accent/60 ${tcls(touch, "p-3", "p-2")}`}>
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold truncate leading-tight">{i.name}</p>
-              <p className="text-[11px] text-muted-foreground tabular leading-tight">
+              <p className={`font-semibold truncate leading-tight ${tcls(touch, "text-[15px]", "text-[13px]")}`}>{i.name}</p>
+              <p className={`text-muted-foreground tabular leading-tight ${tcls(touch, "text-[13px]", "text-[11px]")}`}>
                 {qtyLabel(i.unit, i.qty)} × {formatRupiah(i.price)}
               </p>
             </div>
-            <p className="text-[13px] font-bold tabular">{formatRupiah(i.qty * i.price)}</p>
-            <button data-testid={`cart-remove-${i.key}`} onClick={() => removeItem(i.key)} className="p-1.5 rounded-md hover:bg-destructive/10 text-destructive shrink-0">
-              <Trash2 className="w-4 h-4" />
+            <p className={`font-bold tabular ${tcls(touch, "text-[15px]", "text-[13px]")}`}>{formatRupiah(i.qty * i.price)}</p>
+            <button data-testid={`cart-remove-${i.key}`} onClick={() => removeItem(i.key)}
+              aria-label={`Hapus ${i.name} dari keranjang`}
+              className={`rounded-md hover:bg-destructive/10 text-destructive shrink-0 ${tcls(touch, "p-3", "p-1.5")}`}>
+              <Trash2 className={tcls(touch, "w-6 h-6", "w-4 h-4")} />
             </button>
           </div>
         ))}
@@ -452,7 +526,7 @@ function CartPanel({ cart, removeItem, customers, customerId, setCustomerId, tot
         <div>
           <Label className="text-[11px]">Pelanggan</Label>
           <Select value={customerId} onValueChange={setCustomerId}>
-            <SelectTrigger data-testid="pos-customer" className="mt-1 h-9 text-sm"><SelectValue /></SelectTrigger>
+            <SelectTrigger data-testid="pos-customer" className={`mt-1 ${tcls(touch, "h-12 text-base", "h-9 text-sm")}`}><SelectValue /></SelectTrigger>
             <SelectContent className="bg-popover">
               <SelectItem value="umum">Umum</SelectItem>
               {(customers || []).map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -464,12 +538,12 @@ function CartPanel({ cart, removeItem, customers, customerId, setCustomerId, tot
           <span className="font-head font-extrabold text-xl tabular" data-testid="pos-total">{formatRupiah(total)}</span>
         </div>
         <Button data-testid="pos-checkout" disabled={cart.length === 0} onClick={onCheckout}
-          className="w-full h-11 rounded-lg font-bold text-sm">
+          className={`w-full rounded-lg font-bold ${tcls(touch, "h-16 text-lg", "h-11 text-sm")}`}>
           Bayar
         </Button>
         <Button variant="outline" data-testid="pos-pay-debt" onClick={onPayDebt}
-          className="w-full h-9 rounded-lg font-semibold text-xs">
-          <Wallet className="w-3.5 h-3.5 mr-1.5" /> Bayar Piutang Pelanggan
+          className={`w-full rounded-lg font-semibold ${tcls(touch, "h-12 text-sm", "h-9 text-xs")}`}>
+          <Wallet className={`mr-1.5 ${tcls(touch, "w-4 h-4", "w-3.5 h-3.5")}`} /> Bayar Piutang Pelanggan
         </Button>
       </div>
     </>
@@ -534,6 +608,7 @@ function EntryDialog({ product, onClose, onAdd }) {
   // Keranjang" muat di layar HP tanpa menggulir.
   // Ayam utuh: pilihan "Per Kg" memang dihilangkan untuk SEMUA role.
   const units = posUnits(product);
+  const touch = useTouch();
   const priceFor = useCallback((u) => priceOf(product, u), [product]);
   const [unit, setUnit] = useState(units[0]);
   const [qty, setQty] = useState("");
@@ -573,7 +648,7 @@ function EntryDialog({ product, onClose, onAdd }) {
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="bg-popover max-w-sm p-4 gap-3">
+      <DialogContent className={`bg-popover p-4 gap-3 ${tcls(touch, "max-w-md", "max-w-sm")}`}>
         <DialogHeader className="space-y-0.5">
           <DialogTitle className="text-base">{product.name}</DialogTitle>
           <DialogDescription className="text-[11px]">Masukkan berat atau jumlah dan harga.</DialogDescription>
@@ -583,8 +658,10 @@ function EntryDialog({ product, onClose, onAdd }) {
             <div className={`grid gap-1.5 ${units.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
               {units.map((u) => (
                 <button key={u} data-testid={`unit-${u}`} onClick={() => setUnit(u)}
-                  className={`flex items-center justify-center gap-1.5 h-9 rounded-lg border text-xs font-semibold ${unit === u ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>
-                  {u === "kg" ? <Scale className="w-3.5 h-3.5" /> : <Hash className="w-3.5 h-3.5" />} {UNIT_BUTTON_LABEL[u] || u}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg border font-semibold ${
+                    tcls(touch, "h-14 text-sm", "h-9 text-xs")
+                  } ${unit === u ? "bg-primary text-primary-foreground border-primary" : "border-border"}`}>
+                  {u === "kg" ? <Scale className={tcls(touch, "w-5 h-5", "w-3.5 h-3.5")} /> : <Hash className={tcls(touch, "w-5 h-5", "w-3.5 h-3.5")} />} {UNIT_BUTTON_LABEL[u] || u}
                 </button>
               ))}
             </div>
@@ -594,30 +671,32 @@ function EntryDialog({ product, onClose, onAdd }) {
               <Label className="text-[11px] flex items-center gap-1"><ScanLine className="w-3 h-3" /> {unitLabel}</Label>
               <Input data-testid="entry-qty" value={qty}
                 onChange={(e) => setQty(e.target.value.replace(isWeight ? /[^0-9.,]/g : /[^0-9]/g, ""))}
-                placeholder="0" className="mt-1 h-10 text-lg font-bold tabular text-center"
+                placeholder="0" className={`mt-1 font-bold tabular text-center ${tcls(touch, "h-14 text-2xl", "h-10 text-lg")}`}
                 inputMode={isWeight ? "decimal" : "numeric"} />
             </div>
             <div>
               <Label className="text-[11px]">Harga / {unit}</Label>
               <Input data-testid="entry-price" type="number" value={price} onChange={(e) => setPrice(e.target.value)}
-                className="mt-1 h-10 text-base tabular text-center" />
+                className={`mt-1 tabular text-center ${tcls(touch, "h-14 text-xl", "h-10 text-base")}`} />
             </div>
           </div>
 
           {!isWeight && (
-            <div className="flex items-center justify-center gap-4 py-0.5">
-              <Button variant="outline" size="icon" className="h-9 w-9" data-testid="qty-minus" onClick={() => setQty((q) => String(Math.max(0, (Number(q) || 0) - 1)))}><Minus className="w-4 h-4" /></Button>
-              <span className="font-head font-extrabold text-2xl tabular w-14 text-center">{qtyNum || 0}</span>
-              <Button variant="outline" size="icon" className="h-9 w-9" data-testid="qty-plus" onClick={() => setQty((q) => String((Number(q) || 0) + 1))}><Plus className="w-4 h-4" /></Button>
+            <div className={`flex items-center justify-center py-0.5 ${tcls(touch, "gap-6", "gap-4")}`}>
+              <Button variant="outline" size="icon" className={tcls(touch, "h-14 w-14", "h-9 w-9")} data-testid="qty-minus" onClick={() => setQty((q) => String(Math.max(0, (Number(q) || 0) - 1)))}><Minus className={tcls(touch, "w-6 h-6", "w-4 h-4")} /></Button>
+              <span className={`font-head font-extrabold tabular text-center ${tcls(touch, "text-3xl w-20", "text-2xl w-14")}`}>{qtyNum || 0}</span>
+              <Button variant="outline" size="icon" className={tcls(touch, "h-14 w-14", "h-9 w-9")} data-testid="qty-plus" onClick={() => setQty((q) => String((Number(q) || 0) + 1))}><Plus className={tcls(touch, "w-6 h-6", "w-4 h-4")} /></Button>
             </div>
           )}
 
-          <div className="grid grid-cols-4 gap-1.5">
+          <div className={`grid grid-cols-4 ${tcls(touch, "gap-2", "gap-1.5")}`}>
             {(isWeight ? KEYPAD_DECIMAL : KEYPAD_INTEGER).map((k) => (
               <button key={k} data-testid={`keypad-${k}`} onClick={() => press(k === "," ? "." : k)}
                 title={k === "clear" ? "Hapus semua" : undefined}
-                className="h-10 rounded-lg bg-accent hover:bg-primary hover:text-primary-foreground font-bold text-base transition-colors flex items-center justify-center">
-                {k === "del" ? <Delete className="w-4 h-4" /> : k === "clear" ? "C" : k}
+                className={`rounded-lg bg-accent hover:bg-primary hover:text-primary-foreground font-bold transition-colors flex items-center justify-center ${
+                  tcls(touch, "h-16 text-2xl", "h-10 text-base")
+                }`}>
+                {k === "del" ? <Delete className={tcls(touch, "w-6 h-6", "w-4 h-4")} /> : k === "clear" ? "C" : k}
               </button>
             ))}
           </div>
@@ -636,8 +715,10 @@ function EntryDialog({ product, onClose, onAdd }) {
           </div>
         </div>
         <DialogFooter className="gap-2 sm:gap-2">
-          <Button variant="outline" size="sm" onClick={onClose}>Batal</Button>
-          <Button data-testid="entry-add" size="sm" onClick={confirm} className="font-bold">Tambah ke Keranjang</Button>
+          <Button variant="outline" size={tcls(touch, "default", "sm")}
+            className={tcls(touch, "h-14 px-6 text-base", "")} onClick={onClose}>Batal</Button>
+          <Button data-testid="entry-add" size={tcls(touch, "default", "sm")} onClick={confirm}
+            className={`font-bold ${tcls(touch, "h-14 px-6 text-base", "")}`}>Tambah ke Keranjang</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
