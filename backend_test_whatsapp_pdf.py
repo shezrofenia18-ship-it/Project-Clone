@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import time
 
 # Backend URL from frontend/.env
-BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 OWNER_EMAIL = "shezrofenia18@gmail.com"

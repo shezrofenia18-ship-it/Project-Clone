@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 # Configuration
-BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
 WS_BASE_URL = "wss://commit-inspector.preview.emergentagent.com/api"
 OWNER_EMAIL = "shezrofenia18@gmail.com"
 OWNER_PASSWORD = "berkahayam1"

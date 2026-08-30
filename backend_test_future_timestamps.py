@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 # Backend URL
-BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
 
 # Credentials
 OWNER_EMAIL = "shezrofenia18@gmail.com"

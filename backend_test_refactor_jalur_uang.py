@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 import secrets
 
-BASE = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE = "https://github-deploy-app-4.preview.emergentagent.com/api"
 
 # Login owner
 def login_owner():

@@ -1,475 +1,478 @@
 #!/usr/bin/env python3
 """
-BACKEND REGRESSION TEST - Code Review Round 2
-Tests G1-G5 after pdf_reports.py and server.py fixes
+SMOKE TEST - Berkah Ayam Mili Backend
+After GitHub sync + dependency reinstall (yarn install + pip install)
+NO CODE CHANGES - only environment changed
 """
+
 import requests
 import json
-import time
-import uuid
-from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
 
-# Base URL from frontend/.env
-BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
+# Backend URL from frontend/.env
+BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
 
-# Test credentials
-CREDENTIALS = {
-    "owner": {"email": "shezrofenia18@gmail.com", "password": "berkahayam1"},
-    "admin": {"email": "admin@berkahayam.com", "password": "admin123"},
-    "kasir": {"email": "kasir@berkahayam.com", "password": "kasir123"}
-}
+# Test credentials from /app/memory/test_credentials.md
+OWNER_USERNAME = "owner"
+OWNER_PASSWORD = "berkahayam1"
 
-# Store tokens
-tokens = {}
+# Color codes for output
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
-def login(role):
-    """Login and store token"""
-    creds = CREDENTIALS[role]
-    resp = requests.post(f"{BASE_URL}/auth/login", json=creds)
-    assert resp.status_code == 200, f"Login {role} failed: {resp.status_code}"
-    data = resp.json()
-    tokens[role] = data["token"]
-    print(f"✓ Login {role} successful")
-    return data
+def log_test(msg: str):
+    print(f"{BLUE}[TEST]{RESET} {msg}")
 
-def headers(role):
-    """Get auth headers for role"""
-    return {"Authorization": f"Bearer {tokens[role]}"}
+def log_pass(msg: str):
+    print(f"{GREEN}✅ PASS:{RESET} {msg}")
 
-def test_g1_pdf_endpoints():
-    """G1: 4 PDF endpoints must return 200, start with %PDF-, size > 1000 bytes"""
-    print("\n=== G1: PDF ENDPOINTS ===")
-    
-    # Get date range for testing
-    today = datetime.now().strftime("%Y-%m-%d")
-    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    
-    pdf_tests = [
-        ("Profit-Loss PDF", f"/reports/profit-loss/pdf?start={week_ago}&end={today}"),
-        ("Sales PDF", f"/reports/sales/pdf?start={week_ago}&end={today}"),
-        ("Stock PDF", "/reports/stock/pdf"),
-    ]
-    
-    results = []
-    for name, endpoint in pdf_tests:
-        resp = requests.get(f"{BASE_URL}{endpoint}", headers=headers("owner"))
+def log_fail(msg: str):
+    print(f"{RED}❌ FAIL:{RESET} {msg}")
+
+def log_info(msg: str):
+    print(f"{YELLOW}ℹ INFO:{RESET} {msg}")
+
+def log_section(title: str):
+    print(f"\n{'='*80}")
+    print(f"{BLUE}{title}{RESET}")
+    print(f"{'='*80}\n")
+
+
+class SmokeTest:
+    def __init__(self):
+        self.owner_token = None
+        self.admin_token = None
+        self.kasir_token = None
+        self.results = []
         
-        status_ok = resp.status_code == 200
-        is_pdf = resp.content[:5] == b'%PDF-'
-        size_ok = len(resp.content) > 1000
-        
-        results.append({
-            "name": name,
-            "status": resp.status_code,
-            "is_pdf": is_pdf,
-            "size": len(resp.content),
-            "pass": status_ok and is_pdf and size_ok
-        })
-        
-        print(f"  {name}:")
-        print(f"    Status: {resp.status_code} {'✓' if status_ok else '✗'}")
-        print(f"    Starts with %PDF-: {is_pdf} {'✓' if is_pdf else '✗'}")
-        print(f"    Size: {len(resp.content)} bytes {'✓' if size_ok else '✗'}")
-    
-    # Test daily-closing PDF (need to get a closing ID first)
-    preview_resp = requests.get(f"{BASE_URL}/daily-closing/preview?date={today}", headers=headers("owner"))
-    if preview_resp.status_code == 200:
-        preview_data = preview_resp.json()
-        # Try to get or create a closing for today
-        closing_resp = requests.get(f"{BASE_URL}/daily-closing/{today}", headers=headers("owner"))
-        
-        if closing_resp.status_code == 200:
-            closing_id = closing_resp.json()["id"]
-        else:
-            # Create closing
-            create_resp = requests.post(f"{BASE_URL}/daily-closing", 
-                                       json={"date": today, "notes": "Test closing for PDF"},
-                                       headers=headers("owner"))
-            if create_resp.status_code == 200:
-                closing_id = create_resp.json()["id"]
+    def test_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        """Test login and return response with token"""
+        log_test(f"Testing login: {username}")
+        try:
+            resp = requests.post(
+                f"{BASE_URL}/auth/login",
+                json={"username": username, "password": password},
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                log_pass(f"Login successful for {username}")
+                log_info(f"Response structure: {json.dumps({k: type(v).__name__ for k, v in data.items()}, indent=2)}")
+                
+                # Check for token field
+                if "access_token" in data:
+                    log_info(f"Token field: 'access_token' (length: {len(data['access_token'])})")
+                elif "token" in data:
+                    log_info(f"Token field: 'token' (length: {len(data['token'])})")
+                else:
+                    log_fail(f"No token field found in response!")
+                
+                # Check for user field
+                if "user" in data:
+                    user = data["user"]
+                    log_info(f"User object: username={user.get('username')}, role={user.get('role')}, email={user.get('email')}")
+                
+                return data
+            elif resp.status_code == 401:
+                log_fail(f"Login failed for {username}: 401 Unauthorized (wrong credentials)")
+                return None
+            elif resp.status_code == 404:
+                log_fail(f"Login failed for {username}: 404 Not Found (user doesn't exist)")
+                return None
             else:
-                closing_id = None
+                log_fail(f"Login failed for {username}: {resp.status_code} - {resp.text[:200]}")
+                return None
+                
+        except Exception as e:
+            log_fail(f"Login exception for {username}: {e}")
+            return None
+    
+    def check_user_exists(self, username: str) -> bool:
+        """Check if user exists in database via GET /api/users"""
+        if not self.owner_token:
+            return False
         
-        if closing_id:
-            pdf_resp = requests.get(f"{BASE_URL}/daily-closing/{closing_id}/pdf", headers=headers("owner"))
-            status_ok = pdf_resp.status_code == 200
-            is_pdf = pdf_resp.content[:5] == b'%PDF-'
-            size_ok = len(pdf_resp.content) > 1000
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/users",
+                headers={"Authorization": f"Bearer {self.owner_token}"},
+                timeout=10
+            )
             
-            results.append({
-                "name": "Daily-Closing PDF",
-                "status": pdf_resp.status_code,
-                "is_pdf": is_pdf,
-                "size": len(pdf_resp.content),
-                "pass": status_ok and is_pdf and size_ok
-            })
-            
-            print(f"  Daily-Closing PDF:")
-            print(f"    Status: {pdf_resp.status_code} {'✓' if status_ok else '✗'}")
-            print(f"    Starts with %PDF-: {is_pdf} {'✓' if is_pdf else '✗'}")
-            print(f"    Size: {len(pdf_resp.content)} bytes {'✓' if size_ok else '✗'}")
-    
-    all_pass = all(r["pass"] for r in results)
-    print(f"\n  G1 Result: {'✓ PASS' if all_pass else '✗ FAIL'}")
-    return all_pass, results
-
-def test_g2_payable_outstanding():
-    """G2: Verify payable_outstanding field is numerically correct"""
-    print("\n=== G2: PAYABLE_OUTSTANDING VERIFICATION ===")
-    
-    today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Get payables to calculate expected total
-    payables_resp = requests.get(f"{BASE_URL}/payables", headers=headers("owner"))
-    assert payables_resp.status_code == 200, "Failed to get payables"
-    
-    payables = payables_resp.json()
-    # Calculate total remaining debt from open payables
-    expected_outstanding = round(sum(float(p.get("remaining", 0) or 0) for p in payables if p.get("status") == "open"), 2)
-    
-    print(f"  Expected payable_outstanding (from /api/payables): Rp {expected_outstanding:,.2f}")
-    
-    # Test preview endpoint
-    preview_resp = requests.get(f"{BASE_URL}/daily-closing/preview?date={today}", headers=headers("owner"))
-    assert preview_resp.status_code == 200, "Failed to get preview"
-    
-    preview_data = preview_resp.json()
-    preview_outstanding = preview_data.get("payable_outstanding", 0)
-    
-    print(f"  Preview payable_outstanding: Rp {preview_outstanding:,.2f}")
-    
-    preview_match = abs(preview_outstanding - expected_outstanding) < 0.01
-    print(f"  Preview matches expected: {preview_match} {'✓' if preview_match else '✗'}")
-    
-    # Test POST endpoint (create/update closing)
-    post_resp = requests.post(f"{BASE_URL}/daily-closing",
-                             json={"date": today, "notes": "Test G2 verification"},
-                             headers=headers("owner"))
-    assert post_resp.status_code == 200, "Failed to POST closing"
-    
-    post_data = post_resp.json()
-    post_outstanding = post_data.get("payable_outstanding", 0)
-    
-    print(f"  POST payable_outstanding: Rp {post_outstanding:,.2f}")
-    
-    post_match = abs(post_outstanding - expected_outstanding) < 0.01
-    print(f"  POST matches expected: {post_match} {'✓' if post_match else '✗'}")
-    
-    all_pass = preview_match and post_match
-    print(f"\n  G2 Result: {'✓ PASS' if all_pass else '✗ FAIL'}")
-    
-    return all_pass, {
-        "expected": expected_outstanding,
-        "preview": preview_outstanding,
-        "post": post_outstanding,
-        "preview_match": preview_match,
-        "post_match": post_match
-    }
-
-def test_g3_weight_guidance():
-    """G3: Verify weight-guidance endpoint returns correct values"""
-    print("\n=== G3: WEIGHT-GUIDANCE ENDPOINT ===")
-    
-    # Test as owner
-    resp = requests.get(f"{BASE_URL}/products/weight-guidance", headers=headers("owner"))
-    assert resp.status_code == 200, "Owner should access weight-guidance"
-    
-    data = resp.json()
-    items = {item["name"]: item for item in data.get("items", [])}
-    
-    # Expected values
-    expected = {
-        "Ayam Kampung": {"avg_weight_used": 1.2, "hpp_ekor": 62400, "is_estimate": True},
-        "Ayam Pejantan": {"avg_weight_used": 1.1, "hpp_ekor": 36300, "is_estimate": True},
-        "Ayam Broiler": {"avg_weight_used": 1.85, "hpp_ekor": 51800, "source": "auto"}
-    }
-    
-    results = []
-    for name, exp in expected.items():
-        if name in items:
-            item = items[name]
-            weight_ok = abs(item.get("avg_weight_used", 0) - exp["avg_weight_used"]) < 0.01
-            hpp_ok = abs(item.get("hpp_ekor", 0) - exp["hpp_ekor"]) < 1
-            
-            if "is_estimate" in exp:
-                estimate_ok = item.get("is_estimate") == exp["is_estimate"]
+            if resp.status_code == 200:
+                users = resp.json()
+                for user in users:
+                    if user.get("username") == username:
+                        log_info(f"User '{username}' found in DB: role={user.get('role')}, email={user.get('email')}")
+                        return True
+                log_info(f"User '{username}' NOT found in database")
+                return False
             else:
-                estimate_ok = item.get("avg_weight_source") == exp.get("source", "")
-            
-            pass_test = weight_ok and hpp_ok and estimate_ok
-            
-            results.append({
-                "name": name,
-                "weight": item.get("avg_weight_used"),
-                "hpp_ekor": item.get("hpp_ekor"),
-                "is_estimate": item.get("is_estimate"),
-                "source": item.get("avg_weight_source"),
-                "pass": pass_test
-            })
-            
-            print(f"  {name}:")
-            print(f"    Weight: {item.get('avg_weight_used')} kg (expected {exp['avg_weight_used']}) {'✓' if weight_ok else '✗'}")
-            print(f"    HPP/ekor: Rp {item.get('hpp_ekor'):,.0f} (expected Rp {exp['hpp_ekor']:,.0f}) {'✓' if hpp_ok else '✗'}")
-            if "is_estimate" in exp:
-                print(f"    Is estimate: {item.get('is_estimate')} (expected {exp['is_estimate']}) {'✓' if estimate_ok else '✗'}")
+                log_fail(f"Failed to fetch users: {resp.status_code}")
+                return False
+        except Exception as e:
+            log_fail(f"Exception checking user existence: {e}")
+            return False
+    
+    def test_endpoint(self, method: str, path: str, token: Optional[str] = None, 
+                     expected_status: int = 200, description: str = "") -> Dict[str, Any]:
+        """Test an endpoint and return result"""
+        url = f"{BASE_URL}{path}"
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=headers, timeout=10)
+            elif method == "POST":
+                resp = requests.post(url, headers=headers, timeout=10)
             else:
-                print(f"    Source: {item.get('avg_weight_source')} (expected {exp.get('source')}) {'✓' if estimate_ok else '✗'}")
+                raise ValueError(f"Unsupported method: {method}")
+            
+            status = resp.status_code
+            result = {
+                "path": path,
+                "method": method,
+                "status": status,
+                "expected": expected_status,
+                "pass": status == expected_status,
+                "description": description
+            }
+            
+            if status == expected_status:
+                log_pass(f"{method} {path} → {status}")
+            else:
+                log_fail(f"{method} {path} → {status} (expected {expected_status})")
+                if status >= 400:
+                    log_info(f"Error response: {resp.text[:200]}")
+            
+            # Additional checks for specific endpoints
+            if status == 200:
+                try:
+                    data = resp.json()
+                    if path == "/dashboard":
+                        log_info(f"Dashboard keys: {list(data.keys())}")
+                    elif path == "/products":
+                        log_info(f"Products count: {len(data)}")
+                    elif path == "/users":
+                        log_info(f"Users count: {len(data)}")
+                except:
+                    pass
+            
+            self.results.append(result)
+            return result
+            
+        except Exception as e:
+            log_fail(f"{method} {path} → EXCEPTION: {e}")
+            result = {
+                "path": path,
+                "method": method,
+                "status": "ERROR",
+                "expected": expected_status,
+                "pass": False,
+                "description": description,
+                "error": str(e)
+            }
+            self.results.append(result)
+            return result
+    
+    def test_pdf_endpoint(self, path: str, token: str, description: str = "") -> Dict[str, Any]:
+        """Test PDF endpoint and verify content-type"""
+        url = f"{BASE_URL}{path}"
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            status = resp.status_code
+            content_type = resp.headers.get("Content-Type", "")
+            
+            result = {
+                "path": path,
+                "method": "GET",
+                "status": status,
+                "content_type": content_type,
+                "size": len(resp.content),
+                "description": description
+            }
+            
+            if status == 200:
+                if "application/pdf" in content_type:
+                    # Check PDF header
+                    if resp.content[:4] == b'%PDF':
+                        log_pass(f"PDF {path} → 200, {len(resp.content)} bytes, valid PDF header")
+                        result["pass"] = True
+                    else:
+                        log_fail(f"PDF {path} → 200 but invalid PDF header")
+                        result["pass"] = False
+                else:
+                    log_fail(f"PDF {path} → 200 but wrong content-type: {content_type}")
+                    result["pass"] = False
+            else:
+                log_fail(f"PDF {path} → {status}")
+                result["pass"] = False
+            
+            self.results.append(result)
+            return result
+            
+        except Exception as e:
+            log_fail(f"PDF {path} → EXCEPTION: {e}")
+            result = {
+                "path": path,
+                "method": "GET",
+                "status": "ERROR",
+                "pass": False,
+                "description": description,
+                "error": str(e)
+            }
+            self.results.append(result)
+            return result
+    
+    def run_smoke_test(self):
+        """Run complete smoke test"""
+        
+        # ===== SECTION 1: LOGIN TESTS =====
+        log_section("SECTION 1: LOGIN & AUTHENTICATION")
+        
+        # Test owner login
+        owner_resp = self.test_login(OWNER_USERNAME, OWNER_PASSWORD)
+        if owner_resp:
+            self.owner_token = owner_resp.get("access_token") or owner_resp.get("token")
+            if not self.owner_token:
+                log_fail("Owner login succeeded but no token found!")
+                return
         else:
-            results.append({"name": name, "pass": False})
-            print(f"  {name}: NOT FOUND ✗")
-    
-    # Test kasir access (should be 403)
-    kasir_resp = requests.get(f"{BASE_URL}/products/weight-guidance", headers=headers("kasir"))
-    kasir_blocked = kasir_resp.status_code == 403
-    print(f"  Kasir access: {kasir_resp.status_code} {'✓ (correctly blocked)' if kasir_blocked else '✗ (should be 403)'}")
-    
-    all_pass = all(r["pass"] for r in results) and kasir_blocked
-    print(f"\n  G3 Result: {'✓ PASS' if all_pass else '✗ FAIL'}")
-    
-    return all_pass, results
-
-def test_g4_core_regression():
-    """G4: Core regression tests"""
-    print("\n=== G4: CORE REGRESSION ===")
-    
-    results = {}
-    
-    # 1. Login 3 roles (already done, verify tokens exist)
-    print("  1. Login 3 roles:")
-    for role in ["owner", "admin", "kasir"]:
-        has_token = role in tokens and tokens[role]
-        results[f"login_{role}"] = has_token
-        print(f"    {role}: {'✓' if has_token else '✗'}")
-    
-    # 2. Dashboard
-    print("  2. Dashboard:")
-    dash_resp = requests.get(f"{BASE_URL}/dashboard", headers=headers("owner"))
-    dash_ok = dash_resp.status_code == 200
-    results["dashboard"] = dash_ok
-    print(f"    GET /api/dashboard: {dash_resp.status_code} {'✓' if dash_ok else '✗'}")
-    
-    # 3. POST /api/sales per kg
-    print("  3. Sales per kg:")
-    # Get a product that sells per kg
-    products_resp = requests.get(f"{BASE_URL}/products", headers=headers("kasir"))
-    products = products_resp.json()
-    kg_product = next((p for p in products if "kg" in p.get("units", [])), None)
-    
-    if kg_product:
-        initial_stock = kg_product.get("stock_kg", 0)
-        sale_kg_data = {
-            "txn_id": str(uuid.uuid4()),
-            "items": [{
-                "product_id": kg_product["id"],
-                "unit": "kg",
-                "qty": 0.5,
-                "price": kg_product.get("price_kg", 50000)
-            }],
-            "payment_method": "tunai",
-            "amount_paid": 25000
-        }
+            log_fail("Owner login failed - cannot continue tests")
+            return
         
-        sale_kg_resp = requests.post(f"{BASE_URL}/sales", json=sale_kg_data, headers=headers("kasir"))
-        sale_kg_ok = sale_kg_resp.status_code == 200
-        results["sale_kg"] = sale_kg_ok
+        # Check if admin and kasir users exist
+        log_test("Checking if 'admin' and 'kasir' users exist in database...")
+        admin_exists = self.check_user_exists("admin")
+        kasir_exists = self.check_user_exists("kasir")
         
-        if sale_kg_ok:
-            sale_kg_id = sale_kg_resp.json()["id"]
-            # Verify stock decreased
-            products_after = requests.get(f"{BASE_URL}/products", headers=headers("kasir")).json()
-            product_after = next((p for p in products_after if p["id"] == kg_product["id"]), None)
-            stock_decreased = product_after["stock_kg"] < initial_stock
-            results["sale_kg_stock"] = stock_decreased
-            print(f"    POST /api/sales (kg): {sale_kg_resp.status_code} {'✓' if sale_kg_ok else '✗'}")
-            print(f"    Stock decreased: {stock_decreased} {'✓' if stock_decreased else '✗'}")
-            
-            # Test idempotency
-            idempotent_resp = requests.post(f"{BASE_URL}/sales", json=sale_kg_data, headers=headers("kasir"))
-            same_id = idempotent_resp.json()["id"] == sale_kg_id
-            results["idempotency"] = same_id
-            print(f"    Idempotency (same txn_id): {same_id} {'✓' if same_id else '✗'}")
-            
-            # Cancel sale
-            cancel_resp = requests.post(f"{BASE_URL}/sales/{sale_kg_id}/cancel", headers=headers("owner"))
-            cancel_ok = cancel_resp.status_code == 200
-            results["cancel_sale"] = cancel_ok
-            
-            if cancel_ok:
-                # Verify stock restored
-                products_final = requests.get(f"{BASE_URL}/products", headers=headers("kasir")).json()
-                product_final = next((p for p in products_final if p["id"] == kg_product["id"]), None)
-                stock_restored = abs(product_final["stock_kg"] - initial_stock) < 0.01
-                results["cancel_stock_restore"] = stock_restored
-                print(f"    Cancel sale: {cancel_resp.status_code} {'✓' if cancel_ok else '✗'}")
-                print(f"    Stock restored: {stock_restored} {'✓' if stock_restored else '✗'}")
-    
-    # 4. POST /api/sales per ekor
-    print("  4. Sales per ekor:")
-    ekor_product = next((p for p in products if "ekor" in p.get("units", []) and p.get("stock_ekor", 0) > 0), None)
-    
-    if ekor_product:
-        initial_stock_ekor = ekor_product.get("stock_ekor", 0)
-        sale_ekor_data = {
-            "txn_id": str(uuid.uuid4()),
-            "items": [{
-                "product_id": ekor_product["id"],
-                "unit": "ekor",
-                "qty": 1,
-                "price": ekor_product.get("price_ekor", 50000)
-            }],
-            "payment_method": "tunai",
-            "amount_paid": 50000
-        }
+        # Try to login with admin and kasir
+        if admin_exists:
+            log_test("Attempting to login as 'admin' (trying common passwords)...")
+            # Try common passwords
+            for pwd in ["admin123", "admin", "berkahayam1"]:
+                admin_resp = self.test_login("admin", pwd)
+                if admin_resp:
+                    self.admin_token = admin_resp.get("access_token") or admin_resp.get("token")
+                    log_pass(f"Admin login successful with password: {pwd}")
+                    break
+            if not self.admin_token:
+                log_fail("Admin user exists but couldn't find valid password")
         
-        sale_ekor_resp = requests.post(f"{BASE_URL}/sales", json=sale_ekor_data, headers=headers("kasir"))
-        sale_ekor_ok = sale_ekor_resp.status_code == 200
-        results["sale_ekor"] = sale_ekor_ok
+        if kasir_exists:
+            log_test("Attempting to login as 'kasir' (trying common passwords)...")
+            # Try common passwords
+            for pwd in ["kasir123", "kasir", "berkahayam1"]:
+                kasir_resp = self.test_login("kasir", pwd)
+                if kasir_resp:
+                    self.kasir_token = kasir_resp.get("access_token") or kasir_resp.get("token")
+                    log_pass(f"Kasir login successful with password: {pwd}")
+                    break
+            if not self.kasir_token:
+                log_fail("Kasir user exists but couldn't find valid password")
         
-        if sale_ekor_ok:
-            sale_ekor_id = sale_ekor_resp.json()["id"]
-            # Verify stock decreased
-            products_after = requests.get(f"{BASE_URL}/products", headers=headers("kasir")).json()
-            product_after = next((p for p in products_after if p["id"] == ekor_product["id"]), None)
-            stock_decreased = product_after["stock_ekor"] < initial_stock_ekor
-            results["sale_ekor_stock"] = stock_decreased
-            print(f"    POST /api/sales (ekor): {sale_ekor_resp.status_code} {'✓' if sale_ekor_ok else '✗'}")
-            print(f"    Stock decreased: {stock_decreased} {'✓' if stock_decreased else '✗'}")
+        # ===== SECTION 2: MAIN GET ENDPOINTS =====
+        log_section("SECTION 2: MAIN GET ENDPOINTS (with owner token)")
+        
+        endpoints = [
+            ("/dashboard", "Dashboard summary"),
+            ("/products", "Product list"),
+            ("/sales", "Sales history"),
+            ("/purchases", "Purchase history"),
+            ("/productions", "Production history"),
+            ("/customers", "Customer list"),
+            ("/suppliers", "Supplier list"),
+            ("/users", "User list"),
+            ("/stock", "Stock levels"),
+            ("/stock-movements", "Stock movement history"),
+            ("/incomes", "Income records"),
+            ("/expenses", "Expense records"),
+            ("/receivables", "Receivables (piutang)"),
+            ("/payables", "Payables (hutang)"),
+            ("/daily-closing/preview", "Daily closing preview"),
+            ("/whatsapp/settings", "WhatsApp settings"),
+            ("/whatsapp/diagnostics", "WhatsApp diagnostics"),
+            ("/dashboard/monthly?months=12", "Monthly dashboard (12 months)"),
+            ("/maintenance/consistency", "Data consistency check"),
+        ]
+        
+        for path, desc in endpoints:
+            self.test_endpoint("GET", path, self.owner_token, 200, desc)
+        
+        # ===== SECTION 3: PDF REPORT ENDPOINTS =====
+        log_section("SECTION 3: PDF REPORT ENDPOINTS (reportlab verification)")
+        
+        pdf_endpoints = [
+            ("/reports/sales/pdf", "Sales report PDF"),
+            ("/reports/profit-loss/pdf", "Profit-loss report PDF"),
+            ("/reports/stock/pdf", "Stock report PDF"),
+        ]
+        
+        for path, desc in pdf_endpoints:
+            self.test_pdf_endpoint(path, self.owner_token, desc)
+        
+        # Test daily closing PDF (need to get a closing ID first)
+        log_test("Testing daily closing PDF...")
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/daily-closing/preview",
+                headers={"Authorization": f"Bearer {self.owner_token}"},
+                timeout=10
+            )
+            if resp.status_code == 200:
+                preview = resp.json()
+                if "id" in preview:
+                    closing_id = preview["id"]
+                    self.test_pdf_endpoint(f"/daily-closing/{closing_id}/pdf", self.owner_token, "Daily closing PDF")
+                else:
+                    log_info("No closing ID in preview, skipping daily closing PDF test")
+        except Exception as e:
+            log_fail(f"Failed to get closing preview: {e}")
+        
+        # ===== SECTION 4: RBAC TESTS =====
+        log_section("SECTION 4: RBAC - Access without token (should be 401/403)")
+        
+        rbac_endpoints = [
+            ("/dashboard", 401),
+            ("/products", 401),
+            ("/users", 401),
+            ("/sales", 401),
+        ]
+        
+        for path, expected in rbac_endpoints:
+            self.test_endpoint("GET", path, None, expected, "No token")
+        
+        # ===== SECTION 5: BACKEND LOG CHECK =====
+        log_section("SECTION 5: BACKEND ERROR LOG CHECK")
+        
+        log_test("Checking /var/log/supervisor/backend.err.log for errors...")
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["tail", "-n", "50", "/var/log/supervisor/backend.err.log"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
             
-            # Cancel to restore
-            cancel_resp = requests.post(f"{BASE_URL}/sales/{sale_ekor_id}/cancel", headers=headers("owner"))
-            if cancel_resp.status_code == 200:
-                products_final = requests.get(f"{BASE_URL}/products", headers=headers("kasir")).json()
-                product_final = next((p for p in products_final if p["id"] == ekor_product["id"]), None)
-                stock_restored = abs(product_final["stock_ekor"] - initial_stock_ekor) < 0.01
-                print(f"    Stock restored after cancel: {stock_restored} {'✓' if stock_restored else '✗'}")
-    
-    # 5. WhatsApp log
-    print("  5. WhatsApp log:")
-    wa_log_resp = requests.get(f"{BASE_URL}/whatsapp/log", headers=headers("owner"))
-    wa_log_ok = wa_log_resp.status_code == 200
-    results["whatsapp_log"] = wa_log_ok
-    print(f"    GET /api/whatsapp/log: {wa_log_resp.status_code} {'✓' if wa_log_ok else '✗'}")
-    
-    # 6. WebSocket hello (test via HTTP first, WS requires websocket library)
-    print("  6. WebSocket:")
-    try:
-        import websocket
-        ws_url = f"wss://github-live-preview-6.preview.emergentagent.com/api/ws?token={tokens['owner']}"
-        ws = websocket.create_connection(ws_url, timeout=5)
-        msg = ws.recv()
-        ws_data = json.loads(msg)
-        ws_ok = ws_data.get("type") == "hello"
-        ws.close()
-        results["websocket"] = ws_ok
-        print(f"    WebSocket hello: {'✓' if ws_ok else '✗'}")
-    except Exception as e:
-        print(f"    WebSocket: ✗ (error: {str(e)})")
-        results["websocket"] = False
-    
-    all_pass = all(results.values())
-    print(f"\n  G4 Result: {'✓ PASS' if all_pass else '✗ FAIL'}")
-    
-    return all_pass, results
-
-def test_g5_backend_logs():
-    """G5: Check for new tracebacks in backend logs"""
-    print("\n=== G5: BACKEND ERROR LOGS ===")
-    
-    import subprocess
-    
-    # Check backend error log
-    result = subprocess.run(
-        ["tail", "-n", "100", "/var/log/supervisor/backend.err.log"],
-        capture_output=True,
-        text=True
-    )
-    
-    log_content = result.stdout
-    
-    # Look for tracebacks
-    has_traceback = "Traceback" in log_content
-    
-    if has_traceback:
-        print("  ✗ TRACEBACKS FOUND in backend.err.log:")
-        # Print last 20 lines if traceback found
-        lines = log_content.split("\n")
-        for line in lines[-20:]:
-            if line.strip():
-                print(f"    {line}")
-    else:
-        print("  ✓ No tracebacks found in last 100 lines")
-    
-    print(f"\n  G5 Result: {'✓ PASS' if not has_traceback else '✗ FAIL'}")
-    
-    return not has_traceback, {"has_traceback": has_traceback}
-
-def main():
-    print("=" * 70)
-    print("BACKEND REGRESSION TEST - Code Review Round 2")
-    print("Testing G1-G5 after pdf_reports.py and server.py fixes")
-    print("=" * 70)
-    
-    # Login all roles
-    print("\n=== AUTHENTICATION ===")
-    for role in ["owner", "admin", "kasir"]:
-        login(role)
-    
-    # Run all tests
-    results = {}
-    
-    try:
-        results["g1"] = test_g1_pdf_endpoints()
-    except Exception as e:
-        print(f"G1 ERROR: {e}")
-        results["g1"] = (False, str(e))
-    
-    try:
-        results["g2"] = test_g2_payable_outstanding()
-    except Exception as e:
-        print(f"G2 ERROR: {e}")
-        results["g2"] = (False, str(e))
-    
-    try:
-        results["g3"] = test_g3_weight_guidance()
-    except Exception as e:
-        print(f"G3 ERROR: {e}")
-        results["g3"] = (False, str(e))
-    
-    try:
-        results["g4"] = test_g4_core_regression()
-    except Exception as e:
-        print(f"G4 ERROR: {e}")
-        results["g4"] = (False, str(e))
-    
-    try:
-        results["g5"] = test_g5_backend_logs()
-    except Exception as e:
-        print(f"G5 ERROR: {e}")
-        results["g5"] = (False, str(e))
-    
-    # Summary
-    print("\n" + "=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-    
-    for test_name, result in results.items():
-        if isinstance(result, tuple):
-            passed, _ = result
-            print(f"{test_name.upper()}: {'✓ PASS' if passed else '✗ FAIL'}")
+            log_content = result.stdout
+            
+            # Check for critical errors
+            if "ModuleNotFoundError" in log_content:
+                log_fail("ModuleNotFoundError found in backend logs!")
+                # Show the error
+                for line in log_content.split("\n"):
+                    if "ModuleNotFoundError" in line or "ImportError" in line:
+                        log_info(f"  {line}")
+            elif "ImportError" in log_content:
+                log_fail("ImportError found in backend logs!")
+                for line in log_content.split("\n"):
+                    if "ImportError" in line:
+                        log_info(f"  {line}")
+            else:
+                log_pass("No ModuleNotFoundError or ImportError in recent backend logs")
+            
+            # Check for successful startup
+            if "Berkah Ayam Mili API started" in log_content:
+                log_pass("Backend startup message found: 'Berkah Ayam Mili API started'")
+            else:
+                log_info("Backend startup message not found in recent logs (may have started earlier)")
+                
+        except Exception as e:
+            log_fail(f"Failed to check backend logs: {e}")
+        
+        # ===== FINAL SUMMARY =====
+        log_section("SMOKE TEST SUMMARY")
+        
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r.get("pass", False))
+        failed = total - passed
+        
+        print(f"Total tests: {total}")
+        print(f"{GREEN}Passed: {passed}{RESET}")
+        print(f"{RED}Failed: {failed}{RESET}")
+        print()
+        
+        # Print results table
+        print(f"{'='*100}")
+        print(f"{'Endpoint':<50} {'Method':<8} {'Status':<10} {'Result':<10}")
+        print(f"{'='*100}")
+        
+        for r in self.results:
+            path = r["path"]
+            method = r.get("method", "GET")
+            status = str(r.get("status", "N/A"))
+            result = "✅ PASS" if r.get("pass", False) else "❌ FAIL"
+            
+            print(f"{path:<50} {method:<8} {status:<10} {result:<10}")
+        
+        print(f"{'='*100}")
+        print()
+        
+        # User existence summary
+        log_section("USER EXISTENCE & LOGIN SUMMARY")
+        print(f"Owner (username: 'owner'): ✅ EXISTS, ✅ CAN LOGIN (password: berkahayam1)")
+        
+        if admin_exists:
+            if self.admin_token:
+                print(f"Admin (username: 'admin'): ✅ EXISTS, ✅ CAN LOGIN")
+            else:
+                print(f"Admin (username: 'admin'): ✅ EXISTS, ❌ CANNOT LOGIN (password unknown)")
         else:
-            print(f"{test_name.upper()}: ✗ ERROR - {result}")
-    
-    all_passed = all(isinstance(r, tuple) and r[0] for r in results.values())
-    
-    print("\n" + "=" * 70)
-    if all_passed:
-        print("✓ ALL TESTS PASSED")
-    else:
-        print("✗ SOME TESTS FAILED")
-    print("=" * 70)
-    
-    return all_passed
+            print(f"Admin (username: 'admin'): ❌ DOES NOT EXIST")
+        
+        if kasir_exists:
+            if self.kasir_token:
+                print(f"Kasir (username: 'kasir'): ✅ EXISTS, ✅ CAN LOGIN")
+            else:
+                print(f"Kasir (username: 'kasir'): ✅ EXISTS, ❌ CANNOT LOGIN (password unknown)")
+        else:
+            print(f"Kasir (username: 'kasir'): ❌ DOES NOT EXIST")
+        
+        print()
+        
+        # Login response structure
+        log_section("LOGIN RESPONSE STRUCTURE")
+        if owner_resp:
+            print("Owner login response fields:")
+            for key, value in owner_resp.items():
+                if key in ["access_token", "token"]:
+                    print(f"  - {key}: <token> (length: {len(str(value))})")
+                elif key == "user":
+                    print(f"  - user:")
+                    for uk, uv in value.items():
+                        print(f"      - {uk}: {uv}")
+                else:
+                    print(f"  - {key}: {value}")
+        
+        return passed == total
+
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    print(f"\n{BLUE}{'='*100}{RESET}")
+    print(f"{BLUE}SMOKE TEST - Berkah Ayam Mili Backend{RESET}")
+    print(f"{BLUE}After GitHub sync + dependency reinstall{RESET}")
+    print(f"{BLUE}Backend URL: {BASE_URL}{RESET}")
+    print(f"{BLUE}{'='*100}{RESET}\n")
+    
+    test = SmokeTest()
+    success = test.run_smoke_test()
+    
+    if success:
+        print(f"\n{GREEN}{'='*100}{RESET}")
+        print(f"{GREEN}✅ ALL SMOKE TESTS PASSED{RESET}")
+        print(f"{GREEN}{'='*100}{RESET}\n")
+        exit(0)
+    else:
+        print(f"\n{RED}{'='*100}{RESET}")
+        print(f"{RED}❌ SOME SMOKE TESTS FAILED{RESET}")
+        print(f"{RED}{'='*100}{RESET}\n")
+        exit(1)

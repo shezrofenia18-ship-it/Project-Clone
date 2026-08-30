@@ -24,7 +24,7 @@ from datetime import datetime
 import requests
 
 # Base URL from environment
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-app-launcher.preview.emergentagent.com")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://github-deploy-app-4.preview.emergentagent.com")
 API_URL = f"{BASE_URL}/api"
 
 # Credentials

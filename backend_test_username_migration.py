@@ -16,7 +16,7 @@ import time
 from typing import Optional
 
 # Backend URL dari frontend/.env
-BASE_URL = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
 
 # Kredensial dari /app/memory/test_credentials.md
 CREDENTIALS = {

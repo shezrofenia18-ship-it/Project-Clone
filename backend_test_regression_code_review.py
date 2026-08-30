@@ -13,7 +13,7 @@ import requests
 import time
 from datetime import datetime, timezone, timedelta
 
-BASE = "https://github-app-launcher.preview.emergentagent.com/api"
+BASE = "https://github-deploy-app-4.preview.emergentagent.com/api"
 JKT = timezone(timedelta(hours=7))
 
 def login(email, password):
