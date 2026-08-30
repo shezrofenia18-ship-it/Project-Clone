@@ -88,7 +88,15 @@ frontend/node_modules/.cache/default-development/4.pack
 .env
 .env.*
 *.env
+# Pengecualian: file TEMPLATE env tidak berisi rahasia, jadi HARUS ikut ke
+# GitHub supaya bisa dipakai sebagai panduan saat setup hosting baru.
+!.env.example
+!**/.env.example
 credentials.json
 *.key
 .credentials
 frontend/node_modules/.cache/default-development/5.pack
+
+# Backup database (berisi data keuangan & hash password) - JANGAN masuk GitHub.
+# Unduh lewat editor/Download Code, bukan lewat repo publik.
+/backup/
