@@ -56,6 +56,11 @@ Flow: Pembelian → Stok → Pemotongan → Karkas → Fillet → Stok → Penju
 - Dependencies diinstall ulang (pip requirements.txt + yarn install ~945 paket). backend & frontend RUNNING, login owner → dashboard OK.
 - `memory/test_credentials.md` dibuat ulang (sempat hilang).
 
+## Environment restore (2026-08-30)
+- Repo `shezrofenia18-ship-it/Project1` tersambung. Branch aktif `conflict_290826_1811` (HEAD e198d99) == `origin/conflict_290826_1811` — ini commit TERBARU (30 Ags). `origin/main` tertinggal 18 commit; hanya beda 1 commit config `.emergent/emergent.yml`.
+- Dependencies diinstall ulang: pip requirements.txt (reportlab jadi 5.0.1, export PDF diverifikasi tetap jalan) + yarn install. backend & frontend RUNNING; login owner → Dashboard OK.
+- `memory/test_credentials.md` dibuat ulang (file ini tidak ikut ter-commit).
+
 ## Implemented (2026-08-29 — FASE 2: Realtime WebSocket + Tutup Buku + HPP per ekor)
 - **Realtime WebSocket** (`backend/realtime.py`, `frontend/src/context/RealtimeContext.js`): endpoint `WS /api/ws?token=<jwt>`; server hanya kirim sinyal `{"type":"invalidate","topics":[...]}` (otorisasi tetap di REST). Emit dipasang di helper bersama `add_activity` → dashboard/activities, `add_notification` → notifications, `apply_stock` → stock/products, plus sale/cancel/expense/target/produk/tutup-buku. `emit()` menelan exception → penjualan tidak pernah gagal karena socket.
   - Frontend: reconnect backoff max 30s, stop bila close 1008, reconnect saat event `online`, event digabung (debounce 250ms). `usePoll(path, interval, topics)` → interval 60s saat live, kembali cepat saat socket mati (FALLBACK POLLING, app tidak pernah mati). `useRealtimeReload(topics, reload)` untuk halaman useFetch. Badge **LIVE** di topbar. Dipakai di Dashboard, notifikasi, POS, Stok, Produk, Tutup Buku.

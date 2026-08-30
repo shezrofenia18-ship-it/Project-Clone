@@ -17,7 +17,7 @@ import io
 from datetime import datetime
 
 # Configuration
-BASE_URL = "https://commit-checker-live-2.preview.emergentagent.com/api"
+BASE_URL = "https://github-app-preview-5.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 CREDENTIALS = {
