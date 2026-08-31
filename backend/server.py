@@ -2765,9 +2765,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    # URUTAN PENTING (3 tahap): (1) index unik lama `email_1` DIBUANG dulu, kalau
-    # tidak `$unset email` akan memicu E11000 dup key email:null dan startup gagal.
-    # (2) semua akun diberi username. (3) baru index unik `username` dibuat.
+    # URUTAN PENTING (3 tahap): (1) index unik lama `email_1` DIBUANG dulu
     await drop_legacy_email_index()
     renamed = await migrate_usernames()
     await ensure_user_indexes()
@@ -2786,30 +2784,25 @@ async def startup():
         await refresh_all_avg_weights()
     except Exception as e:
         logger.error(f"Migrasi berat rata-rata gagal: {e}")
-    # Rapikan data warisan supaya Penjualan/Pembelian/Keuangan/Laporan selalu sinkron.
     try:
         await reconcile.repair_on_startup(db)
     except Exception as e:
         logger.error(f"Rekonsiliasi data gagal: {e}")
-    # Dokumen bertanggal MASA DEPAN (mis. jam demo 20:00 padahal sekarang 10:50)
-    # membuat transaksi asli kasir tertimbun di Riwayat Transaksi. Idempoten.
     try:
         await maintenance.repair_future_timestamps(db)
     except Exception as e:
         logger.error(f"Perbaikan waktu masa depan gagal: {e}")
-    # Nomor penerima rekap WhatsApp default (bisa diubah owner di Pengaturan).
     if await db.settings.find_one({"key": "wa_recipients"}) is None:
         await db.settings.update_one({"key": "wa_recipients"}, {"$set": {"value": [
             {"name": "Owner", "number": "6281289478221"}]}}, upsert=True)
-    app.state.auto_closing_task = asyncio.create_task(auto_closing_worker())
-    logger.info("Penjadwal tutup buku otomatis aktif (jam %s WIB)",
-                str(await get_setting("wa_auto_time", "21:00"))[:5])
+    
+    # FITUR TUTUP BUKU OTOMATIS JAM 21:00 WIB DINONAKTIFKAN UNTUK DEPLOYMENT
+    # app.state.auto_closing_task = asyncio.create_task(auto_closing_worker())
+
     try:
         init_storage()
         logger.info("Penyimpanan berkas siap -> %s", storage_mod.describe())
     except Exception as e:
-        # Penyimpanan bermasalah TIDAK boleh menggagalkan startup: kasir harus
-        # tetap bisa melayani penjualan walau upload foto sedang mati.
         logger.error("Penyimpanan berkas GAGAL disiapkan (%s): %s",
                      storage_mod.active_backend(), e)
     logger.info("Berkah Ayam Mili API started")
@@ -2817,7 +2810,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    task = getattr(app.state, "auto_closing_task", None)
-    if task:
-        task.cancel()
+    # task = getattr(app.state, "auto_closing_task", None)
+    # if task:
+    #     task.cancel()
     client.close()
