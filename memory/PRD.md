@@ -539,6 +539,9 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
 - Bersih-bersih data uji (2026-09-04): 12 produksi "Test", 2 penjualan batal, 62 stock_movements, 42 activities, 42 audit_logs, 2 notifikasi dihapus (created_at >= 2026-09-04T01:2x); stok 8 produk dipulihkan dari jumlah qty movement ke nilai before_* awal (Broiler 120 ekor/225,5 kg, Kampung 40 ekor, Pejantan 80 ekor, Ceker 120 pcs, Ati Ampela 6 kg/60 pcs, Dada & Paha Atas 0). Produksi asli "Kasir Budi" (3 Sep) utuh.
 - Status: owner sedang menguji manual di live preview (standby, tidak jalankan tes otomatis / fitur baru sampai ada instruksi).
 
+## Implemented (2026-09-04 — Pencarian Produk POS)
+- `POS.js`: kotak cari (`pos-search-input`, ikon Search, tombol hapus `pos-search-clear`) di atas baris kategori; filter nama produk / label kategori (case-insensitive) digabung dengan filter kategori; state lokal `query` (tidak disimpan). Grid kosong → pesan `pos-search-empty` + tautan "Hapus pencarian". Verifikasi HP 390: 14 produk → "dada" = 2 (Dada Ayam, Dada Fillet), "zzz" = pesan kosong, clear = 14 lagi, tanpa overflow horizontal.
+
 ## Implemented (2026-09-04 — Responsivitas POS Kasir, CSS saja)
 - `POS.js`: grid produk default (Sedang) = 2 kolom HP / 3 tablet (md) / 4 laptop (xl) / 5 PC lebar (2xl); Kecil 3/4/6/7, Besar 2/3/3/4. Kartu `w-full min-w-0`, gambar `block w-full h-full object-cover` + lazy. Kontainer produk `min-w-0 overflow-x-hidden`, scroll vertikal saja. Deretan kategori `flex-nowrap overflow-x-auto no-scrollbar touch-pan-x snap-x` (testid `pos-category-scroller`), tombol `shrink-0`.
 - ROOT CAUSE overflow horizontal di HP/tablet: wrapper `Layout.js` (`flex-1` tanpa `min-w-0`) & `<main>` membiarkan konten mendorong lebar halaman (docScrollWidth 937px di layar 390px). Ditambah `min-w-0` pada keduanya. Tidak ada perubahan state/logic/backend.

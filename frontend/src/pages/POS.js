@@ -21,7 +21,7 @@ import { useOffline } from "@/context/OfflineContext";
 import { devWarn } from "@/lib/log";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
-import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square, Hand } from "lucide-react";
+import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square, Hand, Search, X } from "lucide-react";
 
 // Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
 // ternary bersarang di dalam JSX — lebih mudah dibaca & diubah.
@@ -183,6 +183,7 @@ export default function POS() {
   const [debtOpen, setDebtOpen] = useState(false);
   const [pendingOpen, setPendingOpen] = useState(false);
   const [cardSize, setCardSize] = useState(readCardSize);
+  const [query, setQuery] = useState("");
   const [touch, setTouch] = useState(readTouch);
   const baseSize = CARD_SIZES[cardSize] || CARD_SIZES.sedang;
   // Mode sentuh: jumlah kolom TETAP mengikuti pilihan kasir (biar dia bisa
@@ -221,7 +222,11 @@ export default function POS() {
   useRealtimeReload(["stock", "products"], reload);
 
   const active = (products || []).filter((p) => p.active !== false);
-  const shown = active.filter((p) => cat === "all" || p.category === cat);
+  const q = query.trim().toLowerCase();
+  const shown = active.filter((p) =>
+    (cat === "all" || p.category === cat) &&
+    (!q || p.name.toLowerCase().includes(q) || (CATEGORY_LABELS[p.category] || "").toLowerCase().includes(q))
+  );
 
   const total = useMemo(() => cart.reduce((s, i) => s + i.qty * i.price, 0), [cart]);
 
@@ -320,6 +325,24 @@ export default function POS() {
             </Button>
           </div>
         )}
+        <div className="relative pb-2 min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 -mt-1 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <Input
+            data-testid="pos-search-input" type="text" inputMode="search" autoComplete="off"
+            placeholder="Cari produk… (mis. dada, ceker, broiler)"
+            value={query} onChange={(e) => setQuery(e.target.value)}
+            className={`pl-9 pr-9 ${tcls(touch, "h-12 text-base", "h-10 text-sm")}`}
+          />
+          {query && (
+            <button
+              type="button" data-testid="pos-search-clear" aria-label="Hapus pencarian"
+              onClick={() => setQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 -mt-1 w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-accent"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
         <div className="flex items-center gap-2 pb-2 min-w-0">
           <div
             data-testid="pos-category-scroller"
@@ -343,6 +366,16 @@ export default function POS() {
         <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden no-scrollbar" data-testid="pos-product-scroll">
           {/* Kartu dipadatkan & ukurannya bisa dipilih kasir (kecil/sedang/besar). */}
           <div className={`grid w-full ${size.grid} pb-24 lg:pb-1`} data-testid="pos-product-grid">
+            {shown.length === 0 && (
+              <div data-testid="pos-search-empty" className="col-span-full py-10 text-center text-sm text-muted-foreground">
+                Tidak ada produk yang cocok{q ? ` untuk "${query.trim()}"` : ""}.
+                {q && (
+                  <button type="button" onClick={() => setQuery("")} className="ml-1 text-primary font-semibold underline-offset-2 hover:underline">
+                    Hapus pencarian
+                  </button>
+                )}
+              </div>
+            )}
             {shown.map((p) => (
               <button key={p.id} data-testid={`pos-product-${p.id}`} onClick={() => setEntry(p)}
                 className="w-full min-w-0 flex flex-col text-left bg-card border border-border rounded-lg overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
