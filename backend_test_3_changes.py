@@ -5,7 +5,7 @@ Test 3 perubahan backend baru untuk Berkah Ayam Mili (2026-08-30):
 2. Pengeluaran per akun (kasir hanya lihat milik sendiri, owner lihat semua)
 3. Laporan bulanan baru /api/reports/monthly & /api/reports/monthly/pdf
 
-Backend URL: https://github-deploy-app-4.preview.emergentagent.com/api
+Backend URL: https://clone-dev-preview-1.preview.emergentagent.com/api
 Credentials:
 - Owner: shezrofenia18@gmail.com / berkahayam1
 - Kasir: kasir@berkahayam.com / kasir123
@@ -16,7 +16,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
+BASE_URL = "https://clone-dev-preview-1.preview.emergentagent.com/api"
 
 # ============================================================================
 # Helper Functions

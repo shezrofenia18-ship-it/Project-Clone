@@ -24,7 +24,7 @@ import json
 from typing import Dict, List, Any
 
 # Backend URL from frontend/.env
-BASE_URL = "https://github-deploy-app-4.preview.emergentagent.com/api"
+BASE_URL = "https://clone-dev-preview-1.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 OWNER_CREDS = {"username": "owner", "password": "berkahayam1"}

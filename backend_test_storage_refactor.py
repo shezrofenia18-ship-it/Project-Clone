@@ -23,7 +23,7 @@ from pathlib import Path
 import requests
 from PIL import Image
 
-BASE = "https://github-deploy-app-4.preview.emergentagent.com/api"
+BASE = "https://clone-dev-preview-1.preview.emergentagent.com/api"
 
 # Kredensial (login pakai USERNAME, bukan email)
 CREDS = {

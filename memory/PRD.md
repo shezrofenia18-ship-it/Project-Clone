@@ -523,3 +523,10 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
   Aksi (Ubah/Nonaktifkan/Hapus), baris sendiri bertanda "(Anda)" dengan tombol destruktif mati.
 - Frontend keypad/ukuran kartu diuji agent: 9/9 PASS (uji frontend untuk fitur ini diserahkan
   ke owner atas permintaannya).
+
+## Environment restore (2026-09-03)
+- Repo `shezrofenia18-ship-it/Project-Clone` tersambung; local `main` == `origin/main` (HEAD f50360d "Update requirements.txt"), git pull -> Already up to date.
+- Dependencies diinstall ulang: pip -r backend/requirements.txt (reportlab sempat hilang) + yarn install 945 paket (perlu hapus node_modules/global-prefix karena error EEXIST symlink lalu install sukses).
+- CATATAN: frontend TIDAK punya script `dev`; scripts = start/build/test (craco). Live preview dijalankan supervisor via `yarn start` (HOST 0.0.0.0 PORT 3000). npm tidak dipakai (yarn adalah package manager proyek).
+- backend & frontend RUNNING, login owner -> Dashboard Owner OK, WebSocket ONLINE/LIVE OK.
+- `memory/test_credentials.md` dibuat ulang (owner/berkahayam1, admin/admin123, kasir/kasir123).
