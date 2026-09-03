@@ -125,7 +125,7 @@ export default function Layout({ children }) {
         </div>
       </aside>
 
-      <div className="flex-1 lg:pl-64 flex flex-col min-h-screen">
+      <div className="flex-1 min-w-0 lg:pl-64 flex flex-col min-h-screen">
         {/* top bar */}
         <header className="sticky top-0 z-20 h-16 border-b border-border bg-card/80 backdrop-blur-xl flex items-center justify-between px-4 lg:px-6">
           <div className="flex items-center gap-3">
@@ -238,7 +238,7 @@ export default function Layout({ children }) {
           </div>
         </header>
 
-        <main className="flex-1 p-4 lg:p-6">{children}</main>
+        <main className="flex-1 min-w-0 p-4 lg:p-6">{children}</main>
       </div>
 
       {pendingOpen && <PendingSales onClose={() => setPendingOpen(false)} />}

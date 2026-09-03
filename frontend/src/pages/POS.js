@@ -63,15 +63,15 @@ const CATS = ["all", "broiler", "kampung", "pejantan", "fillet", "potongan", "sa
 const CARD_SIZE_KEY = "bam_pos_card_size";
 const CARD_SIZES = {
   kecil: {
-    grid: "grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 2xl:grid-cols-8 gap-1.5",
+    grid: "grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-7 gap-2",
     pad: "px-1.5 py-1", name: "text-[11px]", price: "text-[11px]", stock: "text-[9px]",
   },
   sedang: {
-    grid: "grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6 gap-2",
+    grid: "grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2 sm:gap-3",
     pad: "px-2 py-1.5", name: "text-[13px]", price: "text-[13px]", stock: "text-[10px]",
   },
   besar: {
-    grid: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3",
+    grid: "grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-3",
     pad: "px-3 py-2", name: "text-sm", price: "text-sm", stock: "text-[11px]",
   },
 };
@@ -296,7 +296,7 @@ export default function POS() {
     <TouchCtx.Provider value={touch}>
     <div className="bam-fade -m-4 lg:-m-6 h-[calc(100vh-4rem)] flex flex-col lg:flex-row">
       {/* products */}
-      <div className="flex-1 flex flex-col min-h-0 p-3 lg:p-4">
+      <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden p-3 lg:p-4">
         {(!online || pending > 0) && (
           <div
             data-testid="pos-offline-banner"
@@ -320,11 +320,15 @@ export default function POS() {
             </Button>
           </div>
         )}
-        <div className="flex items-center gap-2 pb-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar min-w-0 flex-1">
+        <div className="flex items-center gap-2 pb-2 min-w-0">
+          <div
+            data-testid="pos-category-scroller"
+            className="flex flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden no-scrollbar min-w-0 flex-1 touch-pan-x snap-x -mx-1 px-1"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
             {CATS.map((c) => (
               <button key={c} data-testid={`pos-cat-${c}`} onClick={() => setCat(c)}
-                className={`rounded-full font-semibold whitespace-nowrap transition-colors ${
+                className={`shrink-0 snap-start rounded-full font-semibold whitespace-nowrap transition-colors ${
                   tcls(touch, "px-5 h-12 text-base", "px-3 h-8 text-xs")
                 } ${
                   cat === c ? "bg-primary text-primary-foreground" : "bg-card border border-border hover:bg-accent"
@@ -336,16 +340,16 @@ export default function POS() {
           <TouchToggle value={touch} onChange={setTouch} />
           <CardSizePicker value={cardSize} onChange={setCardSize} />
         </div>
-        <div className="flex-1 overflow-y-auto no-scrollbar">
+        <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden no-scrollbar" data-testid="pos-product-scroll">
           {/* Kartu dipadatkan & ukurannya bisa dipilih kasir (kecil/sedang/besar). */}
-          <div className={`grid ${size.grid} pb-24 lg:pb-1`}>
+          <div className={`grid w-full ${size.grid} pb-24 lg:pb-1`} data-testid="pos-product-grid">
             {shown.map((p) => (
               <button key={p.id} data-testid={`pos-product-${p.id}`} onClick={() => setEntry(p)}
-                className="text-left bg-card border border-border rounded-lg overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
-                <div className="aspect-square bg-muted overflow-hidden">
-                  {p.image_url ? <img src={p.image_url} alt={p.name} className="w-full h-full object-cover" /> : null}
+                className="w-full min-w-0 flex flex-col text-left bg-card border border-border rounded-lg overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
+                <div className="w-full aspect-square bg-muted overflow-hidden">
+                  {p.image_url ? <img src={p.image_url} alt={p.name} className="block w-full h-full object-cover" loading="lazy" /> : null}
                 </div>
-                <div className={size.pad}>
+                <div className={`w-full min-w-0 ${size.pad}`}>
                   <p className={`font-semibold ${size.name} leading-tight truncate`}>{p.name}</p>
                   <p className={`text-primary font-bold ${size.price} leading-tight mt-0.5 tabular truncate`}>
                     {`${formatRupiah(priceOf(p, primaryUnit(p)))}/${primaryUnit(p)}`}
