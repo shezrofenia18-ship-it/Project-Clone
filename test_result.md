@@ -10429,3 +10429,360 @@ agent_communication:
       
       YOU MUST ASK USER BEFORE DOING FRONTEND TESTING
 
+
+#====================================================================================================
+# ITERASI BARU (2026-09-03): Edit Produksi Potong + Penyesuaian Stok Pcs
+#====================================================================================================
+
+user_problem_statement: |
+  Dua pembaruan UI & logika (tanpa mengubah config/package.json):
+  1. Fitur Edit Produksi Potong: tombol + fungsi "Edit" pada setiap baris hasil pemotongan, agar
+     kasir/admin bisa memperbaiki angka yang salah input dan tersimpan kembali. Perubahan HARUS
+     langsung memperbarui total stok terkait.
+  2. Form Penyesuaian Stok: tambah input "Perubahan Pcs (+/-)" di samping Kg & Ekor (untuk produk
+     bersatuan pcs seperti Ati Ampela), tersambung ke logika penyesuaian stok utama.
+  Keputusan user: edit boleh owner+admin+kasir; sumber ayam boleh diganti saat edit; kolom Pcs
+  aktif HANYA bila produk terpilih bersatuan pcs.
+
+backend:
+  - task: "PUT /api/productions/{id} - koreksi produksi potong + penyesuaian stok via selisih"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Endpoint baru update_production. Logika: validasi lewat _validate_production (sama dengan
+          POST), lalu stok digeser sebesar SELISIH:
+          - Sumber sama: delta_ekor = old.input_ekor - new.input_ekor (allow_negative=True).
+          - Sumber diganti: stok ekor sumber lama dikembalikan penuh (+old), sumber baru dikurangi
+            penuh (-new).
+          - Output pcs: per produk delta = new_pcs - old_pcs (via _pcs_map), termasuk bagian yang
+            dihapus (delta negatif) atau bagian baru (delta positif). Delta 0 tidak menghasilkan
+            movement.
+          material_value dihitung ulang = input_ekor x hpp_ekor sumber baru. Menyimpan updated_by /
+          updated_at, tanggal & operator lama dipertahankan bila body kosong. Activity "Produksi
+          Potong Dikoreksi" + audit log update (before/after) + rt_emit.
+          RBAC: owner/admin/kasir. Juga menambah rt_emit pada POST /productions.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (A1-A6: 6/6)
+          
+          Test file: /app/backend_test_edit_production.py
+          Backend URL: https://clone-dev-preview-1.preview.emergentagent.com/api
+          Credentials: owner/berkahayam1, admin/admin123, kasir/kasir123
+          
+          === TEST RESULTS ===
+          
+          A1. Create Production + Edit (Increase Input, Change Output Pcs) ✅
+          - Created production: Ayam Broiler 5 ekor -> Dada 10 pcs, Paha 10 pcs
+          - Stock after create: Source -5 ekor, Dada +10 pcs, Paha +10 pcs ✅
+          - Edited: input_ekor 5->8, Dada 10->6, Paha 10->15
+          - CRITICAL VERIFICATION (DELTA from after_create):
+            * Source ekor: -3 (expected -3) ✅
+            * Dada pcs: -4 (expected -4) ✅
+            * Paha pcs: +5 (expected +5) ✅
+          - Response fields: updated_at, updated_by, source_name, material_value ✅
+          - STOK BERUBAH SEBESAR SELISIH, BUKAN DOBEL/RESET ✅
+          
+          A2. Edit Production - Remove One Output ✅
+          - Created: Ayam Kampung 3 ekor -> Ceker 6 pcs, Kepala 6 pcs
+          - Stock after create: Ceker +6, Kepala +6 ✅
+          - Edited: removed Kepala output (only Ceker remains)
+          - CRITICAL VERIFICATION:
+            * Kepala delta: -6 (expected -6) ✅
+            * Kepala back to before value ✅
+            * Ceker unchanged ✅
+          
+          A3. Edit Production - Change Source Product ✅
+          - Created: Broiler 4 ekor -> Dada 8 pcs
+          - Stock after create: Broiler -4 ekor ✅
+          - Edited: source changed to Pejantan 6 ekor
+          - CRITICAL VERIFICATION:
+            * Broiler delta: +4 (restored full) ✅
+            * Pejantan delta: -6 (deducted full) ✅
+            * Broiler back to before value ✅
+          
+          A4. Edit Production - Error Cases ✅
+          - Invalid ID: 404 ✅
+          - input_ekor=0: 400 ✅
+          - outputs all pcs=0: 400 ✅
+          - Invalid output product_id: 404 ✅
+          - No token: 401 ✅
+          
+          A5. Edit Production - RBAC ✅
+          - owner can PUT: 200 ✅
+          - admin can PUT: 200 ✅
+          - kasir can PUT: 200 ✅
+          
+          A6. Edit Production - Stock Movements & Audit Logs ✅
+          - Stock movements found: type='produksi', ref=production_id ✅
+          - Audit log found: action='update', entity='production' ✅
+          - Audit log has before/after data ✅
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ STOK ADJUSTMENT VIA SELISIH BEKERJA SEMPURNA
+          - Tidak ada dobel/reset stok
+          - Semua delta dihitung dengan benar (selisih old vs new)
+          - Menghapus output: stok kembali penuh (delta negatif)
+          - Mengganti sumber: sumber lama dikembalikan, sumber baru dikurangi
+          - Response fields lengkap (updated_at, updated_by, source_name, material_value)
+          - Stock movements dan audit logs tercatat dengan benar
+          - RBAC enforced: owner/admin/kasir semua boleh PUT
+          - Error handling bekerja sempurna (404, 400, 401)
+          
+          ✅ TIDAK ADA BUG DITEMUKAN
+          - Semua 6 test scenarios passed
+          - Semua endpoint mengembalikan status code yang benar
+          - Semua perhitungan stok akurat
+          - Tidak ada regresi
+          
+          === CONCLUSION ===
+          
+          PUT /api/productions/{id} FULLY WORKING.
+          Stok adjustment via SELISIH (bukan dobel/reset) terverifikasi sempurna.
+          Backend production edit feature PRODUCTION-READY.
+  - task: "POST /api/stock-adjustments - dukungan delta_pcs"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          AdjustBody + field delta_pcs (default 0), diteruskan ke apply_stock(delta_pcs=...) dan
+          dicatat di audit log. Guard baru: (a) 400 bila delta_pcs != 0 tapi produk tidak punya
+          satuan "pcs"; (b) 400 bila kg, ekor, dan pcs semuanya 0.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (B1-B5: 5/5)
+          
+          Test file: /app/backend_test_edit_production.py
+          
+          === TEST RESULTS ===
+          
+          B1. Stock Adjustment - delta_pcs Positive ✅
+          - Product: Ati Ampela (units=['kg', 'pcs'])
+          - Stock before: 78.0 pcs
+          - Adjustment: delta_pcs +7
+          - Stock after: 85.0 pcs (delta: +7) ✅
+          - Stock movement: qty_pcs=7.0, after_pcs=85.0 ✅
+          
+          B2. Stock Adjustment - delta_pcs Negative ✅
+          - Product: Ati Ampela
+          - Stock before: 85.0 pcs
+          - Adjustment: delta_pcs -3
+          - Stock after: 82.0 pcs (delta: -3) ✅
+          - Negative values allowed (allow_negative=True) ✅
+          
+          B3. Stock Adjustment - Combined Deltas (kg + ekor + pcs) ✅
+          - Product: Ati Ampela (units=['kg', 'pcs'])
+          - Stock before: kg=11.0, ekor=2.0, pcs=82.0
+          - Adjustment: delta_kg=2.5, delta_ekor=1, delta_pcs=5
+          - Stock after: kg=13.5 (+2.5), ekor=3.0 (+1.0), pcs=87.0 (+5.0) ✅
+          - All deltas applied correctly ✅
+          
+          B4. Stock Adjustment - Error Cases ✅
+          - delta_pcs on non-pcs product (Ayam Broiler): 400 ✅
+          - Error message: "tidak memakai satuan pcs" ✅
+          - All deltas=0: 400 ✅
+          - Invalid type: 400 ✅
+          - No token: 401 ✅
+          
+          B5. Stock Adjustment - Backward Compatibility ✅
+          - Product: Ayam Broiler (units=['kg', 'ekor'])
+          - Adjustment WITHOUT delta_pcs field (old format)
+          - Body: {delta_kg: 1.5, delta_ekor: 1, reason: "...", type: "penyesuaian"}
+          - Stock after: kg +1.5, ekor +1 ✅
+          - Old format still works perfectly ✅
+          
+          === CRITICAL FINDINGS ===
+          
+          ✅ DELTA_PCS SUPPORT FULLY WORKING
+          - Positive delta: stock increases correctly
+          - Negative delta: stock decreases correctly (allow_negative=True)
+          - Combined deltas: kg + ekor + pcs all applied correctly
+          - Validation: 400 bila delta_pcs != 0 pada produk tanpa satuan pcs
+          - Validation: 400 bila semua delta = 0
+          - Stock movements: qty_pcs dan after_pcs tercatat dengan benar
+          - Backward compatibility: body lama (tanpa delta_pcs) tetap jalan
+          
+          ✅ TIDAK ADA BUG DITEMUKAN
+          - Semua 5 test scenarios passed
+          - Semua validasi bekerja dengan benar
+          - Error messages jelas dan informatif
+          - Tidak ada regresi pada adjustment kg/ekor lama
+          
+          === CONCLUSION ===
+          
+          POST /api/stock-adjustments dengan delta_pcs FULLY WORKING.
+          Backward compatibility terjaga (body lama tetap jalan).
+          Backend stock adjustment pcs feature PRODUCTION-READY.
+
+frontend:
+  - task: "Tombol Edit di kartu Produksi Potong + dialog mode koreksi"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Production.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Tombol Edit (data-testid edit-production-{id}) di setiap kartu. ProductionDialog kini
+          menerima prop `initial`: prefill sumber, input_ekor, dan qty pcs tiap bagian; judul "Edit
+          Produksi Potong", banner data asli, ringkasan selisih pcs, tombol "Simpan Perubahan" ->
+          PUT /productions/{id}. Kartu yang pernah dikoreksi menampilkan label "sudah dikoreksi".
+  - task: "Input Perubahan Pcs (+/-) di modal Penyesuaian Stok + qty pcs di tabel pergerakan"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Stock.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Grid jadi 3 kolom: Kg / Ekor / Pcs (data-testid adj-pcs, adj-ekor). Kolom Pcs disabled bila
+          produk terpilih tidak bersatuan pcs + hint teks. Tabel Pergerakan Stok menampilkan qty pcs
+          dan kolom "Stok Sesudah" memakai after_pcs untuk pergerakan pcs.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 0
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "PUT /api/productions/{id} - koreksi produksi potong + penyesuaian stok via selisih"
+    - "POST /api/stock-adjustments - dukungan delta_pcs"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Tolong uji BACKEND saja (frontend belum diizinkan user).
+      Kredensial ada di /app/memory/test_credentials.md (login pakai USERNAME):
+      owner/berkahayam1, admin/admin123, kasir/kasir123.
+
+      A. PUT /api/productions/{id}
+      1. Buat produksi baru via POST /api/productions (sumber ayam broiler/kampung/pejantan,
+         input_ekor mis. 5, outputs 2 bagian mis. Dada & Paha masing-masing 10 pcs).
+         Catat stok_ekor sumber & stock_pcs kedua produk output SEBELUM & SESUDAH.
+      2. PUT produksi tsb dengan input_ekor DINAIKKAN (5 -> 8) dan pcs salah satu bagian
+         DITURUNKAN (10 -> 6), bagian lain dinaikkan (10 -> 15).
+         VERIFIKASI: stok ekor sumber berkurang tepat 3 lagi; stock_pcs bagian pertama -4;
+         bagian kedua +5. TIDAK boleh dobel/reset.
+      3. PUT lagi dengan MENGHAPUS satu bagian (kirim outputs hanya 1 bagian).
+         VERIFIKASI: stock_pcs bagian yang dihapus kembali ke nilai sebelum produksi (delta negatif
+         penuh).
+      4. PUT dengan MENGGANTI produk sumber ke ayam lain: stok ekor sumber lama harus KEMBALI penuh
+         (+input lama), sumber baru berkurang penuh (-input baru).
+      5. Cek respons: field updated_at/updated_by ada, source_name & material_value ikut berubah,
+         date & operator lama TIDAK hilang.
+      6. Error cases: PUT id ngawur -> 404; input_ekor 0 -> 400; outputs semua 0 -> 400;
+         product_id output ngawur -> 404; tanpa token -> 401/403.
+      7. RBAC: kasir & admin JUGA boleh PUT (200).
+      8. Cek GET /api/stock-movements: ada movement type "produksi" untuk koreksi tsb, dan
+         GET /api/audit-logs punya entry action "update" entity "production".
+
+      B. POST /api/stock-adjustments dengan delta_pcs
+      1. Ambil produk bersatuan pcs (units berisi "pcs", mis. Ati Ampela / bagian potongan).
+         Kirim delta_pcs +7 -> 200, stock_pcs naik 7, movement qty_pcs +7 & after_pcs benar.
+      2. Kirim delta_pcs -3 -> stock_pcs turun 3 (boleh sampai negatif, allow_negative=True).
+      3. Kombinasi delta_kg + delta_ekor + delta_pcs sekaligus pada produk yang punya ketiganya
+         (kalau ada) -> semua ikut berubah.
+      4. delta_pcs != 0 pada produk TANPA satuan pcs (mis. Ayam Broiler) -> 400 dengan pesan
+         "tidak memakai satuan pcs".
+      5. Semua delta 0 -> 400. Jenis penyesuaian ngawur -> 400. Tanpa token -> 401/403.
+      6. Regresi: penyesuaian kg/ekor lama (tanpa field delta_pcs sama sekali di body) HARUS tetap
+         jalan seperti sebelumnya.
+
+      C. Regresi singkat: GET /api/products, /api/productions, /api/stock-movements, POST penjualan
+         + cancel masih normal (tidak ada 500). Cek /var/log/supervisor/backend.err.log bersih.
+
+      DON'T: jangan ubah kode aplikasi, jangan ubah .env, jangan hapus data produksi lama milik
+      demo lebih dari yang kamu buat sendiri.
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (12/12)
+      
+      Test file: /app/backend_test_edit_production.py
+      Test duration: ~60 seconds
+      
+      === SUMMARY ===
+      
+      ✅ A. PUT /api/productions/{id} (6/6 tests passed)
+      - A1: Create + Edit (increase input, change output pcs) ✅
+      - A2: Edit - Remove one output ✅
+      - A3: Edit - Change source product ✅
+      - A4: Error cases (404, 400, 401) ✅
+      - A5: RBAC (owner/admin/kasir all can PUT) ✅
+      - A6: Stock movements & audit logs ✅
+      
+      ✅ B. POST /api/stock-adjustments delta_pcs (5/5 tests passed)
+      - B1: delta_pcs positive (+7) ✅
+      - B2: delta_pcs negative (-3) ✅
+      - B3: Combined deltas (kg + ekor + pcs) ✅
+      - B4: Error cases (400, 401) ✅
+      - B5: Backward compatibility (old format without delta_pcs) ✅
+      
+      ✅ C. Regression (1/1 test passed)
+      - GET /api/products: 200 (14 products) ✅
+      - GET /api/productions: 200 (7 productions) ✅
+      - GET /api/stock-movements: 200 (33 movements) ✅
+      - POST /api/sales: 200, stock decreased correctly ✅
+      - POST /api/sales/{id}/cancel: 200, stock restored ✅
+      - Backend logs: clean (only reload warnings, no errors) ✅
+      
+      === CRITICAL VERIFICATION ===
+      
+      🔍 STOK ADJUSTMENT VIA SELISIH (BUKAN DOBEL/RESET):
+      - Test A1: input_ekor 5->8 = stok -3 lagi (bukan -8 total) ✅
+      - Test A1: Dada 10->6 = stok -4 (bukan -6 total) ✅
+      - Test A1: Paha 10->15 = stok +5 (bukan +15 total) ✅
+      - Test A2: Hapus output = stok kembali penuh (delta negatif) ✅
+      - Test A3: Ganti sumber = sumber lama +4, sumber baru -6 ✅
+      
+      🔍 DELTA_PCS SUPPORT:
+      - Test B1: delta_pcs +7 = stock_pcs naik 7 ✅
+      - Test B2: delta_pcs -3 = stock_pcs turun 3 ✅
+      - Test B3: Kombinasi kg+ekor+pcs = semua berubah ✅
+      - Test B4: delta_pcs pada non-pcs product = 400 ✅
+      - Test B5: Body lama (tanpa delta_pcs) = tetap jalan ✅
+      
+      === TIDAK ADA BUG DITEMUKAN ===
+      
+      - Semua endpoint mengembalikan status code yang benar
+      - Semua perhitungan stok akurat (selisih, bukan dobel/reset)
+      - Semua validasi bekerja (400 untuk input invalid)
+      - RBAC enforced (owner/admin/kasir boleh PUT)
+      - Stock movements dan audit logs tercatat dengan benar
+      - Backward compatibility terjaga (body lama tetap jalan)
+      - Tidak ada regresi pada endpoint lain
+      - Backend logs bersih (tidak ada traceback/error)
+      
+      === CONCLUSION ===
+      
+      KEDUA FITUR BARU FULLY WORKING DAN PRODUCTION-READY:
+      1. PUT /api/productions/{id} - Edit produksi dengan stok adjustment via SELISIH ✅
+      2. POST /api/stock-adjustments - Dukungan delta_pcs ✅
+      
+      Semua 12 test scenarios passed. Tidak ada bug. Tidak ada regresi.
+      Backend siap untuk testing frontend (bila user mengizinkan).

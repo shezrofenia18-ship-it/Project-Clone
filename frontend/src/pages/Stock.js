@@ -77,8 +77,8 @@ export default function Stock() {
                     <td className="px-4 py-2.5 text-muted-foreground">{formatDate(m.created_at)} {formatTime(m.created_at)}</td>
                     <td className="px-4 py-2.5 font-medium">{m.product_name}</td>
                     <td className="px-4 py-2.5"><Badge className={MOVE_TONE[m.type] || "bg-muted text-foreground"}>{MOVE_LABELS[m.type] || m.type}</Badge></td>
-                    <td className="px-4 py-2.5 text-right tabular">{m.qty_kg ? `${m.qty_kg > 0 ? "+" : ""}${formatWeight(m.qty_kg, 3)}` : ""}{m.qty_ekor ? ` ${m.qty_ekor > 0 ? "+" : ""}${m.qty_ekor} ekor` : ""}</td>
-                    <td className="px-4 py-2.5 text-right tabular">{formatWeight(m.after_kg)}</td>
+                    <td className="px-4 py-2.5 text-right tabular">{m.qty_kg ? `${m.qty_kg > 0 ? "+" : ""}${formatWeight(m.qty_kg, 3)}` : ""}{m.qty_ekor ? ` ${m.qty_ekor > 0 ? "+" : ""}${m.qty_ekor} ekor` : ""}{m.qty_pcs ? ` ${m.qty_pcs > 0 ? "+" : ""}${formatNumber(m.qty_pcs)} pcs` : ""}</td>
+                    <td className="px-4 py-2.5 text-right tabular">{m.qty_pcs && !m.qty_kg ? `${formatNumber(m.after_pcs)} pcs` : formatWeight(m.after_kg)}</td>
                     <td className="px-4 py-2.5 text-muted-foreground">{m.user}</td>
                   </tr>
                 ))}
@@ -93,13 +93,24 @@ export default function Stock() {
 }
 
 function AdjustDialog({ products, onClose, onSaved }) {
-  const [f, setF] = useState({ product_id: "", delta_kg: 0, delta_ekor: 0, type: "penyesuaian", reason: "" });
+  const [f, setF] = useState({ product_id: "", delta_kg: 0, delta_ekor: 0, delta_pcs: 0, type: "penyesuaian", reason: "" });
   const [busy, setBusy] = useState(false);
+  // Kolom Pcs hanya relevan untuk produk bersatuan pcs (mis. Ati Ampela).
+  const sel = products.find((p) => p.id === f.product_id);
+  const pcsOk = !!(sel?.units || []).includes("pcs");
+  const pickProduct = (v) => {
+    const p = products.find((x) => x.id === v);
+    const ok = !!(p?.units || []).includes("pcs");
+    setF((prev) => ({ ...prev, product_id: v, delta_pcs: ok ? prev.delta_pcs : 0 }));
+  };
   const save = async () => {
     if (!f.product_id || !f.reason) return toast.error("Lengkapi produk & alasan");
+    const d_kg = Number(f.delta_kg) || 0, d_ekor = Number(f.delta_ekor) || 0;
+    const d_pcs = pcsOk ? (Number(f.delta_pcs) || 0) : 0;
+    if (!d_kg && !d_ekor && !d_pcs) return toast.error("Isi minimal satu perubahan (kg, ekor, atau pcs)");
     setBusy(true);
     try {
-      await api.post("/stock-adjustments", { ...f, delta_kg: Number(f.delta_kg), delta_ekor: Number(f.delta_ekor) });
+      await api.post("/stock-adjustments", { ...f, delta_kg: d_kg, delta_ekor: d_ekor, delta_pcs: d_pcs });
       toast.success("Penyesuaian tersimpan"); onSaved();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
@@ -109,7 +120,7 @@ function AdjustDialog({ products, onClose, onSaved }) {
         <DialogHeader><DialogTitle>Penyesuaian Stok</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div><Label className="text-xs">Produk</Label>
-            <Select value={f.product_id} onValueChange={(v) => setF({ ...f, product_id: v })}>
+            <Select value={f.product_id} onValueChange={pickProduct}>
               <SelectTrigger data-testid="adj-product" className="mt-1"><SelectValue placeholder="Pilih produk" /></SelectTrigger>
               <SelectContent className="bg-popover">{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
             </Select>
@@ -123,10 +134,20 @@ function AdjustDialog({ products, onClose, onSaved }) {
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div><Label className="text-xs">Perubahan Kg (+/-)</Label><Input data-testid="adj-kg" type="number" value={f.delta_kg} onChange={(e) => setF({ ...f, delta_kg: e.target.value })} className="mt-1 tabular" /></div>
-            <div><Label className="text-xs">Perubahan Ekor (+/-)</Label><Input type="number" value={f.delta_ekor} onChange={(e) => setF({ ...f, delta_ekor: e.target.value })} className="mt-1 tabular" /></div>
+            <div><Label className="text-xs">Perubahan Ekor (+/-)</Label><Input data-testid="adj-ekor" type="number" value={f.delta_ekor} onChange={(e) => setF({ ...f, delta_ekor: e.target.value })} className="mt-1 tabular" /></div>
+            <div>
+              <Label className={`text-xs ${pcsOk ? "" : "text-muted-foreground"}`}>Perubahan Pcs (+/-)</Label>
+              <Input data-testid="adj-pcs" type="number" disabled={!pcsOk} value={f.delta_pcs}
+                onChange={(e) => setF({ ...f, delta_pcs: e.target.value })}
+                title={pcsOk ? "" : "Produk ini tidak memakai satuan pcs"}
+                className="mt-1 tabular disabled:opacity-50 disabled:cursor-not-allowed" />
+            </div>
           </div>
+          {f.product_id && !pcsOk && (
+            <p className="text-[11px] text-muted-foreground">Produk ini tidak memakai satuan pcs, jadi kolom Pcs dinonaktifkan.</p>
+          )}
           <div><Label className="text-xs">Alasan</Label><Input data-testid="adj-reason" value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} className="mt-1" /></div>
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-adjustment" disabled={busy} onClick={save}>Simpan</Button></DialogFooter>

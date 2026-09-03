@@ -10,14 +10,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatNumber, formatDate } from "@/lib/format";
-import { Plus } from "lucide-react";
+import { Plus, Pencil } from "lucide-react";
 
 export default function Production() {
   const { data, reload } = useFetch("/productions");
-  const { data: products } = useFetch("/products");
+  const { data: products, reload: reloadProducts } = useFetch("/products");
   const source = (products || []).filter((p) => ["broiler", "kampung", "pejantan"].includes(p.category));
   const outs = (products || []).filter((p) => ["fillet", "potongan", "sampingan"].includes(p.category));
   const [open, setOpen] = useState(false);
+  // Baris produksi yang sedang dikoreksi (null = tidak ada).
+  const [edit, setEdit] = useState(null);
+
+  const afterSave = () => { setOpen(false); setEdit(null); reload(); reloadProducts(); };
 
   return (
     <div className="bam-fade">
@@ -29,9 +33,18 @@ export default function Production() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="font-semibold">{p.source_name} · Input {formatNumber(p.input_ekor)} ekor</p>
-                <p className="text-xs text-muted-foreground">{formatDate(p.date)} · Operator {p.operator}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatDate(p.date)} · Operator {p.operator}
+                  {p.updated_at && <span className="text-warning"> · sudah dikoreksi</span>}
+                </p>
               </div>
-              <div className="text-right"><p className="text-xs text-muted-foreground">Nilai Ayam</p><p className="font-bold tabular">{formatRupiah(p.material_value ?? p.total_cost)}</p></div>
+              <div className="flex items-center gap-3">
+                <div className="text-right"><p className="text-xs text-muted-foreground">Nilai Ayam</p><p className="font-bold tabular">{formatRupiah(p.material_value ?? p.total_cost)}</p></div>
+                <Button variant="outline" size="sm" data-testid={`edit-production-${p.id}`}
+                  onClick={() => setEdit(p)}>
+                  <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                </Button>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2 mt-3">
               {(p.outputs || []).map((o, i) => <span key={`${o.product_id}-${i}`} className="text-xs px-2.5 py-1 rounded-full bg-accent tabular">{o.name}: {formatNumber(o.pcs)} pcs</span>)}
@@ -40,7 +53,8 @@ export default function Production() {
         ))}
         {(data || []).length === 0 && <Card className="p-8 text-center text-muted-foreground">Belum ada produksi.</Card>}
       </div>
-      {open && <ProductionDialog source={source} outs={outs} onClose={() => setOpen(false)} onSaved={() => { setOpen(false); reload(); }} />}
+      {open && <ProductionDialog source={source} outs={outs} onClose={() => setOpen(false)} onSaved={afterSave} />}
+      {edit && <ProductionDialog initial={edit} source={source} outs={outs} onClose={() => setEdit(null)} onSaved={afterSave} />}
     </div>
   );
 }
@@ -51,42 +65,68 @@ const OUT_GROUPS = [
   { key: "sampingan", label: "Sampingan" },
 ];
 
-function ProductionDialog({ source, outs, onClose, onSaved }) {
-  const [f, setF] = useState({ source_product_id: "", input_ekor: 0 });
+function ProductionDialog({ initial, source, outs, onClose, onSaved }) {
+  // initial terisi -> mode KOREKSI data lama (PUT), kosong -> produksi baru (POST)
+  const isEdit = !!initial;
+  const [f, setF] = useState(() => ({
+    source_product_id: initial?.source_product_id || "",
+    input_ekor: initial?.input_ekor ?? 0,
+  }));
   // Semua bagian langsung tampil; kasir hanya mengisi jumlah pcs.
   // Bentuknya { [product_id]: "12" } supaya tidak perlu tambah/hapus baris.
-  const [qty, setQty] = useState({});
+  const [qty, setQty] = useState(() => {
+    const q = {};
+    (initial?.outputs || []).forEach((o) => { q[o.product_id] = String(o.pcs ?? ""); });
+    return q;
+  });
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setQ = (id, v) => setQty((p) => ({ ...p, [id]: v.replace(/[^0-9]/g, "") }));
 
   const filled = outs.filter((p) => Number(qty[p.id]) > 0);
   const totalPcs = filled.reduce((s, p) => s + Number(qty[p.id]), 0);
+  const oldPcs = (initial?.outputs || []).reduce((s, o) => s + Number(o.pcs || 0), 0);
 
   const save = async () => {
     if (!f.source_product_id || !Number(f.input_ekor)) return toast.error("Lengkapi sumber & jumlah ayam");
     if (!filled.length) return toast.error("Isi jumlah pcs minimal satu bagian");
     setBusy(true);
     try {
-      await api.post("/productions", {
+      const payload = {
         source_product_id: f.source_product_id,
         input_ekor: Number(f.input_ekor),
         outputs: filled.map((p) => ({ product_id: p.id, pcs: Number(qty[p.id]) })),
-      });
-      toast.success("Produksi tersimpan"); onSaved();
+      };
+      if (isEdit) {
+        // Tanggal & operator asli dipertahankan; stok disesuaikan server via selisih.
+        await api.put(`/productions/${initial.id}`, { ...payload, date: initial.date, operator: initial.operator || "" });
+        toast.success("Produksi diperbarui, stok disesuaikan");
+      } else {
+        await api.post("/productions", payload);
+        toast.success("Produksi tersimpan");
+      }
+      onSaved();
     } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="bg-popover max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent data-testid="production-dialog" className="bg-popover max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Produksi Potong</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit Produksi Potong" : "Produksi Potong"}</DialogTitle>
           <DialogDescription className="text-xs">
-            Isi jumlah pcs pada bagian yang dihasilkan. Bagian yang dibiarkan kosong tidak dicatat.
+            {isEdit
+              ? "Perbaiki angka yang salah input. Stok ayam (ekor) & stok pcs tiap bagian otomatis disesuaikan sebesar selisihnya."
+              : "Isi jumlah pcs pada bagian yang dihasilkan. Bagian yang dibiarkan kosong tidak dicatat."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          {isEdit && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-2.5 text-[11px] tabular">
+              Data asli: {formatNumber(initial.input_ekor)} ekor → {formatNumber(oldPcs)} pcs
+              {" · "}{formatDate(initial.date)}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div><Label className="text-xs">Sumber (ayam)</Label>
               <Select value={f.source_product_id} onValueChange={(v) => set("source_product_id", v)}>
@@ -136,10 +176,14 @@ function ProductionDialog({ source, outs, onClose, onSaved }) {
 
           <div className="rounded-lg bg-accent p-3 text-sm flex justify-between tabular">
             <span>Total Output: {formatNumber(totalPcs)} pcs</span>
-            <span className="text-muted-foreground">{filled.length} bagian</span>
+            <span className="text-muted-foreground">
+              {isEdit && totalPcs !== oldPcs
+                ? `Selisih ${totalPcs > oldPcs ? "+" : ""}${formatNumber(totalPcs - oldPcs)} pcs`
+                : `${filled.length} bagian`}
+            </span>
           </div>
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-production" disabled={busy} onClick={save}>{busy ? "..." : "Simpan"}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Batal</Button><Button data-testid="save-production" disabled={busy} onClick={save}>{busy ? "..." : isEdit ? "Simpan Perubahan" : "Simpan"}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );

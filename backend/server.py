@@ -461,6 +461,9 @@ class AdjustBody(BaseModel):
     product_id: str
     delta_ekor: float = 0
     delta_kg: float = 0
+    # Beberapa produk dijual per PCS (mis. Ati Ampela), jadi penyesuaian stok
+    # wajib bisa mengoreksi jumlah pcs juga, bukan hanya kg & ekor.
+    delta_pcs: float = 0
     reason: str
     type: str = "penyesuaian"
 
@@ -981,6 +984,108 @@ async def create_production(body: ProductionBody, user: dict = Depends(require_r
         await apply_stock(products_cache[o.product_id], 0, 0, "produksi", user["name"], pid, delta_pcs=o.pcs)
     await add_activity("production", "Produksi Potong Selesai", f"{source['name']} {body.input_ekor} ekor -> {total_output} pcs", 0, doc["operator"])
     await log_audit(user, "create", "production", pid, None, {"material_value": material_value})
+    await rt_emit(["productions", "stock", "products", "dashboard"], {"id": pid})
+    return clean(doc)
+
+
+async def _validate_production(body: ProductionBody):
+    """Validasi isi form produksi + ambil produk terkait (dipakai create & update)."""
+    source = await db.products.find_one({"id": body.source_product_id})
+    if not source:
+        raise HTTPException(404, "Produk sumber tidak ditemukan")
+    if body.input_ekor <= 0:
+        raise HTTPException(400, "Jumlah ayam harus lebih dari 0")
+    lines = [o for o in body.outputs if o.pcs and o.pcs > 0]
+    if not lines:
+        raise HTTPException(400, "Isi jumlah pcs minimal satu bagian")
+    outputs_out, cache = [], {}
+    for o in lines:
+        op = await db.products.find_one({"id": o.product_id})
+        if not op:
+            raise HTTPException(404, "Produk hasil potong tidak ditemukan")
+        cache[o.product_id] = op
+        outputs_out.append({"product_id": o.product_id, "name": op["name"], "pcs": o.pcs})
+    return source, lines, outputs_out, cache
+
+
+def _num(v) -> str:
+    """1.0 -> "1", 1.5 -> "1.5" (biar teks aktivitas tidak jelek)."""
+    f = float(v or 0)
+    return str(int(f)) if f == int(f) else str(round(f, 2))
+
+
+def _pcs_map(outputs) -> dict:
+    """Kumpulkan total pcs per produk (produk yang sama bisa muncul >1 baris)."""
+    m = {}
+    for o in outputs or []:
+        pid_ = o["product_id"] if isinstance(o, dict) else o.product_id
+        pcs = float((o.get("pcs", 0) if isinstance(o, dict) else o.pcs) or 0)
+        m[pid_] = m.get(pid_, 0) + pcs
+    return m
+
+
+@api.put("/productions/{pid}")
+async def update_production(pid: str, body: ProductionBody,
+                            user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+    """Koreksi data produksi potong yang salah input.
+
+    Stok TIDAK dihitung ulang dari nol, tetapi digeser sebesar SELISIH antara
+    data lama dan data baru, supaya total stok tetap benar dan tercatat rapi di
+    pergerakan stok (allow_negative=True agar koreksi tidak pernah terhalang).
+    Produk sumber juga boleh diganti: stok ekor sumber lama dikembalikan penuh,
+    lalu sumber baru dikurangi penuh.
+    """
+    old = await db.productions.find_one({"id": pid})
+    if not old:
+        raise HTTPException(404, "Data produksi tidak ditemukan")
+    source, lines, outputs_out, cache = await _validate_production(body)
+
+    # ---- selisih stok EKOR di produk sumber ----
+    old_src_id = old.get("source_product_id")
+    old_ekor = float(old.get("input_ekor", 0) or 0)
+    new_ekor = float(body.input_ekor)
+    if old_src_id == body.source_product_id:
+        d_ekor = round(old_ekor - new_ekor, 3)   # input dikurangi -> stok kembali
+        if abs(d_ekor) > 0.0001:
+            await apply_stock(source, d_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+    else:
+        old_src = await db.products.find_one({"id": old_src_id}) if old_src_id else None
+        if old_src and old_ekor:
+            await apply_stock(old_src, old_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+        await apply_stock(source, -new_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+
+    # ---- selisih stok PCS tiap bagian (termasuk bagian yang dihapus/ditambah) ----
+    before_pcs, after_pcs = _pcs_map(old.get("outputs")), _pcs_map(lines)
+    for prod_id in set(before_pcs) | set(after_pcs):
+        d_pcs = round(after_pcs.get(prod_id, 0) - before_pcs.get(prod_id, 0), 3)
+        if abs(d_pcs) < 0.0001:
+            continue
+        p = cache.get(prod_id) or await db.products.find_one({"id": prod_id})
+        if not p:
+            continue
+        await apply_stock(p, 0, 0, "produksi", user["name"], pid, allow_negative=True, delta_pcs=d_pcs)
+
+    total_output = sum(float(o.pcs) for o in lines)
+    material_value = round(new_ekor * float(source.get("hpp_ekor", 0) or 0), 2)
+    upd = {
+        "source_product_id": body.source_product_id, "source_name": source["name"],
+        "date": body.date or old.get("date") or today_str(),
+        "input_ekor": body.input_ekor, "outputs": outputs_out,
+        "material_value": material_value, "total_cost": material_value,
+        "operator": body.operator or old.get("operator") or user["name"],
+        "notes": body.notes or old.get("notes", ""),
+        "updated_by": user["name"], "updated_at": iso_now(),
+    }
+    await db.productions.update_one({"id": pid}, {"$set": upd})
+    doc = await db.productions.find_one({"id": pid})
+    await add_activity("production", "Produksi Potong Dikoreksi",
+                       f"{source['name']} {_num(new_ekor)} ekor -> {_num(total_output)} pcs",
+                       0, upd["operator"])
+    await log_audit(user, "update", "production", pid,
+                    {"source_product_id": old_src_id, "input_ekor": old_ekor, "outputs": old.get("outputs")},
+                    {"source_product_id": body.source_product_id, "input_ekor": body.input_ekor,
+                     "outputs": outputs_out})
+    await rt_emit(["productions", "stock", "products", "dashboard"], {"id": pid})
     return clean(doc)
 
 
@@ -1273,9 +1378,15 @@ async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles
         raise HTTPException(404, "Produk tidak ditemukan")
     if body.type not in ADJUST_TYPES:
         raise HTTPException(400, "Jenis penyesuaian tidak dikenal")
-    await apply_stock(product, body.delta_ekor, body.delta_kg, body.type, user["name"], body.reason, allow_negative=True)
+    if body.delta_pcs and "pcs" not in (product.get("units") or []):
+        raise HTTPException(400, f"{product['name']} tidak memakai satuan pcs")
+    if not (body.delta_kg or body.delta_ekor or body.delta_pcs):
+        raise HTTPException(400, "Isi minimal satu perubahan (kg, ekor, atau pcs)")
+    await apply_stock(product, body.delta_ekor, body.delta_kg, body.type, user["name"], body.reason,
+                      allow_negative=True, delta_pcs=body.delta_pcs)
     await log_audit(user, "adjust", "stock", body.product_id, None,
-                    {"delta_kg": body.delta_kg, "delta_ekor": body.delta_ekor, "reason": body.reason})
+                    {"delta_kg": body.delta_kg, "delta_ekor": body.delta_ekor,
+                     "delta_pcs": body.delta_pcs, "reason": body.reason})
     await add_activity("adjust", "Penyesuaian Stok", f"{product['name']}: {body.reason}", 0, user["name"])
     await rt_emit(["stock", "products", "dashboard"], {"id": body.product_id})
     return {"ok": True}
