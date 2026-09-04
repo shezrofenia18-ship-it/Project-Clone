@@ -103,6 +103,16 @@ mongodump --uri="$MONGO_URL" --db=test_database \
    | `CORS_ORIGINS` | Domain Vercel Anda, mis. `https://berkah-ayam-mili.vercel.app` |
    | `ADMIN_*` | Salin dari `.env` lama |
    | `META_*` / `WA_*` | Salin dari `.env` lama (tetap jalan di hosting mana pun) |
+   | `DISABLE_SEED` | *(opsional, pengaman ganda)* isi `true` untuk memastikan auto-seed data demo mati |
+
+   > 🔒 **Auto-seed data demo DIBLOKIR otomatis di production** (`backend/env_guard.py`).
+   > Railway/Render menyuntikkan `RAILWAY_ENVIRONMENT` / `RENDER` sendiri, dan itu sudah
+   > cukup untuk mematikan seed: produk/pelanggan/penjualan contoh tidak dibuat, produk
+   > potongan yang sudah dihapus tidak hidup lagi, akun demo (admin/kasir/operator/owner2)
+   > tidak dibuat ulang, dan **password owner tidak pernah di-reset**. Satu-satunya penulisan
+   > akun di production: membuat owner utama dari `ADMIN_USERNAME`/`ADMIN_PASSWORD` **hanya
+   > bila akun itu belum ada** (deploy pertama). Untuk hosting lain yang tidak menyuntikkan
+   > variabel tersebut, set `APP_ENV=production` atau `DISABLE_SEED=true`.
 
 4. Setelah live, catat alamat backend-nya (mis. `https://xxx.up.railway.app`).
    Uji cepat: buka `https://xxx.up.railway.app/api/products` — harus meminta login (401), **bukan** error 500.

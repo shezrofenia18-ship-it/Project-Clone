@@ -28,12 +28,15 @@ from auth import (
     get_current_user,
     require_roles,
     seed_admin,
+    ensure_primary_owner,
+    migrate_operator_role,
     drop_legacy_email_index,
     migrate_usernames,
     ensure_user_indexes,
     now_jkt,
 )
 from seed import seed_demo, ensure_potong_parts
+from env_guard import seed_allowed, log_environment
 from realtime import manager as rt_manager, emit as rt_emit, ws_handler
 import whatsapp
 import pdf_reports
@@ -1372,7 +1375,9 @@ async def list_movements(product_id: Optional[str] = None, user: dict = Depends(
 
 
 @api.post("/stock-adjustments")
-async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+async def create_adjustment(body: AdjustBody, user: dict = Depends(require_roles("owner"))):
+    # RBAC: penyesuaian stok HANYA boleh dilakukan owner (admin/kasir -> 403).
+    # Selaras dengan tombol di halaman Stok yang hanya tampil untuk owner.
     product = await db.products.find_one({"id": body.product_id})
     if not product:
         raise HTTPException(404, "Produk tidak ditemukan")
@@ -2885,11 +2890,25 @@ async def startup():
     await db.sales.create_index("txn_id", unique=True, sparse=True)
     await db.sales.create_index("date")
     await db.daily_closings.create_index("date", unique=True)
-    await seed_admin()
-    await seed_demo(db)
-    added = await ensure_potong_parts(db)
-    if added:
-        logger.info("Produk potongan ditambahkan: %s", ", ".join(added))
+
+    # ---- AUTO-SEED: HANYA lokal/preview. Di production (Railway/Render/APP_ENV=
+    # production/DISABLE_SEED=true) SELURUH blok ini dilewati tanpa pengecualian,
+    # supaya produk yang sudah dihapus tidak hidup lagi, gambar produk tidak
+    # tertimpa, dan akun (owner/admin/kasir) tidak ter-reset. Lihat env_guard.py.
+    log_environment()
+    if seed_allowed():
+        await seed_admin()          # reset password owner ke ADMIN_PASSWORD + akun demo
+        await seed_demo(db)         # data contoh (produk, pelanggan, penjualan, dll)
+        added = await ensure_potong_parts(db)
+        if added:
+            logger.info("Produk potongan ditambahkan: %s", ", ".join(added))
+    else:
+        # Production: satu-satunya penulisan akun adalah bootstrap owner utama bila
+        # database belum punya akun owner sama sekali (agar tidak terkunci di luar).
+        if await ensure_primary_owner(reset_password=False):
+            logger.warning("Bootstrap: akun owner utama '%s' dibuat karena belum ada.",
+                           os.environ.get("ADMIN_USERNAME", "owner"))
+        await migrate_operator_role()
     try:
         await migrate_avg_weights()
         await refresh_all_avg_weights()
