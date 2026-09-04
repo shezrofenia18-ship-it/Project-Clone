@@ -13,6 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { formatWeight, formatNumber, CATEGORY_LABELS, formatTime, formatDate } from "@/lib/format";
 import { SlidersHorizontal } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
 
 // "mati" hanya dipertahankan agar riwayat lama tetap terbaca; pilihan barunya
 // adalah "salah_potong" (permintaan owner).
@@ -20,6 +21,10 @@ const MOVE_LABELS = { pembelian: "Pembelian", penjualan: "Penjualan", pemotongan
 const MOVE_TONE = { pembelian: "bg-success/15 text-success", produksi: "bg-success/15 text-success", penjualan: "bg-primary/10 text-primary", retur: "bg-chart-4/10 text-chart-4", pemotongan: "bg-warning/20 text-warning", salah_potong: "bg-destructive/10 text-destructive" };
 
 export default function Stock() {
+  const { user } = useAuth();
+  // RBAC: fitur Penyesuaian Stok HANYA untuk owner. Admin & kasir tidak melihat
+  // tombol maupun modalnya. Logika penyesuaian (AdjustDialog) tidak diubah.
+  const isOwner = user?.role === "owner";
   const { data: products, reload } = useFetch("/products");
   const { data: moves, reload: reloadMoves } = useFetch("/stock-movements");
   const [adj, setAdj] = useState(false);
@@ -39,7 +44,7 @@ export default function Stock() {
     <div className="bam-fade">
       <PageHeader title="Stok Ayam"
         subtitle={`Total stok: ${formatWeight(totalKg)} · ${formatNumber(totalEkor)} ekor`}
-        actions={<Button data-testid="add-adjustment" onClick={() => setAdj(true)}><SlidersHorizontal className="w-4 h-4 mr-1" /> Penyesuaian Stok</Button>} />
+        actions={isOwner ? <Button data-testid="add-adjustment" onClick={() => setAdj(true)}><SlidersHorizontal className="w-4 h-4 mr-1" /> Penyesuaian Stok</Button> : null} />
 
       <Tabs defaultValue="stok">
         <TabsList><TabsTrigger value="stok" data-testid="tab-stok">Stok Saat Ini</TabsTrigger><TabsTrigger value="movement" data-testid="tab-movement">Pergerakan Stok</TabsTrigger></TabsList>
@@ -87,7 +92,7 @@ export default function Stock() {
           </Card>
         </TabsContent>
       </Tabs>
-      {adj && <AdjustDialog products={active} onClose={() => setAdj(false)} onSaved={() => { setAdj(false); reload(); reloadMoves(); }} />}
+      {isOwner && adj && <AdjustDialog products={active} onClose={() => setAdj(false)} onSaved={() => { setAdj(false); reload(); reloadMoves(); }} />}
     </div>
   );
 }

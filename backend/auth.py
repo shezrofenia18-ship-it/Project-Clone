@@ -400,7 +400,17 @@ async def ensure_user_indexes() -> None:
     await db.users.create_index("username", unique=True)
 
 
-async def seed_admin():
+async def ensure_primary_owner(reset_password: bool = False) -> bool:
+    """Pastikan akun owner utama ADA supaya aplikasi selalu bisa dimasuki.
+
+    - Bila akun belum ada -> dibuat dari ADMIN_USERNAME/ADMIN_PASSWORD (bootstrap
+      pertama kali deploy). Ini aman di production karena hanya terjadi saat
+      database benar-benar belum punya owner.
+    - Bila akun sudah ada -> password TIDAK disentuh, kecuali reset_password=True
+      (hanya dipakai di lokal/preview). Di production password yang sudah diganti
+      owner lewat aplikasi tidak akan pernah ter-reset saat restart/redeploy.
+    Mengembalikan True bila akun baru dibuat.
+    """
     admin_username = primary_owner_username()
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing = await db.users.find_one({"username": admin_username})
@@ -413,12 +423,21 @@ async def seed_admin():
             "active": True,
             "created_at": now_jkt().isoformat(),
         })
-    elif not verify_password(admin_password, existing["password_hash"]):
+        return True
+    if reset_password and not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one({"username": admin_username},
                                  {"$set": {"password_hash": hash_password(admin_password), "role": "owner"}})
+    return False
 
-    # Akun demo staf. Username SENGAJA sama dengan hasil migrasi dari email lama
-    # supaya tidak lahir akun kembar. "owner2" karena "owner" dipegang owner utama.
+
+async def seed_demo_users() -> None:
+    """Akun demo staf (admin/kasir/operator/owner2). HANYA untuk lokal/preview.
+
+    JANGAN dipanggil di production: akun yang sudah dihapus owner akan lahir lagi.
+    """
+    admin_username = primary_owner_username()
+    # Username SENGAJA sama dengan hasil migrasi dari email lama supaya tidak
+    # lahir akun kembar. "owner2" karena "owner" dipegang owner utama.
     demo = [
         ("Admin Toko", "admin", "admin123", "admin"),
         ("Kasir Andi", "kasir", "kasir123", "kasir"),
@@ -434,5 +453,16 @@ async def seed_admin():
                 "role": role, "active": True, "created_at": now_jkt().isoformat(),
             })
 
-    # migrate any legacy operator accounts to kasir (role removed)
+
+async def migrate_operator_role() -> None:
+    """Migrasi akun legacy role 'operator' -> 'kasir' (role operator sudah dihapus).
+    Aman di production: hanya mengubah label role, tidak membuat/mereset akun."""
     await db.users.update_many({"role": "operator"}, {"$set": {"role": "kasir"}})
+
+
+async def seed_admin():
+    """Dipertahankan untuk kompatibilitas (tes lama). HANYA untuk lokal/preview:
+    reset password owner ke ADMIN_PASSWORD + buat akun demo."""
+    await ensure_primary_owner(reset_password=True)
+    await seed_demo_users()
+    await migrate_operator_role()
