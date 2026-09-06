@@ -138,61 +138,52 @@ mongodump --uri="$MONGO_URL" --db=test_database \
 
 ---
 
-## Langkah 4 — Nyalakan penyimpanan foto (cukup isi env, TANPA ubah kode)
+## Langkah 4 — Nyalakan penyimpanan foto di Cloudflare R2 (WAJIB untuk foto)
 
-Penyimpanan foto sudah dibuat **portabel**. Backend memilih penyedia sendiri
-saat start, jadi Anda **tidak perlu menyentuh kode** sama sekali.
+Foto produk & bukti pengeluaran **hanya** disimpan di **Cloudflare R2** (S3-compatible,
+lewat `boto3`). Tidak ada lagi penyimpanan ke disk server — disk Railway/Render
+bersifat sementara sehingga foto hilang setiap redeploy. Backend membaca 5 env ini:
 
-Urutan pemilihan otomatis (`STORAGE_BACKEND="auto"`, bawaan):
-
-| Kondisi env | Penyedia terpilih |
+| Variabel | Isi |
 |---|---|
-| `S3_BUCKET` + `S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` terisi | **s3** (Cloudflare R2 / AWS S3) |
-| hanya `EMERGENT_LLM_KEY` terisi | **emergent** (khusus di dalam Emergent) |
-| tidak ada keduanya | **local** (disk server) |
+| `R2_ENDPOINT_URL` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | dari **Manage R2 API Tokens** (izin *Object Read & Write*) |
+| `R2_SECRET_ACCESS_KEY` | dari **Manage R2 API Tokens** |
+| `R2_BUCKET_NAME` | nama bucket, mis. `berkah-ayam-mili` |
+| `R2_PUBLIC_URL_BASE` | domain publik bucket **tanpa** garis miring akhir, mis. `https://pub-xxxx.r2.dev` atau custom domain `https://foto.tokoanda.com` |
 
-Bisa juga dipaksa manual: `STORAGE_BACKEND=s3` / `emergent` / `local`.
+### Langkah di Cloudflare
 
-### Menyalakan Cloudflare R2
+1. Dashboard Cloudflare → **R2** → **Create bucket** (mis. `berkah-ayam-mili`).
+2. Buka bucket → **Settings** → **Public access**: aktifkan **r2.dev subdomain**
+   (atau sambungkan **Custom domain**). Salin URL-nya ke `R2_PUBLIC_URL_BASE`.
+3. **Manage R2 API Tokens** → buat token **Object Read & Write** untuk bucket itu.
+   Salin Access Key ID & Secret Access Key.
+4. Isi kelima variabel di hosting backend, lalu **restart backend**.
 
-1. Dashboard Cloudflare → **R2** → **Create bucket** (mis. `berkah-ayam-mili`)
-2. **Manage R2 API Tokens** → buat token dengan izin **Object Read & Write**
-3. Isi 4 variabel ini di hosting backend Anda:
-   ```
-   S3_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-   S3_BUCKET=berkah-ayam-mili
-   S3_ACCESS_KEY_ID=<dari langkah 2>
-   S3_SECRET_ACCESS_KEY=<dari langkah 2>
-   ```
-4. Restart backend. Selesai.
+### Alur yang terjadi saat owner mengunggah foto
 
-> `S3_REGION` tidak perlu diisi — kode mendeteksi endpoint R2 dan otomatis
-> memakai `auto` (R2 mewajibkan nilai itu).
+1. Berkas dikirim ke R2 dengan **Content-Type asli** (`image/jpeg`, `image/png`, …)
+   yang dideteksi dari isi berkas, sehingga browser langsung merendernya sebagai gambar.
+2. URL publik dibentuk: `R2_PUBLIC_URL_BASE + "/" + berkah-ayam-mili/products/<id>.<ext>`.
+3. URL teks itu disimpan ke field `image_url` produk (atau `proof_url` pengeluaran) di MongoDB.
 
-### Cara memastikan penyedia mana yang aktif
+### Cara memastikan R2 aktif
 
-Saat start, backend mencetak barisnya di log:
+Saat start, backend mencetak di log:
 
 ```
-INFO:berkah:Penyimpanan berkas siap -> s3 (bucket=berkah-ayam-mili, endpoint=https://xxx.r2.cloudflarestorage.com, region=auto)
+INFO:berkah:Penyimpanan foto -> Cloudflare R2 (bucket=berkah-ayam-mili, endpoint=https://xxx.r2.cloudflarestorage.com, public=https://pub-xxxx.r2.dev)
 ```
 
-Kalau kredensial salah, backend **tetap hidup** (kasir masih bisa jualan) tapi
-log akan menulis `Penyimpanan berkas GAGAL disiapkan` — itu petunjuk paling cepat.
-
-> ⚠️ Jangan pakai `local` untuk toko sungguhan di Railway/Render. Disk di sana
-> bersifat sementara: semua foto **hilang** setiap kali aplikasi redeploy.
-
-> **Catatan:** `EMERGENT_LLM_KEY` **bukan** kunci AI. Aplikasi ini tidak punya
-> fitur AI sama sekali (nol library AI diimpor) — kunci itu semata-mata tiket
-> masuk ke object storage Emergent. Anda **tidak perlu** membeli API key
-> OpenAI/Anthropic/Google.
+Bila env belum lengkap, backend **tetap hidup** (kasir masih bisa jualan) tetapi
+upload foto ditolak dengan pesan yang menyebut variabel mana yang kosong. Owner/admin
+juga bisa mengecek `GET /api/storage/status` (tanpa membocorkan kunci).
 
 ### Memindahkan foto lama
 
-Foto yang sudah ada tersimpan di storage Emergent dan tidak ikut pindah otomatis.
-Jumlahnya biasanya sedikit (foto produk & bukti pengeluaran). Cara termudah:
-unggah ulang lewat menu **Produk & Harga** setelah R2 aktif.
+Foto yang dulu tersimpan di disk/Emergent tidak ikut pindah. Unggah ulang lewat
+menu **Produk & Harga** setelah R2 aktif — URL barunya otomatis tersimpan.
 
 ---
 
@@ -204,7 +195,7 @@ unggah ulang lewat menu **Produk & Harga** setelah R2 aktif.
 | `frontend/.env.example` | Template env frontend |
 | `backend/Procfile` | Perintah start untuk Railway/Render/Heroku (memakai `$PORT`) |
 | `backend/runtime.txt` | Menetapkan Python 3.11 |
-| `backend/storage.py` | Lapisan penyimpanan portabel (s3/emergent/local) |
+| `backend/storage.py` | Lapisan penyimpanan foto ke Cloudflare R2 (boto3, tanpa disk lokal) |
 | `frontend/vercel.json` | Build config + rewrite SPA untuk Vercel |
 | `frontend/yarn.lock` | Mengunci versi paket agar build di hosting sama persis |
 
@@ -243,5 +234,5 @@ unggah ulang lewat menu **Produk & Harga** setelah R2 aktif.
 | Tidak bisa konek MongoDB Atlas | IP belum di-whitelist (`0.0.0.0/0`), atau password belum di-URL-encode. |
 | **Tutup buku otomatis tidak jalan** | Backend di-deploy ke layanan *serverless* (Vercel/Netlify). Pindahkan ke Railway/Render. |
 | **Rekap WhatsApp terkirim berkali-kali** | Backend jalan dengan lebih dari 1 worker. Pastikan `--workers 1` seperti di `Procfile`. |
-| Upload foto error | Cek log startup: penyedia yang aktif apa? Kalau `emergent` padahal di luar Emergent, berarti env `S3_*` belum terisi. |
-| Foto hilang setelah redeploy | Penyedia yang aktif `local`. Isi env `S3_*` supaya berpindah ke R2/S3. |
+| Upload foto error | Cek log startup / `GET /api/storage/status`: pastikan kelima env `R2_*` terisi dan token R2 punya izin Object Read & Write. |
+| Foto hilang setelah redeploy | Foto lama dari penyimpanan disk memang hilang. Dengan R2 aktif, foto baru permanen di bucket. |

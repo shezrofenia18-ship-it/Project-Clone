@@ -17,7 +17,7 @@ from typing import List, Optional, Any, Dict
 
 from fastapi import (FastAPI, APIRouter, Depends, HTTPException, UploadFile, File, Form,
                      WebSocket, Request, Query)
-from fastapi.responses import Response, PlainTextResponse
+from fastapi.responses import Response, PlainTextResponse, RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -49,10 +49,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("berkah")
 
 # ------------------------- object storage -------------------------
-# Implementasi dipindah ke storage.py agar PORTABEL: penyimpanan foto bisa
-# berganti antara Cloudflare R2 / AWS S3 / Emergent / disk lokal hanya dengan
-# mengubah environment variable, TANPA mengubah kode di sini.
-from storage import init_storage, put_object, get_object  # noqa: E402
+# Foto produk & bukti pengeluaran disimpan di Cloudflare R2 (S3-compatible) lewat
+# storage.py. TIDAK ADA penyimpanan ke disk lokal server (disk hosting bersifat
+# sementara -> foto hilang saat redeploy). Konfigurasi 100% dari env:
+# R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
+# R2_PUBLIC_URL_BASE.
+from storage import init_storage, upload_object, get_object  # noqa: E402
 import storage as storage_mod  # noqa: E402
 
 APP_NAME = "berkah-ayam-mili"
@@ -1526,7 +1528,9 @@ async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("
                 "created_by": user["name"], "created_by_id": user["id"],
                 "created_by_role": user.get("role"), "created_at": iso_now()})
     if doc.get("proof_file_id") and not doc.get("proof_url"):
-        doc["proof_url"] = f"/api/files/{doc['proof_file_id']}"
+        # Ambil URL publik R2 dari catatan berkas; tautan /api/files/{id} hanya cadangan.
+        frec = await db.files.find_one({"id": doc["proof_file_id"], "is_deleted": False})
+        doc["proof_url"] = (frec or {}).get("public_url") or f"/api/files/{doc['proof_file_id']}"
     await db.expenses.insert_one(doc)
     await log_audit(user, "create", "expense", doc["id"], None, {"amount": body.amount})
     await rt_emit(["expenses", "dashboard"])
@@ -2874,9 +2878,36 @@ async def realtime_status(user: dict = Depends(get_current_user)):
 
 
 # ------------------------- File upload / serving -------------------------
+def _sniff_image_type(data: bytes) -> Optional[str]:
+    """Kenali tipe gambar dari isi berkas (magic bytes), bukan hanya dari ekstensi,
+    supaya Content-Type yang dikirim ke R2 benar dan gambar langsung ter-render."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 @api.post("/upload")
 async def upload_file(file: UploadFile = File(...), folder: str = Form("products"),
+                     product_id: str = Form(""),
                      user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+    """Unggah foto ke Cloudflare R2 dan kembalikan URL publiknya.
+
+    - `folder`     : "products" (foto produk) atau "proofs" (bukti pengeluaran).
+    - `product_id` : opsional. Bila diisi (owner/admin mengganti foto produk yang
+                     sudah ada), URL publik langsung disimpan ke `image_url` produk
+                     tersebut di MongoDB. Untuk produk baru, frontend menyimpan URL
+                     yang dikembalikan saat produk dibuat.
+    """
+    if not storage_mod.is_configured():
+        raise HTTPException(503, (
+            "Penyimpanan foto (Cloudflare R2) belum dikonfigurasi. Isi env: "
+            + ", ".join(storage_mod.missing_config()) + " lalu restart backend."))
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
     if ext not in MIME_TYPES:
         raise HTTPException(400, "Format gambar tidak didukung (jpg, png, webp, gif)")
@@ -2884,36 +2915,67 @@ async def upload_file(file: UploadFile = File(...), folder: str = Form("products
     folder = folder if folder in ("products", "proofs") else "products"
     if user["role"] == "kasir":
         folder = "proofs"
-    fid = new_id()
-    path = f"{APP_NAME}/{folder}/{fid}.{ext}"
+        product_id = ""
     data = await file.read()
+    if not data:
+        raise HTTPException(400, "Berkas kosong")
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Ukuran gambar maksimal 10 MB")
-    ct = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
+    # Content-Type: utamakan hasil deteksi isi berkas, lalu header browser, lalu ekstensi.
+    sniffed = _sniff_image_type(data)
+    ct = sniffed or (file.content_type if (file.content_type or "").startswith("image/") else None) \
+        or MIME_TYPES.get(ext, "application/octet-stream")
+    if sniffed:
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}[sniffed]
+    fid = new_id()
+    key = f"{APP_NAME}/{folder}/{fid}.{ext}"
     try:
-        result = put_object(path, data, ct)
+        result = upload_object(key, data, ct)
     except Exception as e:
-        logger.error(f"Upload gagal: {e}")
-        raise HTTPException(502, "Gagal mengunggah gambar ke penyimpanan")
-    await db.files.insert_one({"id": fid, "storage_path": result["path"], "content_type": ct,
+        logger.error(f"Upload ke R2 gagal: {e}")
+        raise HTTPException(502, "Gagal mengunggah gambar ke Cloudflare R2. Periksa kredensial/bucket R2.")
+    public = result["url"]
+    await db.files.insert_one({"id": fid, "storage_path": key, "public_url": public, "content_type": ct,
                                "original_filename": file.filename, "size": result.get("size", len(data)),
-                               "folder": folder, "uploaded_by": user["name"],
+                               "folder": folder, "backend": "r2", "uploaded_by": user["name"],
                                "is_deleted": False, "created_at": iso_now()})
-    return {"id": fid, "url": f"/api/files/{fid}"}
+    product_updated = False
+    if product_id and folder == "products":
+        # Simpan URL publik utuh (teks) ke field image_url produk yang dipilih.
+        upd = await db.products.update_one({"id": product_id}, {"$set": {"image_url": public}})
+        product_updated = upd.matched_count > 0
+        if not product_updated:
+            raise HTTPException(404, "Produk tidak ditemukan untuk disematkan fotonya")
+        await log_audit(user, "update", "product", product_id, after={"image_url": public})
+    return {"id": fid, "url": public, "key": key, "content_type": ct,
+            "product_id": product_id or None, "product_updated": product_updated}
 
 
 @api.get("/files/{fid}")
 async def serve_file(fid: str):
+    """Kompatibilitas untuk tautan lama `/api/files/{id}`: arahkan ke URL publik R2
+    bila ada; kalau tidak, coba ambil langsung dari bucket (mis. bucket privat)."""
     rec = await db.files.find_one({"id": fid, "is_deleted": False})
     if not rec:
         raise HTTPException(404, "File tidak ditemukan")
+    if rec.get("public_url"):
+        return RedirectResponse(rec["public_url"], status_code=302)
+    if not storage_mod.is_configured():
+        raise HTTPException(404, "Berkas lama tidak tersedia lagi (penyimpanan lokal sudah dihapus)")
     try:
         data, ct = get_object(rec["storage_path"])
         return Response(content=data, media_type=rec.get("content_type", ct),
                         headers={"Cache-Control": "public, max-age=86400"})
     except Exception as e:
         logger.error(f"Ambil file gagal: {e}")
-        raise HTTPException(502, "Gagal memuat gambar")
+        raise HTTPException(404, "Berkas tidak ditemukan di penyimpanan")
+
+
+@api.get("/storage/status")
+async def storage_status(user: dict = Depends(require_roles("owner", "admin"))):
+    """Status konfigurasi penyimpanan foto — tanpa membocorkan kunci rahasia."""
+    return {"backend": storage_mod.active_backend(), "configured": storage_mod.is_configured(),
+            "missing": storage_mod.missing_config(), "description": storage_mod.describe()}
 
 
 # ------------------------- wiring -------------------------
@@ -3035,10 +3097,10 @@ async def startup():
 
     try:
         init_storage()
-        logger.info("Penyimpanan berkas siap -> %s", storage_mod.describe())
+        logger.info("Penyimpanan foto -> %s", storage_mod.describe())
     except Exception as e:
-        logger.error("Penyimpanan berkas GAGAL disiapkan (%s): %s",
-                     storage_mod.active_backend(), e)
+        logger.error("Penyimpanan foto (Cloudflare R2) GAGAL diverifikasi: %s - periksa "
+                     "R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME", e)
     logger.info("Berkah Ayam Mili API started")
 
 
