@@ -1,0 +1,52 @@
+{
+  "summary": "Completed comprehensive testing of fillet cutting feature for Ayam Fillet purchases. All backend APIs and frontend UI components working correctly.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: Login as owner/admin123 successful",
+    "Backend: GET /api/products returns Ayam Fillet with correct stock fields",
+    "Backend: GET /api/suppliers returns supplier list",
+    "Backend: POST /api/purchases with pcs_after (5 -> 10) creates purchase correctly",
+    "Backend: Purchase response contains correct fields: qty_unit='pcs', pcs_supplier=5, pcs=10, avg_weight=0.4, buy_price_kg=50000, buy_price_pcs=20000",
+    "Backend: Stock increases correctly: stock_kg +4, stock_pcs +10 (not +5), stock_ekor unchanged",
+    "Backend: PUT /api/purchases updates purchase correctly (5 -> 8 pcs)",
+    "Backend: PUT /api/purchases without pcs_after falls back to ekor (5 pcs)",
+    "Backend: DELETE /api/purchases restores stock to initial values",
+    "Backend: Ayam Broiler regression test passes (whole chicken still works with qty_unit='ekor')",
+    "Frontend: /pembelian page loads successfully",
+    "Frontend: 'Pembelian Baru' dialog opens",
+    "Frontend: Supplier selection works",
+    "Frontend: Ayam Fillet product selection works",
+    "Frontend: 'Total Pcs Setelah Dipotong' field appears ONLY for Ayam Fillet (testid: pur-pcs-after-0)",
+    "Frontend: Default value in pcs_after field equals supplier quantity (5 pcs)",
+    "Frontend: Helper text (testid: pur-avg-0) shows correct calculation: '0,8 kg/pcs' for 4 kg / 5 pcs",
+    "Frontend: Summary row 'Perkiraan Harga/pcs' (testid: pur-price-pcs) shows Rp 40.000 (200000 / 5)",
+    "Frontend: Changing pcs_after to 10 updates helper text to '0,4 kg/pcs' and '10 pcs'",
+    "Frontend: Price per pcs updates to Rp 20.000 (200000 / 10)",
+    "Frontend: Total pcs display (testid: pur-total-pcs) shows '5 pcs supplier → 10 pcs'",
+    "Frontend: Changing product to Ayam Broiler hides 'Total Pcs Setelah Dipotong' field",
+    "Frontend: Changing product to Ayam Broiler hides 'Perkiraan Harga/pcs' row",
+    "Frontend: Label changes from 'Jumlah (pcs)' to 'Jumlah (ekor)' for Ayam Broiler",
+    "E2E: Purchase creation saves successfully with toast notification",
+    "E2E: Edit dialog (Koreksi Pembelian) opens and displays correct values (Jumlah=5, Total Pcs Setelah Dipotong=10)",
+    "E2E: Purchase deletion works and restores stock"
+  ],
+  "test_report_links": [
+    "/app/test_fillet_cutting.py"
+  ],
+  "success_percentage": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "100% (all UI elements and calculations working correctly)"
+  },
+  "updated_files": [],
+  "action_item_for_main_agent": "",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_test_itself": false
+}

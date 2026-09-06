@@ -137,21 +137,30 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
     editing && (initial.items || []).length
       ? initial.items.map((it) => ({
           // Baris lama menyimpan jumlah di `ekor` (ayam utuh) atau `pcs` (Ayam Fillet).
+          // Untuk pcs: `pcs_supplier` = jumlah dari supplier, `pcs` = jumlah akhir
+          // setelah dipotong (pembelian sebelum fitur ini hanya punya `pcs`).
           _k: Math.random(), product_id: it.product_id,
-          ekor: it.qty_unit === "pcs" ? (it.pcs || 0) : (it.ekor || 0),
+          ekor: it.qty_unit === "pcs" ? (it.pcs_supplier ?? it.pcs ?? 0) : (it.ekor || 0),
+          pcs_after: it.qty_unit === "pcs" && it.pcs_supplier != null && it.pcs !== it.pcs_supplier ? it.pcs : "",
           total_weight: it.total_weight || 0, total_price: it.subtotal || 0,
         }))
-      : [{ _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }]);
+      : [{ _k: Math.random(), product_id: "", ekor: 0, pcs_after: "", total_weight: 0, total_price: 0 }]);
   const [paid, setPaid] = useState(initial?.paid ?? 0);
   const [busy, setBusy] = useState(false);
 
   const productOf = (id) => products.find((p) => p.id === id);
   const unitOf = (it) => qtyUnitOf(productOf(it.product_id));
   const setItem = (i, k, v) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [k]: v } : it));
+  // Pcs AKHIR yang masuk stok: "Total Pcs Setelah Dipotong" bila diisi, kalau
+  // kosong otomatis = jumlah pcs dari supplier. Kg & harga selalu dari input awal.
+  const finalPcs = (it) => (it.pcs_after !== "" && Number(it.pcs_after) > 0 ? Number(it.pcs_after) : Number(it.ekor));
   const birdValue = items.reduce((s, it) => s + Number(it.total_price), 0);
   // Jumlah ekor hanya dari ayam utuh; baris Ayam Fillet dihitung terpisah sebagai pcs.
   const totalEkor = items.reduce((s, it) => s + (unitOf(it) === "ekor" ? Number(it.ekor) : 0), 0);
-  const totalPcs = items.reduce((s, it) => s + (unitOf(it) === "pcs" ? Number(it.ekor) : 0), 0);
+  const pcsItems = items.filter((it) => unitOf(it) === "pcs" && it.product_id);
+  const totalPcsSupplier = pcsItems.reduce((s, it) => s + Number(it.ekor), 0);
+  const totalPcs = pcsItems.reduce((s, it) => s + finalPcs(it), 0);
+  const pcsValue = pcsItems.reduce((s, it) => s + Number(it.total_price), 0);
   // Transport & biaya lain dihilangkan dari form (permintaan owner): total modal
   // sekarang MURNI total harga ayam dari supplier.
   const totalModal = birdValue;
@@ -165,7 +174,11 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
     const payload = {
       supplier_id: supplier,
       date,
-      items: valid.map((it) => ({ product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price) })),
+      items: valid.map((it) => ({
+        product_id: it.product_id, ekor: Number(it.ekor), total_weight: Number(it.total_weight), total_price: Number(it.total_price),
+        // hanya berarti untuk produk pcs; backend mengabaikannya untuk ayam utuh
+        pcs_after: unitOf(it) === "pcs" ? finalPcs(it) : null,
+      })),
       paid: Number(paid),
     };
     try {
@@ -237,23 +250,39 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
                   <UnitField label="Total Harga (Rp)" unit="Rp" className="col-span-2 sm:col-span-3"
                     testid={`pur-total-${i}`} value={it.total_price} onChange={(v) => setItem(i, "total_price", v)} />
                 </div>
+                {/* Khusus produk pcs (Ayam Fillet): fillet dari supplier sering dipotong
+                    lagi di toko. Kolom ini = jumlah pcs AKHIR yang masuk stok. Kosong =
+                    sama dengan jumlah dari supplier. Kg & modal tetap dari input awal. */}
+                {unitOf(it) === "pcs" && it.product_id && (
+                  <div className="grid grid-cols-2 sm:grid-cols-12 gap-2">
+                    <UnitField label="Total Pcs Setelah Dipotong" unit="pcs" className="col-span-1 sm:col-span-4"
+                      testid={`pur-pcs-after-${i}`}
+                      value={it.pcs_after === "" ? it.ekor : it.pcs_after}
+                      placeholder={String(it.ekor || 0)}
+                      onFocus={() => { if (it.pcs_after === "") setItem(i, "pcs_after", String(it.ekor)); }}
+                      onChange={(v) => setItem(i, "pcs_after", v)}
+                      hint={it.pcs_after !== "" && Number(it.pcs_after) > 0 && Number(it.pcs_after) !== Number(it.ekor)
+                        ? `${formatNumber(Number(it.ekor))} pcs dari supplier → ${formatNumber(finalPcs(it))} pcs masuk stok`
+                        : "Opsional. Kosong = sama dengan jumlah dari supplier."} />
+                  </div>
+                )}
                 {/* Kalkulasi otomatis berat 1 ekor: 15 ekor + 30 kg -> 2,00 kg/ekor.
                     Angka inilah yang dipakai memotong stok kg saat kasir jual per ekor.
-                    Untuk Ayam Fillet dihitung per pcs (informasi saja). */}
-                {Number(it.ekor) > 0 && Number(it.total_weight) > 0 && (
+                    Untuk Ayam Fillet dihitung per pcs AKHIR (setelah dipotong). */}
+                {finalPcs(it) > 0 && Number(it.total_weight) > 0 && (
                   <p data-testid={`pur-avg-${i}`} className="text-[11px] text-muted-foreground pl-0.5">
-                    Berat 1 {unitOf(it)} kiriman ini:{" "}
+                    Berat 1 {unitOf(it)} {unitOf(it) === "pcs" ? "setelah dipotong" : "kiriman ini"}:{" "}
                     <span className="font-semibold text-foreground tabular">
-                      {formatWeight(Number(it.total_weight) / Number(it.ekor), 2)}/{unitOf(it)}
+                      {formatWeight(Number(it.total_weight) / (unitOf(it) === "pcs" ? finalPcs(it) : Number(it.ekor)), 2)}/{unitOf(it)}
                     </span>
                     {unitOf(it) === "ekor"
                       ? " — dipakai memotong stok kg tiap 1 ekor terjual"
-                      : " — stok kg & pcs Ayam Fillet bertambah sesuai angka di atas"}
+                      : ` — stok Ayam Fillet bertambah ${formatWeight(Number(it.total_weight))} & ${formatNumber(finalPcs(it))} pcs`}
                   </p>
                 )}
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, total_weight: 0, total_price: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
+            <Button variant="outline" size="sm" onClick={() => setItems((a) => [...a, { _k: Math.random(), product_id: "", ekor: 0, pcs_after: "", total_weight: 0, total_price: 0 }])}><Plus className="w-4 h-4 mr-1" /> Item</Button>
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
             <UnitField label="Dibayar Sekarang (Rp)" unit="Rp" testid="pur-paid"
@@ -263,11 +292,23 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
             <div className="flex justify-between"><span>Nilai Ayam (total dibayar)</span><span className="tabular">{formatRupiah(birdValue)}</span></div>
             <div className="flex justify-between font-bold"><span>Total Modal</span><span className="tabular">{formatRupiah(totalModal)}</span></div>
             <div className="flex justify-between text-muted-foreground"><span>Perkiraan Harga/kg (otomatis)</span><span className="tabular">{formatRupiah(totalWeight ? totalModal / totalWeight : 0)}</span></div>
+            {totalPcs > 0 && (
+              // Total harga baris Ayam Fillet dibagi jumlah pcs AKHIR (setelah dipotong).
+              <div className="flex justify-between text-muted-foreground" data-testid="pur-price-pcs">
+                <span>Perkiraan Harga/pcs (otomatis)</span><span className="tabular">{formatRupiah(pcsValue / totalPcs)}</span>
+              </div>
+            )}
             {totalEkor > 0 && (
               <div className="flex justify-between text-muted-foreground"><span>Modal Efektif/ekor</span><span className="tabular">{formatRupiah(totalModal / totalEkor)}</span></div>
             )}
             {totalPcs > 0 && (
-              <div className="flex justify-between text-muted-foreground" data-testid="pur-total-pcs"><span>Jumlah Ayam Fillet</span><span className="tabular">{formatNumber(totalPcs)} pcs</span></div>
+              <div className="flex justify-between text-muted-foreground" data-testid="pur-total-pcs">
+                <span>Jumlah Ayam Fillet (masuk stok)</span>
+                <span className="tabular">
+                  {totalPcs !== totalPcsSupplier && <span className="text-[11px] mr-1.5">{formatNumber(totalPcsSupplier)} pcs supplier →</span>}
+                  {formatNumber(totalPcs)} pcs
+                </span>
+              </div>
             )}
             {totalEkor === 0 && totalPcs === 0 && (
               <div className="flex justify-between text-muted-foreground"><span>Modal Efektif/ekor</span><span className="tabular">{formatRupiah(0)}</span></div>
@@ -289,12 +330,13 @@ function PurchaseDialog({ suppliers, products, onClose, onSaved, initial }) {
 }
 
 // Kotak angka dengan judul di atas + satuan di dalam kotak (ekor / kg / Rp).
-function UnitField({ label, unit, value, onChange, testid, className = "", hint }) {
+function UnitField({ label, unit, value, onChange, testid, className = "", hint, placeholder, onFocus }) {
   return (
     <div className={className}>
       <Label className="text-[11px] text-muted-foreground">{label}</Label>
       <div className="relative mt-1">
         <Input data-testid={testid} type="number" inputMode="decimal" value={value}
+          placeholder={placeholder} onFocus={onFocus}
           onChange={(e) => onChange(e.target.value)}
           className="tabular pr-10 text-right" />
         <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-muted-foreground pointer-events-none">
