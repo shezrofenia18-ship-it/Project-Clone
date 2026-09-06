@@ -206,6 +206,32 @@ def is_whole_chicken(product: dict) -> bool:
     return "ekor" in (product.get("units") or [])
 
 
+def is_fillet_product(product: dict) -> bool:
+    """Produk fillet = nama MENGANDUNG kata 'fillet' (tidak peduli huruf besar/kecil)
+    ATAU kategorinya 'fillet' di database.
+
+    Tidak lagi mencocokkan nama persis "Ayam Fillet", supaya semua varian
+    (Ayam Fillet, Dada Fillet, Fillet Paha, dll.) otomatis ikut terdeteksi.
+    Produk fillet dibeli dari supplier dalam satuan PCS (+ berat kg).
+    """
+    if not product:
+        return False
+    name = (product.get("name") or "").strip().lower()
+    category = (product.get("category") or "").strip().lower()
+    return "fillet" in name or category == "fillet"
+
+
+def is_purchasable(product: dict) -> bool:
+    """Produk yang boleh dicatat sebagai pembelian dari supplier:
+    ayam utuh (satuan ekor) atau produk fillet (satuan pcs)."""
+    return is_whole_chicken(product) or is_fillet_product(product)
+
+
+def purchase_qty_unit(product: dict) -> str:
+    """Satuan 'jumlah' pada baris pembelian: ayam utuh -> ekor, fillet -> pcs."""
+    return "ekor" if is_whole_chicken(product) else "pcs"
+
+
 def sale_line_weight(product: dict, unit: str, qty: float) -> float:
     """Berat (kg) yang benar-benar keluar dari stok untuk satu baris penjualan."""
     if unit == "kg":
@@ -359,10 +385,10 @@ class SupplierBody(BaseModel):
 
 class PurchaseItem(BaseModel):
     product_id: str
-    ekor: float = 0            # "jumlah" dari supplier: ekor (ayam utuh) atau pcs (Ayam Fillet)
+    ekor: float = 0            # "jumlah" dari supplier: ekor (ayam utuh) atau pcs (produk fillet)
     total_weight: float = 0
     total_price: float = 0
-    # Khusus produk pcs (Ayam Fillet): jumlah pcs AKHIR setelah dipotong di toko.
+    # Khusus produk fillet (satuan pcs): jumlah pcs AKHIR setelah dipotong di toko.
     # Kosong/0 = tidak dipotong lagi -> sama dengan `ekor` (jumlah dari supplier).
     pcs_after: Optional[float] = None
 
@@ -490,7 +516,16 @@ class SettingBody(BaseModel):
 @api.get("/products")
 async def list_products(user: dict = Depends(get_current_user)):
     prods = await db.products.find().sort("name", 1).to_list(1000)
-    return [clean(p) for p in prods]
+    # Flag turunan (tidak disimpan di DB) supaya frontend memakai aturan deteksi
+    # yang SAMA dengan backend: fillet = nama mengandung "fillet" / kategori fillet.
+    out = []
+    for p in prods:
+        d = clean(p)
+        d["is_fillet"] = is_fillet_product(p)
+        d["is_purchasable"] = is_purchasable(p)
+        d["purchase_unit"] = purchase_qty_unit(p) if d["is_purchasable"] else None
+        out.append(d)
+    return out
 
 
 def _weight_guidance_item(p: dict) -> dict:
@@ -665,7 +700,9 @@ async def _purchase_lines(body: "PurchaseBody"):
 
     Satuan jumlah per baris ditentukan dari produknya:
       - ayam utuh (Broiler/Kampung/Pejantan, punya satuan 'ekor') -> jumlah = EKOR
-      - produk lain yang boleh dibeli (mis. Ayam Fillet)           -> jumlah = PCS
+      - produk fillet (nama mengandung "fillet" ATAU kategori fillet) -> jumlah = PCS
+    Produk lain (sampingan/potongan hasil produksi sendiri) DITOLAK karena bukan
+    barang yang dibeli dari supplier.
     Angka `ekor` dari form dipakai apa adanya sebagai "jumlah"; di sini dipetakan
     ke kolom `ekor` atau `pcs` supaya stok bertambah di kolom yang benar.
     """
@@ -675,8 +712,13 @@ async def _purchase_lines(body: "PurchaseBody"):
         product = await db.products.find_one({"id": it.product_id})
         if not product:
             raise HTTPException(404, "Produk tidak ditemukan")
+        if not is_purchasable(product):
+            raise HTTPException(400, (
+                f"Produk '{product.get('name', '-')}' tidak bisa dicatat sebagai pembelian: "
+                "hanya ayam utuh (satuan ekor) atau produk fillet (nama mengandung \"Fillet\" "
+                "/ kategori Fillet) yang dibeli dari supplier."))
         products[it.product_id] = product
-        qty_unit = "ekor" if is_whole_chicken(product) else "pcs"
+        qty_unit = purchase_qty_unit(product)
         qty = float(it.ekor or 0)
         ekor = qty if qty_unit == "ekor" else 0.0
         # Produk pcs: `pcs_supplier` = jumlah dari supplier, `pcs` = jumlah AKHIR yang
@@ -741,9 +783,10 @@ async def _apply_purchase_to_stock(body, user, pid, supplier, products, bird_val
             await apply_stock(product, qty, it.total_weight, "pembelian", user["name"], pid)
             add_ekor, add_weight = qty, float(it.total_weight or 0)
         else:
-            # Ayam Fillet dsb: jumlah = PCS -> stok pcs & stok kg bertambah, stok ekor tidak.
-            # Stok pcs memakai jumlah AKHIR setelah dipotong di toko (pcs_after),
-            # sedangkan kg & modal tetap dari input supplier.
+            # Produk FILLET (Ayam Fillet, Dada Fillet, dst.): jumlah = PCS -> stok pcs &
+            # stok kg bertambah PADA PRODUK INI SAJA (sesuai product_id yang dipilih di
+            # dropdown), stok ekor tidak. Stok pcs memakai jumlah AKHIR setelah dipotong
+            # di toko (pcs_after), sedangkan kg & modal tetap dari input supplier.
             pcs_in = _final_pcs(it)
             await apply_stock(product, 0, it.total_weight, "pembelian", user["name"], pid, delta_pcs=pcs_in)
             if pcs_in > 0:
