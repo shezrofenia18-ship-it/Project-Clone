@@ -1,0 +1,68 @@
+{
+  "summary": "Completed comprehensive testing of revised fillet product detection feature in Pembelian Baru (New Purchase) form. All backend APIs and frontend UI components working correctly with 100% test success rate.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: POST /api/auth/login with owner/admin123 returns valid token",
+    "Backend: GET /api/products returns new fields (is_fillet, is_purchasable, purchase_unit) for all products",
+    "Backend: Ayam Fillet & Dada Fillet correctly identified as fillet (is_fillet=true, is_purchasable=true, purchase_unit='pcs')",
+    "Backend: Ayam Broiler correctly identified as whole chicken (is_fillet=false, is_purchasable=true, purchase_unit='ekor')",
+    "Backend: Ceker Ayam & Dada Ayam correctly marked as non-purchasable (is_purchasable=false, purchase_unit=null)",
+    "Backend: Created test product 'Paha FILLET Test' with name containing 'fillet' in non-fillet category - correctly detected as fillet",
+    "Backend: Created test product 'Tenderloin Test' with category='fillet' but name without 'fillet' - correctly detected as fillet",
+    "Backend: POST /api/purchases with 2 fillet lines (Dada Fillet: 5 pcs supplier→10 pcs after, Ayam Fillet: 3 pcs) + 1 whole chicken (Ayam Broiler: 10 ekor) - all items saved correctly",
+    "Backend: Purchase response items show correct qty_unit ('pcs' for fillets, 'ekor' for whole chicken)",
+    "Backend: Dada Fillet item shows pcs_supplier=5, pcs=10, buy_price_pcs=20000 (correct)",
+    "Backend: Ayam Fillet item shows pcs_supplier=3, pcs=3, buy_price_pcs=33333.33 (correct)",
+    "Backend: Ayam Broiler item shows qty_unit='ekor', ekor=10 (correct)",
+    "Backend: Stock updates accurate - Dada Fillet +4 kg & +10 pcs (ekor unchanged), Ayam Fillet +2.4 kg & +3 pcs (ekor unchanged), Ayam Broiler +20 kg & +10 ekor",
+    "Backend: Stock updates applied to SPECIFIC products only (no cross-contamination between Dada Fillet and Ayam Fillet)",
+    "Backend: PUT /api/purchases/{id} (Koreksi) - changed Dada Fillet to pcs_after=12, total_weight=4.5 - stock adjusted correctly to +4.5 kg & +12 pcs from baseline",
+    "Backend: DELETE /api/purchases/{id} - all stocks (Dada Fillet, Ayam Fillet, Ayam Broiler) restored to baseline",
+    "Backend: POST /api/purchases with non-purchasable product (Ceker Ayam) returns 400 with correct Indonesian error message mentioning fillet",
+    "Frontend: Login with owner/admin123 successful",
+    "Frontend: Navigation to /pembelian (Purchases page) works",
+    "Frontend: Click 'Pembelian Baru' button opens purchase dialog",
+    "Frontend: Product dropdown (data-testid='pur-item-0') lists only purchasable products",
+    "Frontend: Dropdown includes Ayam Broiler, Ayam Kampung, Ayam Pejantan with 'ekor' badge",
+    "Frontend: Dropdown includes Ayam Fillet, Dada Fillet with 'fillet · pcs' badge",
+    "Frontend: Dropdown does NOT include Ceker Ayam, Dada Ayam, or other non-purchasable products",
+    "Frontend: Selecting Dada Fillet changes label from 'Jumlah (ekor)' to 'Jumlah (pcs)'",
+    "Frontend: 'Total Pcs Setelah Dipotong' field (data-testid='pur-pcs-after-0') appears for fillet products",
+    "Frontend: Filled Dada Fillet: Jumlah=5, Berat=4, Total Harga=200000, Total Pcs Setelah Dipotong=10",
+    "Frontend: 'Harga/pcs (otomatis)' (data-testid='pur-price-pcs-0') shows Rp 20.000 (correct calculation: 200000/10)",
+    "Frontend: Average weight guidance (data-testid='pur-avg-0') shows '0,4 kg/pcs' and 'stok Dada Fillet bertambah 4 kg & 10 pcs'",
+    "Frontend: Added second item (Ayam Broiler) - label remains 'Jumlah (ekor)', no pcs_after field (correct)",
+    "Frontend: Added third item (Ayam Fillet) with Jumlah=3, Berat=2.4, Total Harga=100000",
+    "Frontend: Summary section (data-testid='pur-total-pcs') shows 'Jumlah Fillet (masuk stok)' with '8 pcs supplier → 13 pcs'",
+    "Frontend: Per-product breakdown lists both 'Dada Fillet' (5→10 pcs · 4 kg · Rp 20.000/pcs) and 'Ayam Fillet' (3 pcs · 2,4 kg · Rp 33.333/pcs)",
+    "Frontend: Summary 'Perkiraan Harga/pcs (otomatis)' (data-testid='pur-price-pcs') shows Rp 23.077 (correct average)",
+    "Frontend: Click 'Simpan' (data-testid='save-purchase') - success toast 'tersimpan' appears",
+    "Frontend: Purchase appears in table with correct data",
+    "Frontend: Click 'Koreksi' (data-testid='edit-purchase-{id}') opens edit dialog with title 'Koreksi Pembelian'",
+    "Frontend: Edit dialog loads Dada Fillet with Jumlah (pcs)=5 and Total Pcs Setelah Dipotong=10 (correct)",
+    "Frontend: Edit dialog loads Ayam Fillet with Jumlah=3 (correct)",
+    "Frontend: Click 'Hapus' (data-testid='delete-purchase-{id}') and confirm (data-testid='confirm-delete-purchase') - success toast 'dihapus' appears"
+  ],
+  "test_report_links": [
+    "/app/backend_test.py",
+    "/root/.emergent/automation_output/20260906_132541/console_20260906_132541.log",
+    ".screenshots/purchase_form_filled.png",
+    ".screenshots/purchase_edit_dialog.png"
+  ],
+  "success_percentage": {
+    "backend": "100% (37/37 tests passed)",
+    "frontend": "100% (all UI flows working correctly)"
+  },
+  "updated_files": [],
+  "action_item_for_main_agent": "",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_test_itself": false
+}

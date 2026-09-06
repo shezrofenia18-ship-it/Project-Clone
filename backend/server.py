@@ -206,6 +206,32 @@ def is_whole_chicken(product: dict) -> bool:
     return "ekor" in (product.get("units") or [])
 
 
+def is_fillet_product(product: dict) -> bool:
+    """Produk fillet = nama MENGANDUNG kata 'fillet' (tidak peduli huruf besar/kecil)
+    ATAU kategorinya 'fillet' di database.
+
+    Tidak lagi mencocokkan nama persis "Ayam Fillet", supaya semua varian
+    (Ayam Fillet, Dada Fillet, Fillet Paha, dll.) otomatis ikut terdeteksi.
+    Produk fillet dibeli dari supplier dalam satuan PCS (+ berat kg).
+    """
+    if not product:
+        return False
+    name = (product.get("name") or "").strip().lower()
+    category = (product.get("category") or "").strip().lower()
+    return "fillet" in name or category == "fillet"
+
+
+def is_purchasable(product: dict) -> bool:
+    """Produk yang boleh dicatat sebagai pembelian dari supplier:
+    ayam utuh (satuan ekor) atau produk fillet (satuan pcs)."""
+    return is_whole_chicken(product) or is_fillet_product(product)
+
+
+def purchase_qty_unit(product: dict) -> str:
+    """Satuan 'jumlah' pada baris pembelian: ayam utuh -> ekor, fillet -> pcs."""
+    return "ekor" if is_whole_chicken(product) else "pcs"
+
+
 def sale_line_weight(product: dict, unit: str, qty: float) -> float:
     """Berat (kg) yang benar-benar keluar dari stok untuk satu baris penjualan."""
     if unit == "kg":
@@ -359,9 +385,19 @@ class SupplierBody(BaseModel):
 
 class PurchaseItem(BaseModel):
     product_id: str
-    ekor: float = 0
+    ekor: float = 0            # "jumlah" dari supplier: ekor (ayam utuh) atau pcs (produk fillet)
     total_weight: float = 0
     total_price: float = 0
+    # Khusus produk fillet (satuan pcs): jumlah pcs AKHIR setelah dipotong di toko.
+    # Kosong/0 = tidak dipotong lagi -> sama dengan `ekor` (jumlah dari supplier).
+    pcs_after: Optional[float] = None
+
+
+def _final_pcs(it: "PurchaseItem") -> float:
+    """Pcs yang benar-benar masuk stok untuk baris produk pcs."""
+    qty = float(it.ekor or 0)
+    after = float(it.pcs_after or 0)
+    return after if after > 0 else qty
 
 
 class PurchaseBody(BaseModel):
@@ -480,7 +516,16 @@ class SettingBody(BaseModel):
 @api.get("/products")
 async def list_products(user: dict = Depends(get_current_user)):
     prods = await db.products.find().sort("name", 1).to_list(1000)
-    return [clean(p) for p in prods]
+    # Flag turunan (tidak disimpan di DB) supaya frontend memakai aturan deteksi
+    # yang SAMA dengan backend: fillet = nama mengandung "fillet" / kategori fillet.
+    out = []
+    for p in prods:
+        d = clean(p)
+        d["is_fillet"] = is_fillet_product(p)
+        d["is_purchasable"] = is_purchasable(p)
+        d["purchase_unit"] = purchase_qty_unit(p) if d["is_purchasable"] else None
+        out.append(d)
+    return out
 
 
 def _weight_guidance_item(p: dict) -> dict:
@@ -651,21 +696,46 @@ async def list_purchases(user: dict = Depends(require_roles("owner", "admin"))):
 
 
 async def _purchase_lines(body: "PurchaseBody"):
-    """Susun baris pembelian + totalnya, sekaligus memastikan produknya ada."""
+    """Susun baris pembelian + totalnya, sekaligus memastikan produknya ada.
+
+    Satuan jumlah per baris ditentukan dari produknya:
+      - ayam utuh (Broiler/Kampung/Pejantan, punya satuan 'ekor') -> jumlah = EKOR
+      - produk fillet (nama mengandung "fillet" ATAU kategori fillet) -> jumlah = PCS
+    Produk lain (sampingan/potongan hasil produksi sendiri) DITOLAK karena bukan
+    barang yang dibeli dari supplier.
+    Angka `ekor` dari form dipakai apa adanya sebagai "jumlah"; di sini dipetakan
+    ke kolom `ekor` atau `pcs` supaya stok bertambah di kolom yang benar.
+    """
     items_out, products = [], {}
     bird_value = weight_all = ekor_all = 0.0
     for it in body.items:
         product = await db.products.find_one({"id": it.product_id})
         if not product:
             raise HTTPException(404, "Produk tidak ditemukan")
+        if not is_purchasable(product):
+            raise HTTPException(400, (
+                f"Produk '{product.get('name', '-')}' tidak bisa dicatat sebagai pembelian: "
+                "hanya ayam utuh (satuan ekor) atau produk fillet (nama mengandung \"Fillet\" "
+                "/ kategori Fillet) yang dibeli dari supplier."))
         products[it.product_id] = product
+        qty_unit = purchase_qty_unit(product)
+        qty = float(it.ekor or 0)
+        ekor = qty if qty_unit == "ekor" else 0.0
+        # Produk pcs: `pcs_supplier` = jumlah dari supplier, `pcs` = jumlah AKHIR yang
+        # masuk stok (setelah dipotong di toko). Kg & harga tetap dari input awal.
+        pcs_supplier = qty if qty_unit == "pcs" else 0.0
+        pcs = _final_pcs(it) if qty_unit == "pcs" else 0.0
+        count = ekor if qty_unit == "ekor" else pcs
         bird_value += it.total_price
         weight_all += it.total_weight
-        ekor_all += it.ekor
-        items_out.append({"product_id": it.product_id, "name": product["name"], "ekor": it.ekor,
+        ekor_all += ekor
+        items_out.append({"product_id": it.product_id, "name": product["name"],
+                          "qty_unit": qty_unit, "ekor": ekor, "pcs": pcs, "pcs_supplier": pcs_supplier,
                           "total_weight": it.total_weight,
-                          "avg_weight": round(it.total_weight / it.ekor, 3) if it.ekor else 0,
+                          # berat rata-rata per 1 ekor / per 1 pcs AKHIR kiriman ini
+                          "avg_weight": round(it.total_weight / count, 3) if count else 0,
                           "buy_price_kg": round(it.total_price / it.total_weight, 2) if it.total_weight else 0,
+                          "buy_price_pcs": round(it.total_price / pcs, 2) if pcs else 0,
                           "subtotal": round(it.total_price, 2)})
     return items_out, products, bird_value, weight_all, ekor_all
 
@@ -690,6 +760,7 @@ def _purchase_doc(body, supplier, pid, items_out, bird_value, weight_all, ekor_a
         "transport_cost": body.transport_cost, "other_cost": body.other_cost,
         "total_bird_value": round(bird_value, 2), "total_weight": round(weight_all, 3),
         "total_ekor": ekor_all,
+        "total_pcs": round(sum(float(i.get("pcs", 0) or 0) for i in items_out), 3),
         "total_modal": tot["total_modal"], "effective_cost_kg": tot["eff_cost_kg"],
         "effective_cost_ekor": tot["eff_cost_ekor"],
         "paid": body.paid, "payable": max(0, payable_amt),
@@ -706,14 +777,30 @@ async def _apply_purchase_to_stock(body, user, pid, supplier, products, bird_val
     last_prices = supplier.get("last_prices", {}) or {}
     for it in body.items:
         product = products[it.product_id]
-        await apply_stock(product, it.ekor, it.total_weight, "pembelian", user["name"], pid)
+        qty = float(it.ekor or 0)
+        if is_whole_chicken(product):
+            # Ayam utuh: jumlah = ekor, berat = kg (perilaku lama, tidak berubah).
+            await apply_stock(product, qty, it.total_weight, "pembelian", user["name"], pid)
+            add_ekor, add_weight = qty, float(it.total_weight or 0)
+        else:
+            # Produk FILLET (Ayam Fillet, Dada Fillet, dst.): jumlah = PCS -> stok pcs &
+            # stok kg bertambah PADA PRODUK INI SAJA (sesuai product_id yang dipilih di
+            # dropdown), stok ekor tidak. Stok pcs memakai jumlah AKHIR setelah dipotong
+            # di toko (pcs_after), sedangkan kg & modal tetap dari input supplier.
+            pcs_in = _final_pcs(it)
+            await apply_stock(product, 0, it.total_weight, "pembelian", user["name"], pid, delta_pcs=pcs_in)
+            if pcs_in > 0:
+                # Pastikan satuan pcs terdaftar supaya kolom Pcs tampil di halaman Stok
+                # dan bisa disesuaikan/dijual per pcs. Harga/HPP per pcs tidak disentuh.
+                await db.products.update_one({"id": it.product_id}, {"$addToSet": {"units": "pcs"}})
+            add_ekor, add_weight = 0.0, 0.0  # jangan mencemari rata-rata berat/ekor ayam utuh
         share = round(tot["total_modal"] * (it.total_price / bird_value), 2) if bird_value else it.total_price
         item_hpp_kg = round(share / it.total_weight, 2) if it.total_weight else tot["eff_cost_kg"]
         item_buy_kg = round(it.total_price / it.total_weight, 2) if it.total_weight else 0
         await db.products.update_one({"id": it.product_id}, {"$set": {"buy_price_kg": item_buy_kg}})
         # Berat/ekor diakumulasi dari semua ayam masuk → HPP/ekor otomatis.
-        await recompute_avg_weight(it.product_id, add_ekor=it.ekor,
-                                   add_weight=it.total_weight, set_hpp_kg=item_hpp_kg)
+        await recompute_avg_weight(it.product_id, add_ekor=add_ekor,
+                                   add_weight=add_weight, set_hpp_kg=item_hpp_kg)
         last_prices[product["category"]] = item_buy_kg
     return last_prices
 
@@ -760,11 +847,16 @@ async def _reverse_purchase(purchase: dict):
     for it in purchase.get("items", []):
         product = await db.products.find_one({"id": it["product_id"]})
         if product:
-            await apply_stock(product, -it.get("ekor", 0), -it.get("total_weight", 0),
-                              "koreksi", "system", purchase["id"], allow_negative=True)
-            # Tarik kembali kontribusinya ke rata-rata berat/ekor.
-            await recompute_avg_weight(it["product_id"], add_ekor=-float(it.get("ekor", 0) or 0),
-                                       add_weight=-float(it.get("total_weight", 0) or 0))
+            ekor = float(it.get("ekor", 0) or 0)
+            pcs = float(it.get("pcs", 0) or 0)
+            await apply_stock(product, -ekor, -it.get("total_weight", 0),
+                              "koreksi", "system", purchase["id"], allow_negative=True,
+                              delta_pcs=-pcs)
+            # Tarik kembali kontribusinya ke rata-rata berat/ekor (hanya ayam utuh;
+            # baris pcs/fillet memang tidak pernah ikut akumulator ekor).
+            if it.get("qty_unit", "ekor") != "pcs":
+                await recompute_avg_weight(it["product_id"], add_ekor=-ekor,
+                                           add_weight=-float(it.get("total_weight", 0) or 0))
     await db.expenses.delete_many({"ref": purchase["id"], "category": "Pembelian Ayam"})
     await db.payables.delete_many({"purchase_id": purchase["id"]})
     await db.suppliers.update_one({"id": purchase["supplier_id"]}, {"$inc": {
@@ -788,38 +880,45 @@ def formatted_rp(v) -> str:
         return "Rp 0"
 
 
-def _sum_by_product(rows, get_pid, get_kg, get_ekor) -> dict:
+def _sum_by_product(rows, get_pid, get_kg, get_ekor, get_pcs=lambda r: 0) -> dict:
     out: Dict[str, dict] = {}
     for r in rows:
-        cur = out.setdefault(get_pid(r), {"kg": 0.0, "ekor": 0.0})
+        cur = out.setdefault(get_pid(r), {"kg": 0.0, "ekor": 0.0, "pcs": 0.0})
         cur["kg"] += float(get_kg(r) or 0)
         cur["ekor"] += float(get_ekor(r) or 0)
+        cur["pcs"] += float(get_pcs(r) or 0)
     return out
 
 
 async def _guard_purchase_stock(existing: dict, new_items=None):
-    """Tolak koreksi/hapus bila pengurangan berat/ekor membuat stok jadi minus.
+    """Tolak koreksi/hapus bila pengurangan berat/ekor/pcs membuat stok jadi minus.
 
     `new_items` = daftar item baru (PurchaseItem) saat koreksi, atau None saat pembelian
     akan DIHAPUS seluruhnya.
     """
     old = _sum_by_product(existing.get("items", []) or [],
                           lambda r: r.get("product_id"), lambda r: r.get("total_weight"),
-                          lambda r: r.get("ekor"))
-    new = _sum_by_product(new_items or [], lambda r: r.product_id,
-                          lambda r: r.total_weight, lambda r: r.ekor)
+                          lambda r: r.get("ekor"), lambda r: r.get("pcs"))
+    # Item baru dari form hanya membawa "jumlah" di kolom `ekor`; satuannya (ekor/pcs)
+    # baru diketahui setelah produknya dilihat, jadi dipetakan di dalam loop.
+    # Untuk produk pcs, yang dibandingkan adalah pcs AKHIR (setelah dipotong).
+    new_raw = _sum_by_product(new_items or [], lambda r: r.product_id,
+                              lambda r: r.total_weight, lambda r: r.ekor, _final_pcs)
     aksi = "Koreksi" if new_items is not None else "Penghapusan"
-    for prod_id in set(old) | set(new):
-        o = old.get(prod_id, {"kg": 0.0, "ekor": 0.0})
-        n = new.get(prod_id, {"kg": 0.0, "ekor": 0.0})
-        d_kg, d_ekor = n["kg"] - o["kg"], n["ekor"] - o["ekor"]
-        if d_kg >= 0 and d_ekor >= 0:
-            continue
+    for prod_id in set(old) | set(new_raw):
         product = await db.products.find_one({"id": prod_id})
         if not product:
             continue
+        o = old.get(prod_id, {"kg": 0.0, "ekor": 0.0, "pcs": 0.0})
+        raw = new_raw.get(prod_id, {"kg": 0.0, "ekor": 0.0, "pcs": 0.0})
+        whole = is_whole_chicken(product)
+        n = {"kg": raw["kg"], "ekor": raw["ekor"] if whole else 0.0, "pcs": 0.0 if whole else raw["pcs"]}
+        d_kg, d_ekor, d_pcs = n["kg"] - o["kg"], n["ekor"] - o["ekor"], n["pcs"] - o["pcs"]
+        if d_kg >= 0 and d_ekor >= 0 and d_pcs >= 0:
+            continue
         stok_kg = float(product.get("stock_kg", 0) or 0)
         stok_ekor = float(product.get("stock_ekor", 0) or 0)
+        stok_pcs = float(product.get("stock_pcs", 0) or 0)
         nama = product.get("name", "Produk")
         if d_kg < 0 and stok_kg + d_kg < -0.001:
             raise HTTPException(400, (
@@ -832,6 +931,11 @@ async def _guard_purchase_stock(existing: dict, new_items=None):
                 f"{aksi} ditolak: stok {nama} sekarang tinggal {round(stok_ekor)} ekor, "
                 f"tidak cukup untuk dikurangi {round(abs(d_ekor))} ekor "
                 "(sebagian sudah terjual/dipotong)."))
+        if d_pcs < 0 and stok_pcs + d_pcs < -0.001:
+            raise HTTPException(400, (
+                f"{aksi} ditolak: stok {nama} sekarang tinggal {round(stok_pcs)} pcs, "
+                f"tidak cukup untuk dikurangi {round(abs(d_pcs))} pcs "
+                "(sebagian sudah terjual)."))
 
 
 @api.post("/purchases")

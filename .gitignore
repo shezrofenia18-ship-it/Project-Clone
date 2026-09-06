@@ -104,3 +104,4 @@ frontend/node_modules/.cache/default-development/5.pack
 # Foto yang diunggah saat memakai penyimpanan "local" (mode ngoprek di laptop).
 backend/uploads/
 frontend/node_modules/.cache/default-development/2.pack
+frontend/node_modules/.cache/default-development/6.pack
