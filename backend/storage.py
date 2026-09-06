@@ -1,34 +1,32 @@
 """
-Lapisan penyimpanan berkas yang PORTABEL (foto produk & bukti pengeluaran).
+Penyimpanan berkas (foto produk & bukti pengeluaran) di Cloudflare R2 (S3-compatible).
 
-Tujuan modul ini: aplikasi bisa dipindah hosting TANPA mengubah kode.
-Cukup isi environment variable, backend akan memilih penyimpanan sendiri.
+TIDAK ADA lagi penyimpanan ke folder lokal server. Disk di Railway/Render/Vercel
+bersifat sementara sehingga foto hilang setiap redeploy — karena itu satu-satunya
+penyedia yang didukung adalah object storage R2 (lewat boto3).
 
-Tiga penyedia didukung:
+Environment variable yang dibaca (JANGAN di-hardcode):
+    R2_ENDPOINT_URL        https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+    R2_ACCESS_KEY_ID       dari "Manage R2 API Tokens" (Object Read & Write)
+    R2_SECRET_ACCESS_KEY   dari "Manage R2 API Tokens"
+    R2_BUCKET_NAME         nama bucket, mis. berkah-ayam-mili
+    R2_PUBLIC_URL_BASE     domain publik bucket (r2.dev atau custom domain),
+                           mis. https://pub-xxxx.r2.dev  atau  https://foto.tokoanda.com
 
-1. "s3"        -> S3-compatible: Cloudflare R2, AWS S3, MinIO, Backblaze B2, dsb.
-                  Dipakai bila S3_BUCKET + kunci akses tersedia. INI PILIHAN
-                  UNTUK PRODUKSI DI LUAR EMERGENT.
-2. "emergent"  -> Object storage bawaan platform Emergent. Hanya hidup selama
-                  aplikasi berjalan DI DALAM Emergent.
-3. "local"     -> Folder di disk server. Berguna untuk pengembangan di laptop.
-                  PERINGATAN: di hosting seperti Railway/Render/Vercel, disk
-                  bersifat sementara — berkas HILANG setiap kali redeploy.
+Alur upload: berkas dikirim ke R2 dengan Content-Type asli (image/jpeg, dst.)
+supaya browser langsung merendernya sebagai gambar, lalu URL publik dibentuk dari
+R2_PUBLIC_URL_BASE + "/" + nama objek dan disimpan sebagai teks di MongoDB
+(field `image_url` produk / `proof_url` pengeluaran).
 
-Pemilihan otomatis (STORAGE_BACKEND="auto", bawaan):
-    ada kredensial S3 ........ -> s3
-    ada EMERGENT_LLM_KEY ..... -> emergent
-    tidak ada keduanya ....... -> local
-
-Bisa juga dipaksa: STORAGE_BACKEND=s3 | emergent | local
-
-Antarmuka yang dipakai server.py (sengaja dijaga tetap sama seperti versi lama
-supaya tidak ada perubahan perilaku):
-    init_storage(force=False) -> None/str
-    put_object(path, data, content_type) -> dict {"path": ..., "size": ...}
-    get_object(path) -> (bytes, content_type)
+Antarmuka yang dipakai server.py:
+    is_configured() -> bool
+    missing_config() -> list[str]        # nama env yang belum terisi
+    init_storage() -> str                # verifikasi bucket saat startup
+    upload_object(key, data, content_type) -> dict {"key", "url", "size"}
+    get_object(key) -> (bytes, content_type)   # cadangan bila bucket privat
+    public_url(key) -> str
     active_backend() -> str
-    describe() -> str
+    describe() -> str                    # ringkasan aman untuk log (tanpa rahasia)
 """
 
 from __future__ import annotations
@@ -37,16 +35,21 @@ import logging
 import os
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
-# Modul ini membaca environment variable SAAT DIIMPOR untuk menentukan penyedia
-# penyimpanan. Memuat .env di sini membuatnya aman diimpor dari mana saja
-# (server.py, skrip perawatan, atau pengujian) tanpa bergantung pada urutan
-# impor. load_dotenv() tidak menimpa variabel yang sudah diset hosting.
+# Muat .env agar modul aman diimpor dari mana pun (server, skrip, pengujian).
+# load_dotenv() TIDAK menimpa variabel yang sudah diset oleh hosting.
 load_dotenv(Path(__file__).parent / ".env")
 
 logger = logging.getLogger("berkah")
+
+REQUIRED_ENV = (
+    "R2_ENDPOINT_URL",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+    "R2_BUCKET_NAME",
+    "R2_PUBLIC_URL_BASE",
+)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -54,194 +57,112 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip().strip('"').strip("'")
 
 
-# --------------------------------------------------------------------------
-# Konfigurasi
-# --------------------------------------------------------------------------
-STORAGE_BACKEND = (_env("STORAGE_BACKEND", "auto") or "auto").lower()
-
-# --- S3 / Cloudflare R2 ---
-S3_BUCKET = _env("S3_BUCKET")
-S3_ACCESS_KEY_ID = _env("S3_ACCESS_KEY_ID") or _env("AWS_ACCESS_KEY_ID")
-S3_SECRET_ACCESS_KEY = _env("S3_SECRET_ACCESS_KEY") or _env("AWS_SECRET_ACCESS_KEY")
-S3_ENDPOINT_URL = _env("S3_ENDPOINT_URL")
-# Cloudflare R2 mewajibkan region "auto".
-S3_REGION = _env("S3_REGION") or ("auto" if "r2.cloudflarestorage.com" in S3_ENDPOINT_URL else "us-east-1")
-
-# --- Emergent ---
-EMERGENT_KEY = _env("EMERGENT_LLM_KEY")
-_STORAGE_BASE = _env("INTEGRATION_PROXY_URL") or "https://integrations.emergentagent.com"
-EMERGENT_STORAGE_URL = _STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-
-# --- Local ---
-LOCAL_DIR = Path(_env("LOCAL_STORAGE_DIR") or (Path(__file__).parent / "uploads"))
+def _cfg() -> dict:
+    """Konfigurasi dibaca SAAT DIPANGGIL (bukan saat impor) supaya perubahan
+    env + restart langsung berlaku dan mudah diuji."""
+    return {
+        "endpoint": _env("R2_ENDPOINT_URL").rstrip("/"),
+        "access_key": _env("R2_ACCESS_KEY_ID"),
+        "secret_key": _env("R2_SECRET_ACCESS_KEY"),
+        "bucket": _env("R2_BUCKET_NAME"),
+        "public_base": _env("R2_PUBLIC_URL_BASE").rstrip("/"),
+    }
 
 
-def _has_s3_config() -> bool:
-    return bool(S3_BUCKET and S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY)
+def missing_config() -> list:
+    return [name for name in REQUIRED_ENV if not _env(name)]
 
 
-def _resolve_backend() -> str:
-    if STORAGE_BACKEND in ("s3", "emergent", "local"):
-        return STORAGE_BACKEND
-    if _has_s3_config():
-        return "s3"
-    if EMERGENT_KEY:
-        return "emergent"
-    return "local"
-
-
-BACKEND = _resolve_backend()
+def is_configured() -> bool:
+    return not missing_config()
 
 
 def active_backend() -> str:
-    return BACKEND
+    return "r2" if is_configured() else "unconfigured"
 
 
 def describe() -> str:
     """Ringkasan aman untuk log — TIDAK pernah memuat kunci rahasia."""
-    if BACKEND == "s3":
-        where = S3_ENDPOINT_URL or "AWS S3"
-        return f"s3 (bucket={S3_BUCKET}, endpoint={where}, region={S3_REGION})"
-    if BACKEND == "emergent":
-        return "emergent (hanya berfungsi di dalam platform Emergent)"
-    return f"local (folder={LOCAL_DIR}) - PERINGATAN: berkas hilang saat redeploy"
+    c = _cfg()
+    if not is_configured():
+        return ("Cloudflare R2 BELUM dikonfigurasi (env kosong: "
+                + ", ".join(missing_config()) + ") - upload foto akan ditolak")
+    return f"Cloudflare R2 (bucket={c['bucket']}, endpoint={c['endpoint']}, public={c['public_base']})"
 
 
 # --------------------------------------------------------------------------
-# Penyedia 1: S3-compatible (Cloudflare R2 / AWS S3 / MinIO)
+# Klien boto3
 # --------------------------------------------------------------------------
-_s3_client = None
+_client = None
+_client_sig = None
 
 
 def _s3():
-    """Klien boto3 dibuat sekali saja, dan diimpor secara lazy supaya
-    penyedia lain tidak wajib punya boto3 terpasang."""
-    global _s3_client
-    if _s3_client is not None:
-        return _s3_client
+    """Klien boto3 dibuat sekali per konfigurasi (dibuat ulang bila env berubah)."""
+    global _client, _client_sig
+    c = _cfg()
+    if not is_configured():
+        raise RuntimeError("Cloudflare R2 belum dikonfigurasi: " + ", ".join(missing_config()))
+    sig = (c["endpoint"], c["access_key"], c["secret_key"], c["bucket"])
+    if _client is not None and _client_sig == sig:
+        return _client
     import boto3
     from botocore.config import Config
 
-    kwargs = {
-        "aws_access_key_id": S3_ACCESS_KEY_ID,
-        "aws_secret_access_key": S3_SECRET_ACCESS_KEY,
-        "region_name": S3_REGION,
-        # signature v4 wajib untuk R2; path-style menghindari masalah DNS bucket.
-        "config": Config(signature_version="s3v4", s3={"addressing_style": "path"},
-                         retries={"max_attempts": 3, "mode": "standard"}),
-    }
-    if S3_ENDPOINT_URL:
-        kwargs["endpoint_url"] = S3_ENDPOINT_URL
-    _s3_client = boto3.client("s3", **kwargs)
-    return _s3_client
-
-
-def _s3_put(path: str, data: bytes, content_type: str) -> dict:
-    _s3().put_object(Bucket=S3_BUCKET, Key=path, Body=data, ContentType=content_type)
-    return {"path": path, "size": len(data)}
-
-
-def _s3_get(path: str):
-    obj = _s3().get_object(Bucket=S3_BUCKET, Key=path)
-    return obj["Body"].read(), obj.get("ContentType") or "application/octet-stream"
-
-
-# --------------------------------------------------------------------------
-# Penyedia 2: Emergent object storage
-# --------------------------------------------------------------------------
-_emergent_key = None
-
-
-def _emergent_init(force: bool = False) -> str:
-    global _emergent_key
-    if _emergent_key and not force:
-        return _emergent_key
-    resp = requests.post(f"{EMERGENT_STORAGE_URL}/init",
-                         json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    _emergent_key = resp.json()["storage_key"]
-    return _emergent_key
-
-
-def _emergent_put(path: str, data: bytes, content_type: str) -> dict:
-    key = _emergent_init()
-    url = f"{EMERGENT_STORAGE_URL}/objects/{path}"
-    headers = {"X-Storage-Key": key, "Content-Type": content_type}
-    resp = requests.put(url, headers=headers, data=data, timeout=120)
-    if resp.status_code == 404:
-        # Kunci storage kedaluwarsa: ambil ulang lalu coba sekali lagi.
-        headers["X-Storage-Key"] = _emergent_init(force=True)
-        resp = requests.put(url, headers=headers, data=data, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _emergent_get(path: str):
-    key = _emergent_init()
-    resp = requests.get(f"{EMERGENT_STORAGE_URL}/objects/{path}",
-                        headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
-
-
-# --------------------------------------------------------------------------
-# Penyedia 3: disk lokal
-# --------------------------------------------------------------------------
-def _local_path(path: str) -> Path:
-    """Cegah path traversal (mis. "../../etc/passwd") sebelum menyentuh disk."""
-    target = (LOCAL_DIR / path).resolve()
-    root = LOCAL_DIR.resolve()
-    if root != target and root not in target.parents:
-        raise ValueError("Path berkas tidak sah")
-    return target
-
-
-def _local_put(path: str, data: bytes, content_type: str) -> dict:
-    target = _local_path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    # Content-type disimpan berdampingan agar tetap benar saat dibaca kembali.
-    target.with_suffix(target.suffix + ".type").write_text(content_type)
-    return {"path": path, "size": len(data)}
-
-
-def _local_get(path: str):
-    target = _local_path(path)
-    if not target.exists():
-        raise FileNotFoundError(path)
-    meta = target.with_suffix(target.suffix + ".type")
-    ct = meta.read_text().strip() if meta.exists() else "application/octet-stream"
-    return target.read_bytes(), ct
+    _client = boto3.client(
+        "s3",
+        endpoint_url=c["endpoint"],
+        aws_access_key_id=c["access_key"],
+        aws_secret_access_key=c["secret_key"],
+        # R2 mewajibkan region "auto" dan signature v4.
+        region_name="auto",
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
+                      retries={"max_attempts": 3, "mode": "standard"}),
+    )
+    _client_sig = sig
+    return _client
 
 
 # --------------------------------------------------------------------------
 # Antarmuka publik
 # --------------------------------------------------------------------------
-def init_storage(force: bool = False):
-    """Dipanggil sekali saat startup. TIDAK boleh menggagalkan startup —
-    kalau penyimpanan bermasalah, aplikasi kasir harus tetap bisa jualan."""
-    if BACKEND == "s3":
-        # head_bucket memverifikasi kredensial & keberadaan bucket lebih awal,
-        # supaya salah ketik ketahuan saat start, bukan saat kasir upload.
-        _s3().head_bucket(Bucket=S3_BUCKET)
-        return "s3"
-    if BACKEND == "emergent":
-        return _emergent_init(force=force)
-    LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-    return str(LOCAL_DIR)
+def public_url(key: str) -> str:
+    """URL publik utuh = R2_PUBLIC_URL_BASE + '/' + nama objek."""
+    return f"{_cfg()['public_base']}/{key.lstrip('/')}"
 
 
+def init_storage() -> str:
+    """Dipanggil sekali saat startup. Bila R2 belum dikonfigurasi, hanya
+    memperingatkan (aplikasi kasir harus tetap bisa jualan). Bila sudah,
+    head_bucket memverifikasi kredensial & bucket lebih awal supaya salah
+    ketik ketahuan saat start, bukan saat owner mengunggah foto."""
+    if not is_configured():
+        logger.warning(describe())
+        return "unconfigured"
+    _s3().head_bucket(Bucket=_cfg()["bucket"])
+    return "r2"
+
+
+def upload_object(key: str, data: bytes, content_type: str) -> dict:
+    """Unggah berkas ke R2 dengan Content-Type yang sesuai, kembalikan URL publiknya."""
+    _s3().put_object(
+        Bucket=_cfg()["bucket"],
+        Key=key,
+        Body=data,
+        ContentType=content_type or "application/octet-stream",
+        # Boleh di-cache lama oleh browser/CDN karena nama objek unik per upload.
+        CacheControl="public, max-age=31536000, immutable",
+    )
+    return {"key": key, "url": public_url(key), "size": len(data)}
+
+
+def get_object(key: str):
+    """Ambil isi objek dari R2 (dipakai endpoint cadangan /api/files/{id})."""
+    obj = _s3().get_object(Bucket=_cfg()["bucket"], Key=key)
+    return obj["Body"].read(), obj.get("ContentType") or "application/octet-stream"
+
+
+# Kompatibilitas nama lama (put_object) agar skrip/pengujian lama tidak pecah.
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    if BACKEND == "s3":
-        return _s3_put(path, data, content_type)
-    if BACKEND == "emergent":
-        return _emergent_put(path, data, content_type)
-    return _local_put(path, data, content_type)
-
-
-def get_object(path: str):
-    if BACKEND == "s3":
-        return _s3_get(path)
-    if BACKEND == "emergent":
-        return _emergent_get(path)
-    return _local_get(path)
+    r = upload_object(path, data, content_type)
+    return {"path": r["key"], "url": r["url"], "size": r["size"]}

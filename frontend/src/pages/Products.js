@@ -251,10 +251,14 @@ function ProductDialog({ init, onClose, onSaved }) {
     setUploading(true);
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("folder", "products");
+    // Produk yang sudah ada: backend langsung menyimpan URL R2 ke image_url produk.
+    if (init.id) fd.append("product_id", init.id);
     try {
       const { data } = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      set("image_url", `${process.env.REACT_APP_BACKEND_URL}${data.url}`);
-      toast.success("Gambar terunggah");
+      // URL yang dikembalikan sudah URL publik utuh dari Cloudflare R2.
+      set("image_url", data.url);
+      toast.success(data.product_updated ? "Foto produk diperbarui" : "Gambar terunggah");
     } catch (e2) { toast.error(apiError(e2)); } finally { setUploading(false); }
   };
 
