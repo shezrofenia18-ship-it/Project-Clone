@@ -62,6 +62,27 @@ MIME_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
               "gif": "image/gif", "webp": "image/webp"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
+
+def normalize_public_url(url) -> str:
+    """Rapikan URL gambar sebelum disimpan/dikirim ke frontend.
+
+    Frontend versi lama menempelkan REACT_APP_BACKEND_URL di depan URL upload, sehingga
+    URL R2 yang sudah absolut berubah menjadi
+    'https://backend-anda/https://pub-xxx.r2.dev/berkah-ayam-mili/...' (rusak/broken).
+    Fungsi ini mengambil URL absolut TERAKHIR di dalam teks, dan membiarkan URL relatif
+    ('/api/files/..'), data:, atau blob: apa adanya.
+    """
+    s = (url or "").strip()
+    if not s:
+        return ""
+    low = s.lower()
+    if low.startswith(("data:", "blob:")):
+        return s
+    idx = max(low.rfind("https://"), low.rfind("http://"))
+    if idx > 0:
+        return s[idx:]
+    return s
+
 app = FastAPI(title="Berkah Ayam Mili API")
 api = APIRouter(prefix="/api")
 
@@ -523,6 +544,7 @@ async def list_products(user: dict = Depends(get_current_user)):
     out = []
     for p in prods:
         d = clean(p)
+        d["image_url"] = normalize_public_url(d.get("image_url"))
         d["is_fillet"] = is_fillet_product(p)
         d["is_purchasable"] = is_purchasable(p)
         d["purchase_unit"] = purchase_qty_unit(p) if d["is_purchasable"] else None
@@ -575,6 +597,7 @@ async def create_product(body: ProductBody, user: dict = Depends(require_roles("
     doc = body.model_dump()
     doc["id"] = new_id()
     doc["created_at"] = iso_now()
+    doc["image_url"] = normalize_public_url(doc.get("image_url"))
     doc["avg_weight_override"] = float(doc.get("avg_weight_override") or 0)
     doc.setdefault("cum_ekor_in", 0)
     doc.setdefault("cum_weight_in", 0)
@@ -592,6 +615,8 @@ async def update_product(pid: str, body: ProductBody, user: dict = Depends(requi
     if not existing:
         raise HTTPException(404, "Produk tidak ditemukan")
     updates = body.model_dump(exclude_none=True)
+    if "image_url" in updates:
+        updates["image_url"] = normalize_public_url(updates["image_url"])
     for f in ["buy_price_kg", "hpp_kg", "price_kg", "price_ekor"]:
         if f in updates and existing.get(f) != updates.get(f):
             await db.price_history.insert_one({
@@ -1518,7 +1543,13 @@ async def list_expenses(user: dict = Depends(require_roles("owner", "admin", "ka
             return x.get("created_by") == user["name"]
 
         e = [x for x in e if milik_kasir(x)]
-    return [clean(x) for x in e]
+    out = []
+    for x in e:
+        d = clean(x)
+        if d.get("proof_url"):
+            d["proof_url"] = normalize_public_url(d["proof_url"])
+        out.append(d)
+    return out
 
 
 @api.post("/expenses")
@@ -1527,6 +1558,7 @@ async def create_expense(body: ExpenseBody, user: dict = Depends(require_roles("
     doc.update({"id": new_id(), "date": body.date or today_str(),
                 "created_by": user["name"], "created_by_id": user["id"],
                 "created_by_role": user.get("role"), "created_at": iso_now()})
+    doc["proof_url"] = normalize_public_url(doc.get("proof_url"))
     if doc.get("proof_file_id") and not doc.get("proof_url"):
         # Ambil URL publik R2 dari catatan berkas; tautan /api/files/{id} hanya cadangan.
         frec = await db.files.find_one({"id": doc["proof_file_id"], "is_deleted": False})
