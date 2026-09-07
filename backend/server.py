@@ -10,7 +10,9 @@ import asyncio
 import calendar
 import re
 import secrets
+import hashlib
 import logging
+from collections import OrderedDict
 import requests
 from datetime import timedelta
 from typing import List, Optional, Any, Dict
@@ -66,11 +68,16 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 def normalize_public_url(url) -> str:
     """Rapikan URL gambar sebelum disimpan/dikirim ke frontend.
 
-    Frontend versi lama menempelkan REACT_APP_BACKEND_URL di depan URL upload, sehingga
-    URL R2 yang sudah absolut berubah menjadi
-    'https://backend-anda/https://pub-xxx.r2.dev/berkah-ayam-mili/...' (rusak/broken).
-    Fungsi ini mengambil URL absolut TERAKHIR di dalam teks, dan membiarkan URL relatif
-    ('/api/files/..'), data:, atau blob: apa adanya.
+    Aturan (berurutan):
+      1. URL ganda hasil frontend lama ('https://backend/https://pub-xxx.r2.dev/...')
+         -> ambil URL absolut TERAKHIR.
+      2. URL yang sudah menunjuk proxy backend ('.../api/images/<key>') -> simpan RELATIF
+         '/api/images/<key>' supaya tidak rusak bila domain backend berganti.
+      3. URL publik R2 lama (R2_PUBLIC_URL_BASE/<key> atau https://*.r2.dev/<key>) ->
+         dikonversi ke path proxy '/api/images/<key>' karena domain pub-*.r2.dev diblokir
+         sebagian ISP Indonesia (Internet Positif).
+      4. Tautan lama '/api/files/<id>' dibiarkan relatif (endpoint itu me-redirect ke proxy).
+      5. URL eksternal lain (mis. gambar contoh Unsplash), data:, blob: dibiarkan.
     """
     s = (url or "").strip()
     if not s:
@@ -80,7 +87,14 @@ def normalize_public_url(url) -> str:
         return s
     idx = max(low.rfind("https://"), low.rfind("http://"))
     if idx > 0:
-        return s[idx:]
+        s, low = s[idx:], low[idx:]
+    for marker in ("/api/images/", "/api/files/"):
+        i = low.find(marker)
+        if i >= 0:
+            return s[i:]
+    key = storage_mod.key_from_legacy_url(s, f"{APP_NAME}/")
+    if key:
+        return storage_mod.proxy_path(key)
     return s
 
 app = FastAPI(title="Berkah Ayam Mili API")
@@ -2966,48 +2980,140 @@ async def upload_file(file: UploadFile = File(...), folder: str = Form("products
     except Exception as e:
         logger.error(f"Upload ke R2 gagal: {e}")
         raise HTTPException(502, "Gagal mengunggah gambar ke Cloudflare R2. Periksa kredensial/bucket R2.")
-    public = result["url"]
+    # Yang disimpan ke DB adalah PATH PROXY backend (relatif): '/api/images/<key>'.
+    # Bukan URL r2.dev (diblokir ISP), bukan pula domain backend (bisa berganti).
+    public = storage_mod.proxy_path(key)
+    base = await _public_base_url()
+    absolute = f"{base.rstrip('/')}{public}" if base else public
     await db.files.insert_one({"id": fid, "storage_path": key, "public_url": public, "content_type": ct,
                                "original_filename": file.filename, "size": result.get("size", len(data)),
                                "folder": folder, "backend": "r2", "uploaded_by": user["name"],
                                "is_deleted": False, "created_at": iso_now()})
     product_updated = False
     if product_id and folder == "products":
-        # Simpan URL publik utuh (teks) ke field image_url produk yang dipilih.
+        # Simpan path proxy (teks) ke field image_url produk yang dipilih.
         upd = await db.products.update_one({"id": product_id}, {"$set": {"image_url": public}})
         product_updated = upd.matched_count > 0
         if not product_updated:
             raise HTTPException(404, "Produk tidak ditemukan untuk disematkan fotonya")
         await log_audit(user, "update", "product", product_id, after={"image_url": public})
-    return {"id": fid, "url": public, "key": key, "content_type": ct,
+    return {"id": fid, "url": public, "absolute_url": absolute, "key": key, "content_type": ct,
             "product_id": product_id or None, "product_updated": product_updated}
+
+
+# ---- Image proxy: browser -> backend -> R2 (menghindari blokir pub-*.r2.dev) ----
+# Cache memori kecil (LRU) supaya kartu POS yang dibuka berulang tidak selalu
+# menarik dari R2. Objek bernama unik (UUID) sehingga aman di-cache lama.
+_IMG_CACHE: "OrderedDict[str, tuple]" = OrderedDict()
+_IMG_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_img_cache_size = 0
+
+
+def _img_cache_get(key: str):
+    item = _IMG_CACHE.get(key)
+    if item is not None:
+        _IMG_CACHE.move_to_end(key)
+    return item
+
+
+def _img_cache_put(key: str, data: bytes, ct: str, etag: str):
+    global _img_cache_size
+    if len(data) > _IMG_CACHE_MAX_BYTES // 4:
+        return
+    if key in _IMG_CACHE:
+        _img_cache_size -= len(_IMG_CACHE[key][0])
+        del _IMG_CACHE[key]
+    _IMG_CACHE[key] = (data, ct, etag)
+    _img_cache_size += len(data)
+    while _img_cache_size > _IMG_CACHE_MAX_BYTES and _IMG_CACHE:
+        _, (old, _, _) = _IMG_CACHE.popitem(last=False)
+        _img_cache_size -= len(old)
+
+
+@api.get("/images/{key:path}")
+async def proxy_image(key: str, request: Request):
+    """Proxy gambar: ambil objek dari R2 (kredensial S3, tanpa lewat domain publik
+    r2.dev yang diblokir ISP) lalu teruskan ke browser dengan Content-Type yang tepat.
+    Publik (tanpa login) karena dipakai langsung oleh <img src>; nama objek berupa UUID.
+    """
+    key = key.strip("/")
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    if (not key.startswith(f"{APP_NAME}/") or ".." in key or "//" in key
+            or ext not in MIME_TYPES):
+        raise HTTPException(404, "Gambar tidak ditemukan")
+    cached = _img_cache_get(key)
+    if cached is None:
+        if not storage_mod.is_configured():
+            raise HTTPException(503, "Penyimpanan foto (Cloudflare R2) belum dikonfigurasi")
+        try:
+            data, ct = await run_in_threadpool(get_object, key)
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "") if hasattr(e, "response") else ""
+            if code in ("NoSuchKey", "404", "NotFound"):
+                raise HTTPException(404, "Gambar tidak ditemukan")
+            logger.error(f"Proxy gambar gagal ({key}): {e}")
+            raise HTTPException(502, "Gagal mengambil gambar dari penyimpanan")
+        if not (ct or "").startswith("image/"):
+            ct = MIME_TYPES.get(ext, "application/octet-stream")
+        etag = '"' + hashlib.md5(data).hexdigest() + '"'
+        _img_cache_put(key, data, ct, etag)
+        cached = (data, ct, etag)
+    data, ct, etag = cached
+    headers = {"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag,
+               "Content-Length": str(len(data)), "X-Content-Type-Options": "nosniff",
+               "Access-Control-Allow-Origin": "*", "Cross-Origin-Resource-Policy": "cross-origin"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={k: v for k, v in headers.items() if k != "Content-Length"})
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=ct, headers=headers)
+    return Response(content=data, media_type=ct, headers=headers)
+
+
+@api.head("/images/{key:path}", include_in_schema=False)
+async def proxy_image_head(key: str, request: Request):
+    return await proxy_image(key, request)
 
 
 @api.get("/files/{fid}")
 async def serve_file(fid: str):
-    """Kompatibilitas untuk tautan lama `/api/files/{id}`: arahkan ke URL publik R2
-    bila ada; kalau tidak, coba ambil langsung dari bucket (mis. bucket privat)."""
+    """Kompatibilitas untuk tautan lama `/api/files/{id}`: arahkan ke proxy gambar
+    backend (/api/images/<key>) — bukan ke domain r2.dev yang diblokir ISP."""
     rec = await db.files.find_one({"id": fid, "is_deleted": False})
     if not rec:
         raise HTTPException(404, "File tidak ditemukan")
+    if rec.get("storage_path"):
+        return RedirectResponse(storage_mod.proxy_path(rec["storage_path"]), status_code=302)
     if rec.get("public_url"):
-        return RedirectResponse(rec["public_url"], status_code=302)
-    if not storage_mod.is_configured():
-        raise HTTPException(404, "Berkas lama tidak tersedia lagi (penyimpanan lokal sudah dihapus)")
-    try:
-        data, ct = get_object(rec["storage_path"])
-        return Response(content=data, media_type=rec.get("content_type", ct),
-                        headers={"Cache-Control": "public, max-age=86400"})
-    except Exception as e:
-        logger.error(f"Ambil file gagal: {e}")
-        raise HTTPException(404, "Berkas tidak ditemukan di penyimpanan")
+        return RedirectResponse(normalize_public_url(rec["public_url"]), status_code=302)
+    raise HTTPException(404, "Berkas lama tidak tersedia lagi")
 
 
 @api.get("/storage/status")
 async def storage_status(user: dict = Depends(require_roles("owner", "admin"))):
     """Status konfigurasi penyimpanan foto — tanpa membocorkan kunci rahasia."""
     return {"backend": storage_mod.active_backend(), "configured": storage_mod.is_configured(),
-            "missing": storage_mod.missing_config(), "description": storage_mod.describe()}
+            "missing": storage_mod.missing_config(), "description": storage_mod.describe(),
+            "image_proxy": storage_mod.PROXY_PREFIX + "<key>",
+            "cache_items": len(_IMG_CACHE), "cache_bytes": _img_cache_size}
+
+
+async def migrate_image_urls_to_proxy() -> int:
+    """Migrasi satu kali (idempoten): URL gambar yang dulu disimpan sebagai URL publik
+    R2 (pub-*.r2.dev — diblokir ISP Indonesia) atau URL ganda, diubah menjadi path proxy
+    backend '/api/images/<key>'. HANYA menyentuh field image_url/proof_url yang memang
+    berubah bentuk; foto/URL lain (mis. Unsplash) tidak diubah. Aman di production
+    karena tidak menghapus/mereset data — hanya menunjuk berkas yang sama lewat jalur
+    yang bisa diakses tanpa VPN."""
+    changed = 0
+    for coll, field in ((db.products, "image_url"), (db.expenses, "proof_url"), (db.files, "public_url")):
+        cursor = coll.find({field: {"$regex": "r2\\.dev|r2\\.cloudflarestorage\\.com|https?://.*https?://"}},
+                           {"id": 1, field: 1})
+        async for d in cursor:
+            new = normalize_public_url(d.get(field))
+            if new and new != d.get(field):
+                await coll.update_one({"_id": d["_id"]}, {"$set": {field: new}})
+                changed += 1
+    return changed
 
 
 # ------------------------- wiring -------------------------
@@ -3133,6 +3239,12 @@ async def startup():
     except Exception as e:
         logger.error("Penyimpanan foto (Cloudflare R2) GAGAL diverifikasi: %s - periksa "
                      "R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET_NAME", e)
+    try:
+        n = await migrate_image_urls_to_proxy()
+        if n:
+            logger.info("Migrasi URL gambar -> proxy backend: %s field diperbarui", n)
+    except Exception as e:
+        logger.error("Migrasi URL gambar ke proxy gagal: %s", e)
     logger.info("Berkah Ayam Mili API started")
 
 

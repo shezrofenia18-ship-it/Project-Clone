@@ -257,8 +257,9 @@ function ProductDialog({ init, onClose, onSaved }) {
     if (init.id) fd.append("product_id", init.id);
     try {
       const { data } = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      // URL yang dikembalikan sudah URL publik utuh dari Cloudflare R2.
-      set("image_url", resolveImageUrl(data.url));
+      // data.url = path proxy backend "/api/images/<key>" (gambar diambil backend dari R2,
+      // bukan dari domain r2.dev yang diblokir ISP). Disimpan relatif; <img> memakai resolveImageUrl.
+      set("image_url", data.url);
       toast.success(data.product_updated ? "Foto produk diperbarui" : "Gambar terunggah");
     } catch (e2) { toast.error(apiError(e2)); } finally { setUploading(false); }
   };
@@ -353,7 +354,7 @@ function ProductDialog({ init, onClose, onSaved }) {
                 {uploading && <p className="text-xs text-muted-foreground mt-1">Mengunggah...</p>}
               </div>
             </div>
-            <Input placeholder="atau tempel URL gambar" value={f.image_url} onChange={(e) => set("image_url", e.target.value)} onBlur={(e) => set("image_url", resolveImageUrl(e.target.value))} data-testid="product-image-url" className="mt-2" />
+            <Input placeholder="atau tempel URL gambar" value={f.image_url} onChange={(e) => set("image_url", e.target.value)} data-testid="product-image-url" className="mt-2" />
           </div>
         </div>
         <DialogFooter>
