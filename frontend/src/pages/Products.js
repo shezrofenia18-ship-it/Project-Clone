@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatRupiah, formatWeight, formatNumber, formatPct, CATEGORY_LABELS } from "@/lib/format";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import { Plus, Pencil, Trash2, Image as ImageIcon, RotateCcw, Scale, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
@@ -257,7 +258,7 @@ function ProductDialog({ init, onClose, onSaved }) {
     try {
       const { data } = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
       // URL yang dikembalikan sudah URL publik utuh dari Cloudflare R2.
-      set("image_url", data.url);
+      set("image_url", resolveImageUrl(data.url));
       toast.success(data.product_updated ? "Foto produk diperbarui" : "Gambar terunggah");
     } catch (e2) { toast.error(apiError(e2)); } finally { setUploading(false); }
   };
@@ -345,14 +346,14 @@ function ProductDialog({ init, onClose, onSaved }) {
             <Label className="text-xs">Gambar Produk</Label>
             <div className="flex items-center gap-3 mt-1.5">
               {f.image_url
-                ? <img src={f.image_url} alt="preview" className="w-16 h-16 rounded-lg object-cover border border-border" />
+                ? <img src={resolveImageUrl(f.image_url)} alt="preview" data-testid="product-image-preview" className="w-16 h-16 rounded-lg object-cover border border-border" />
                 : <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center text-muted-foreground"><ImageIcon className="w-6 h-6" /></div>}
               <div className="flex-1">
                 <input data-testid="prod-image-file" type="file" accept="image/*" onChange={onUpload} className="text-xs" />
                 {uploading && <p className="text-xs text-muted-foreground mt-1">Mengunggah...</p>}
               </div>
             </div>
-            <Input placeholder="atau tempel URL gambar" value={f.image_url} onChange={(e) => set("image_url", e.target.value)} className="mt-2" />
+            <Input placeholder="atau tempel URL gambar" value={f.image_url} onChange={(e) => set("image_url", e.target.value)} onBlur={(e) => set("image_url", resolveImageUrl(e.target.value))} data-testid="product-image-url" className="mt-2" />
           </div>
         </div>
         <DialogFooter>

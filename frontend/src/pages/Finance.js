@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { formatRupiah, formatDate, PAYMENT_LABELS } from "@/lib/format";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import { Plus, Camera } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import PayMethodPicker from "@/components/PayMethodPicker";
@@ -73,7 +74,7 @@ export default function Finance() {
                   <td className="px-4 py-2.5">
                     {e.proof_url ? (
                       <button data-testid={`exp-proof-${e.id}`} onClick={() => setProof(e)} className="block">
-                        <img src={e.proof_url} alt="bukti" className="w-10 h-10 rounded-md object-cover border border-border hover:ring-2 hover:ring-primary transition-all" />
+                        <img src={resolveImageUrl(e.proof_url)} alt="bukti" className="w-10 h-10 rounded-md object-cover border border-border hover:ring-2 hover:ring-primary transition-all" />
                       </button>
                     ) : <span className="text-muted-foreground text-xs">—</span>}
                   </td>
@@ -123,7 +124,7 @@ export default function Finance() {
               {formatDate(proof.date)} · {formatRupiah(proof.amount)}
               {proof.created_by ? ` · dicatat oleh ${proof.created_by}` : ""}
             </p>
-            <img src={proof.proof_url} alt="bukti pengeluaran" data-testid="proof-full"
+            <img src={resolveImageUrl(proof.proof_url)} alt="bukti pengeluaran" data-testid="proof-full"
               className="w-full max-h-[60vh] object-contain rounded-lg border border-border bg-muted" />
             <DialogFooter><Button variant="outline" onClick={() => setProof(null)}>Tutup</Button></DialogFooter>
           </DialogContent>
@@ -227,7 +228,7 @@ function ExpenseDialog({ onClose, onSaved }) {
             <Label className="text-xs">Foto Bukti Pengeluaran <span className="text-muted-foreground">(opsional)</span></Label>
             <div className="mt-1.5 flex items-start gap-3">
               {f.proof_url
-                ? <img src={f.proof_url} alt="bukti" data-testid="exp-proof-preview" className="w-20 h-20 rounded-lg object-cover border border-border" />
+                ? <img src={resolveImageUrl(f.proof_url)} alt="bukti" data-testid="exp-proof-preview" className="w-20 h-20 rounded-lg object-cover border border-border" />
                 : <div className="w-20 h-20 rounded-lg border border-dashed border-border flex items-center justify-center text-muted-foreground shrink-0"><Camera className="w-6 h-6" /></div>}
               <div className="min-w-0 flex-1">
                 <Input

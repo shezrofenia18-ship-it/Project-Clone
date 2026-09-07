@@ -5,5 +5,17 @@
   "installCommand": "yarn install --frozen-lockfile",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "img-src 'self' data: blob: https://pub-a275aff5ab9848b3931596d2654b12e7.r2.dev https://*.r2.dev https://*.r2.cloudflarestorage.com https:"
+        },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    }
   ]
 }

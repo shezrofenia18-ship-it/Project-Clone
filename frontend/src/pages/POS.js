@@ -21,6 +21,7 @@ import { useOffline } from "@/context/OfflineContext";
 import { devWarn } from "@/lib/log";
 import Receipt from "@/components/Receipt";
 import { formatRupiah, formatWeight, formatNumber, CATEGORY_LABELS, PAYMENT_METHODS, PAYMENT_LABELS } from "@/lib/format";
+import { resolveImageUrl } from "@/lib/imageUrl";
 import { Trash2, Plus, Minus, ShoppingCart, Scale, Hash, Delete, ScanLine, Wallet, CloudOff, ChevronUp, Grid3x3, LayoutGrid, Square, Hand, Search, X } from "lucide-react";
 
 // Pemetaan satuan (kg / ekor / pcs) dipisah sebagai lookup supaya tidak ada
@@ -380,7 +381,7 @@ export default function POS() {
               <button key={p.id} data-testid={`pos-product-${p.id}`} onClick={() => setEntry(p)}
                 className="w-full min-w-0 flex flex-col text-left bg-card border border-border rounded-lg overflow-hidden hover:border-primary hover:-translate-y-0.5 transition-all duration-150">
                 <div className="w-full aspect-square bg-muted overflow-hidden">
-                  {p.image_url ? <img src={p.image_url} alt={p.name} className="block w-full h-full object-cover" loading="lazy" /> : null}
+                  {p.image_url ? <img src={resolveImageUrl(p.image_url)} alt={p.name} className="block w-full h-full object-cover" loading="lazy" /> : null}
                 </div>
                 <div className={`w-full min-w-0 ${size.pad}`}>
                   <p className={`font-semibold ${size.name} leading-tight truncate`}>{p.name}</p>
