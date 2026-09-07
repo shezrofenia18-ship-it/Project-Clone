@@ -4,9 +4,10 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#D9381E" />
-        <!-- Whitelist domain gambar: foto produk & bukti pengeluaran dirender dari Cloudflare R2
-             (pub-a275aff5ab9848b3931596d2654b12e7.r2.dev). Hanya directive img-src yang dibatasi. -->
-        <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob: https://pub-a275aff5ab9848b3931596d2654b12e7.r2.dev https://*.r2.dev https://*.r2.cloudflarestorage.com https:" />
+        <!-- Gambar produk/bukti dilayani lewat IMAGE PROXY backend (/api/images/...) karena domain
+             pub-*.r2.dev diblokir sebagian ISP Indonesia. CSP hanya membatasi img-src: self, data/blob,
+             domain backend (https:), dan domain R2 sebagai cadangan. -->
+        <meta http-equiv="Content-Security-Policy" content="img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:*" />
         <meta name="description" content="Berkah Ayam Mili - Sistem POS & Manajemen Bisnis Ayam Potong" />
         <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />

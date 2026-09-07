@@ -150,30 +150,41 @@ bersifat sementara sehingga foto hilang setiap redeploy. Backend membaca 5 env i
 | `R2_ACCESS_KEY_ID` | dari **Manage R2 API Tokens** (izin *Object Read & Write*) |
 | `R2_SECRET_ACCESS_KEY` | dari **Manage R2 API Tokens** |
 | `R2_BUCKET_NAME` | nama bucket, mis. `berkah-ayam-mili` |
-| `R2_PUBLIC_URL_BASE` | domain publik bucket **tanpa** garis miring akhir, mis. `https://pub-xxxx.r2.dev` atau custom domain `https://foto.tokoanda.com` |
+| `R2_PUBLIC_URL_BASE` | *(opsional)* domain publik bucket lama, mis. `https://pub-xxxx.r2.dev` — hanya dipakai untuk memigrasi URL lama di database. Gambar **tidak** lagi dilayani dari domain ini |
 
 ### Langkah di Cloudflare
 
 1. Dashboard Cloudflare → **R2** → **Create bucket** (mis. `berkah-ayam-mili`).
-2. Buka bucket → **Settings** → **Public access**: aktifkan **r2.dev subdomain**
-   (atau sambungkan **Custom domain**). Salin URL-nya ke `R2_PUBLIC_URL_BASE`.
+2. *(Opsional)* Public access r2.dev **tidak diperlukan** — gambar dilayani lewat proxy backend.
 3. **Manage R2 API Tokens** → buat token **Object Read & Write** untuk bucket itu.
    Salin Access Key ID & Secret Access Key.
-4. Isi kelima variabel di hosting backend, lalu **restart backend**.
+4. Isi variabel di hosting backend (4 wajib, `R2_PUBLIC_URL_BASE` opsional), lalu **restart backend**.
 
-### Alur yang terjadi saat owner mengunggah foto
+### Image Proxy — kenapa gambar tidak dimuat langsung dari r2.dev
 
-1. Berkas dikirim ke R2 dengan **Content-Type asli** (`image/jpeg`, `image/png`, …)
-   yang dideteksi dari isi berkas, sehingga browser langsung merendernya sebagai gambar.
-2. URL publik dibentuk: `R2_PUBLIC_URL_BASE + "/" + berkah-ayam-mili/products/<id>.<ext>`.
-3. URL teks itu disimpan ke field `image_url` produk (atau `proof_url` pengeluaran) di MongoDB.
+Domain bawaan `pub-*.r2.dev` **diblokir sebagian ISP Indonesia (Internet Positif)**, sehingga
+gambar rusak tanpa VPN. Karena itu backend menyediakan **image proxy**:
+
+1. Owner mengunggah foto → berkas dikirim ke R2 dengan **Content-Type asli** (dideteksi dari isi berkas).
+2. Yang disimpan ke MongoDB (`image_url` produk / `proof_url` pengeluaran) adalah **path proxy
+   relatif**: `/api/images/berkah-ayam-mili/products/<id>.<ext>` (bukan URL r2.dev, bukan domain backend —
+   jadi tidak rusak bila domain backend berganti).
+3. Browser meminta `https://<backend-anda>/api/images/<key>` → backend mengambil objek dari R2 memakai
+   kredensial S3 (tidak lewat domain publik) → diteruskan dengan Content-Type yang tepat, ETag, dan
+   `Cache-Control` 1 tahun (nama objek unik). Ada cache memori 64 MB di backend agar POS cepat.
+4. URL lama yang masih berbentuk `https://pub-xxx.r2.dev/...` **otomatis dimigrasi** ke path proxy saat
+   backend start (hanya field URL yang berubah; berkas & data lain tidak disentuh).
+5. Frontend: semua `<img>` memakai `resolveImageUrl()` (`src/lib/imageUrl.js`) yang menempelkan
+   `REACT_APP_BACKEND_URL`. CSP `img-src` mengizinkan `self`, `data:`, `blob:`, dan `https:`.
+
+> Public Access (r2.dev) di bucket **tidak wajib** dinyalakan lagi — bucket privat pun jalan.
 
 ### Cara memastikan R2 aktif
 
 Saat start, backend mencetak di log:
 
 ```
-INFO:berkah:Penyimpanan foto -> Cloudflare R2 (bucket=berkah-ayam-mili, endpoint=https://xxx.r2.cloudflarestorage.com, public=https://pub-xxxx.r2.dev)
+INFO:berkah:Penyimpanan foto -> Cloudflare R2 (bucket=berkah-ayam-mili, endpoint=https://xxx.r2.cloudflarestorage.com) -> gambar dilayani lewat proxy backend /api/images/<key>
 ```
 
 Bila env belum lengkap, backend **tetap hidup** (kasir masih bisa jualan) tetapi

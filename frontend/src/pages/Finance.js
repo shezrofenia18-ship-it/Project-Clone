@@ -200,7 +200,7 @@ function ExpenseDialog({ onClose, onSaved }) {
     fd.append("folder", "proofs");
     try {
       const { data } = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      // data.url = URL publik utuh dari Cloudflare R2.
+      // data.url = path proxy backend "/api/images/<key>"; ditampilkan lewat resolveImageUrl.
       setF((p) => ({ ...p, proof_file_id: data.id, proof_url: data.url }));
       toast.success("Foto bukti terunggah");
     } catch (e2) { toast.error(apiError(e2)); } finally { setUploading(false); }
