@@ -15,11 +15,16 @@ import { Plus, Pencil } from "lucide-react";
 export default function Production() {
   const { data, reload } = useFetch("/productions");
   const { data: products, reload: reloadProducts } = useFetch("/products");
-  const source = (products || []).filter((p) => ["broiler", "kampung", "pejantan"].includes(p.category));
-  const outs = (products || []).filter((p) => ["fillet", "potongan", "sampingan"].includes(p.category));
   const [open, setOpen] = useState(false);
   // Baris produksi yang sedang dikoreksi (null = tidak ada).
   const [edit, setEdit] = useState(null);
+  // Produk NONAKTIF disembunyikan supaya pilihan tidak dipenuhi produk yang sudah
+  // tidak terpakai. Pengecualian: produk yang dipakai pada data lama yang sedang
+  // dikoreksi tetap ditampilkan agar formulir edit tidak kehilangan pilihannya.
+  const usedInEdit = new Set([edit?.source_product_id, ...((edit?.outputs || []).map((o) => o.product_id))].filter(Boolean));
+  const visible = (p) => p.active !== false || usedInEdit.has(p.id);
+  const source = (products || []).filter((p) => ["broiler", "kampung", "pejantan"].includes(p.category) && visible(p));
+  const outs = (products || []).filter((p) => ["fillet", "potongan", "sampingan"].includes(p.category) && visible(p));
 
   const afterSave = () => { setOpen(false); setEdit(null); reload(); reloadProducts(); };
 
@@ -32,7 +37,14 @@ export default function Production() {
           <Card key={p.id} data-testid={`production-${p.id}`} className="p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="font-semibold">{p.source_name} · Input {formatNumber(p.input_ekor)} ekor</p>
+                <p className="font-semibold">
+                  {p.source_name} · Input {formatNumber(p.input_ekor)} ekor
+                  {Number(p.input_weight_kg) > 0 && (
+                    <span className="text-muted-foreground font-normal tabular" data-testid={`production-kg-${p.id}`}>
+                      {" "}· ≈ {formatNumber(p.input_weight_kg, 2)} kg
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {formatDate(p.date)} · Operator {p.operator}
                   {p.updated_at && <span className="text-warning"> · sudah dikoreksi</span>}
@@ -86,6 +98,13 @@ function ProductionDialog({ initial, source, outs, onClose, onSaved }) {
   const filled = outs.filter((p) => Number(qty[p.id]) > 0);
   const totalPcs = filled.reduce((s, p) => s + Number(qty[p.id]), 0);
   const oldPcs = (initial?.outputs || []).reduce((s, o) => s + Number(o.pcs || 0), 0);
+  // Estimasi kg yang ikut berkurang dari stok: ekor x berat rata-rata/ekor
+  // (aturan yang sama dengan penjualan per ekor di POS).
+  const srcProd = source.find((p) => p.id === f.source_product_id);
+  const avgW = Number(srcProd?.avg_weight_override) > 0
+    ? Number(srcProd.avg_weight_override)
+    : Number(srcProd?.avg_weight_used || srcProd?.avg_weight_ekor || 0);
+  const estKg = Number(f.input_ekor) > 0 && avgW > 0 ? Number(f.input_ekor) * avgW : 0;
 
   const save = async () => {
     if (!f.source_product_id || !Number(f.input_ekor)) return toast.error("Lengkapi sumber & jumlah ayam");
@@ -116,8 +135,8 @@ function ProductionDialog({ initial, source, outs, onClose, onSaved }) {
           <DialogTitle>{isEdit ? "Edit Produksi Potong" : "Produksi Potong"}</DialogTitle>
           <DialogDescription className="text-xs">
             {isEdit
-              ? "Perbaiki angka yang salah input. Stok ayam (ekor) & stok pcs tiap bagian otomatis disesuaikan sebesar selisihnya."
-              : "Isi jumlah pcs pada bagian yang dihasilkan. Bagian yang dibiarkan kosong tidak dicatat."}
+              ? "Perbaiki angka yang salah input. Stok ayam (ekor + kg) & stok pcs tiap bagian otomatis disesuaikan sebesar selisihnya."
+              : "Isi jumlah pcs pada bagian yang dihasilkan. Bagian yang dibiarkan kosong tidak dicatat. Stok ekor & kg ayam sumber berkurang otomatis."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -136,6 +155,19 @@ function ProductionDialog({ initial, source, outs, onClose, onSaved }) {
             </div>
             <div><Label className="text-xs">Jumlah Ayam (ekor)</Label><Input data-testid="prod-input" type="number" value={f.input_ekor} onChange={(e) => set("input_ekor", e.target.value)} className="mt-1 tabular" /></div>
           </div>
+          {srcProd && (
+            <div data-testid="prod-kg-estimate" className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed">
+              {estKg > 0 ? (
+                <>Stok <b>{srcProd.name}</b> akan berkurang <b className="tabular">{formatNumber(f.input_ekor)} ekor</b> dan{" "}
+                  <b className="tabular">≈ {formatNumber(estKg, 2)} kg</b>{" "}
+                  <span className="text-muted-foreground">({formatNumber(avgW, 2)} kg/ekor × {formatNumber(f.input_ekor)})</span>.
+                  Stok kg & ekor selalu berkurang bersama, sama seperti penjualan per ekor.</>
+              ) : (
+                <span className="text-muted-foreground">Isi jumlah ekor — stok kg akan ikut berkurang sebesar ekor × berat rata-rata/ekor
+                  {avgW > 0 ? ` (${formatNumber(avgW, 2)} kg/ekor)` : ""}.</span>
+              )}
+            </div>
+          )}
 
           <div className="space-y-3">
             <div className="flex items-center justify-between">

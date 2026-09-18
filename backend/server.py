@@ -278,6 +278,56 @@ def sale_line_weight(product: dict, unit: str, qty: float) -> float:
     return 0.0
 
 
+def production_input_weight(product: dict, ekor: float) -> float:
+    """Berat (kg) yang keluar dari stok saat `ekor` ayam dipotong di Produksi Potong.
+
+    Aturannya SAMA dengan penjualan per ekor: ekor x berat rata-rata/ekor, supaya
+    stok kg & ekor selalu berkurang bersama-sama.
+    """
+    return round(float(ekor or 0) * effective_avg_weight(product), 3)
+
+
+# Toleransi selisih kg vs (ekor x berat rata-rata) sebelum dianggap "tidak sejalan".
+STOCK_SYNC_TOLERANCE_PCT = 15.0
+STOCK_SYNC_TOLERANCE_KG = 0.5
+
+
+def stock_sync_info(product: dict) -> Optional[dict]:
+    """Bandingkan stok kg nyata dengan kg yang SEHARUSNYA (ekor x berat rata-rata).
+
+    Hanya untuk ayam utuh (satuan ekor). Dipakai halaman Stok untuk menandai
+    stok lama yang kg & ekornya sudah tidak sejalan, plus tombol "Sinkronkan kg".
+    Mengembalikan None untuk produk yang tidak dijual per ekor.
+    """
+    if not is_whole_chicken(product):
+        return None
+    avg = effective_avg_weight(product)
+    ekor = float(product.get("stock_ekor", 0) or 0)
+    kg = float(product.get("stock_kg", 0) or 0)
+    expected = round(ekor * avg, 3) if avg > 0 else None
+    if expected is None:
+        return {"avg_weight": 0, "expected_kg": None, "diff_kg": 0, "diff_pct": 0,
+                "implied_avg": round(kg / ekor, 3) if ekor > 0 else 0, "out_of_sync": False,
+                "reason": "berat rata-rata belum ada"}
+    diff = round(kg - expected, 3)
+    base = expected if expected > 0 else max(abs(kg), 0.0001)
+    pct = round(abs(diff) / base * 100, 1) if base else 0.0
+    out = abs(diff) > STOCK_SYNC_TOLERANCE_KG and pct > STOCK_SYNC_TOLERANCE_PCT
+    reason = ""
+    if out:
+        if ekor <= 0 and kg > 0:
+            reason = "stok ekor habis tapi kg masih ada"
+        elif kg <= 0 and ekor > 0:
+            reason = "stok kg habis tapi ekor masih ada"
+        elif diff > 0:
+            reason = "kg lebih besar dari perkiraan"
+        else:
+            reason = "kg lebih kecil dari perkiraan"
+    return {"avg_weight": avg, "expected_kg": expected, "diff_kg": diff, "diff_pct": pct,
+            "implied_avg": round(kg / ekor, 3) if ekor > 0 else 0,
+            "out_of_sync": out, "reason": reason}
+
+
 def default_avg_weight(product: dict) -> float:
     """Berat perkiraan bawaan berdasarkan jenis ayam pada nama produk."""
     if not sells_per_ekor(product):
@@ -562,6 +612,8 @@ async def list_products(user: dict = Depends(get_current_user)):
         d["is_fillet"] = is_fillet_product(p)
         d["is_purchasable"] = is_purchasable(p)
         d["purchase_unit"] = purchase_qty_unit(p) if d["is_purchasable"] else None
+        # Selisih kg vs ekor x berat rata-rata (None untuk produk bukan ayam utuh).
+        d["stock_sync"] = stock_sync_info(p)
         out.append(d)
     return out
 
@@ -668,11 +720,154 @@ async def set_product_avg_weight(pid: str, body: AvgWeightBody,
     return clean(await db.products.find_one({"id": pid}))
 
 
+async def product_usage_counts(pid: str) -> dict:
+    """Berapa banyak riwayat yang merujuk produk ini (untuk peringatan sebelum hapus)."""
+    return {
+        "sales": await db.sales.count_documents({"items.product_id": pid}),
+        "purchases": await db.purchases.count_documents({"items.product_id": pid}),
+        "productions": await db.productions.count_documents(
+            {"$or": [{"source_product_id": pid}, {"outputs.product_id": pid}]}),
+        "movements": await db.stock_movements.count_documents({"product_id": pid}),
+    }
+
+
+@api.get("/products/{pid}/usage")
+async def product_usage(pid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    """Info sebelum menghapus produk: stok tersisa & jumlah riwayat yang merujuknya.
+
+    Riwayat (penjualan, pembelian, produksi, pergerakan stok) menyimpan NAMA
+    produk di dokumennya sendiri, jadi laporan lama tetap terbaca walau produk
+    dihapus permanen.
+    """
+    p = await db.products.find_one({"id": pid})
+    if not p:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    usage = await product_usage_counts(pid)
+    stock = {"kg": float(p.get("stock_kg", 0) or 0), "ekor": float(p.get("stock_ekor", 0) or 0),
+             "pcs": float(p.get("stock_pcs", 0) or 0)}
+    return {"id": pid, "name": p.get("name"), "active": p.get("active", True), "stock": stock,
+            "has_stock": any(abs(v) > 0.0001 for v in stock.values()),
+            "usage": usage, "has_history": any(v > 0 for v in usage.values())}
+
+
 @api.delete("/products/{pid}")
-async def delete_product(pid: str, user: dict = Depends(require_roles("owner", "admin"))):
-    await db.products.update_one({"id": pid}, {"$set": {"active": False}})
-    await log_audit(user, "delete", "product", pid)
-    return {"ok": True}
+async def delete_product(pid: str, permanent: bool = False,
+                         user: dict = Depends(require_roles("owner", "admin"))):
+    """Hapus produk.
+
+    - default (permanent=false): NONAKTIFKAN saja (tidak muncul di POS/stok/produksi,
+      bisa diaktifkan kembali lewat POST /products/{pid}/restore).
+    - permanent=true (HANYA owner): hapus dari database secara permanen supaya
+      daftar produk tidak dipenuhi pilihan yang sudah tidak terpakai. Riwayat
+      transaksi lama tetap utuh karena menyimpan nama produk sendiri.
+    """
+    existing = await db.products.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    if not permanent:
+        await db.products.update_one({"id": pid}, {"$set": {"active": False}})
+        await log_audit(user, "delete", "product", pid, {"active": existing.get("active", True)}, {"active": False})
+        await rt_emit(["products", "stock", "dashboard"], {"product_id": pid})
+        return {"ok": True, "permanent": False}
+    if user["role"] != "owner":
+        raise HTTPException(403, "Hanya owner yang boleh menghapus produk secara permanen")
+    usage = await product_usage_counts(pid)
+    await db.products.delete_one({"id": pid})
+    await db.price_history.delete_many({"product_id": pid})
+    await log_audit(user, "delete_permanent", "product", pid, clean(existing), {"usage": usage})
+    await add_activity("adjust", "Produk Dihapus", f"{existing.get('name')} dihapus permanen", 0, user["name"])
+    await rt_emit(["products", "stock", "dashboard"], {"product_id": pid})
+    return {"ok": True, "permanent": True, "usage": usage}
+
+
+@api.post("/products/{pid}/restore")
+async def restore_product(pid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    """Aktifkan kembali produk yang sebelumnya dinonaktifkan."""
+    existing = await db.products.find_one({"id": pid})
+    if not existing:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    await db.products.update_one({"id": pid}, {"$set": {"active": True}})
+    await log_audit(user, "restore", "product", pid, {"active": existing.get("active", True)}, {"active": True})
+    await rt_emit(["products", "stock", "dashboard"], {"product_id": pid})
+    return clean(await db.products.find_one({"id": pid}))
+
+
+class SyncKgBody(BaseModel):
+    reason: str = ""
+
+
+@api.get("/products/{pid}/sync-kg")
+async def preview_sync_kg(pid: str, user: dict = Depends(require_roles("owner", "admin"))):
+    """Pratinjau: berapa kg yang akan berubah kalau stok kg disinkronkan ke ekor."""
+    p = await db.products.find_one({"id": pid})
+    if not p:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    info = stock_sync_info(p)
+    if info is None:
+        raise HTTPException(400, f"{p['name']} bukan ayam utuh (tidak punya satuan ekor)")
+    return {"id": pid, "name": p["name"], "stock_kg": float(p.get("stock_kg", 0) or 0),
+            "stock_ekor": float(p.get("stock_ekor", 0) or 0), **info}
+
+
+async def _sync_kg_one(p: dict, user: dict, reason: str = "") -> dict:
+    """Jalankan sinkronisasi kg untuk SATU produk (dipakai endpoint tunggal & massal)."""
+    info = stock_sync_info(p)
+    if info is None:
+        raise HTTPException(400, f"{p['name']} bukan ayam utuh (tidak punya satuan ekor)")
+    if info.get("expected_kg") is None:
+        raise HTTPException(400, f"Berat rata-rata/ekor {p['name']} belum ada, isi dulu di Produk & Harga")
+    before_kg = float(p.get("stock_kg", 0) or 0)
+    delta = round(-float(info["diff_kg"]), 3)
+    if abs(delta) < 0.0005:
+        return {"ok": True, "changed": False, "product_id": p["id"], "name": p["name"], "delta_kg": 0,
+                "before_kg": before_kg, "stock_kg": before_kg, "expected_kg": info["expected_kg"]}
+    reason = (reason or "").strip() or (
+        f"Sinkronisasi kg ke ekor ({_num(p.get('stock_ekor', 0))} ekor x {info['avg_weight']} kg)")
+    await apply_stock(p, 0, delta, "penyesuaian", user["name"], reason, allow_negative=True)
+    await log_audit(user, "sync_kg", "stock", p["id"],
+                    {"stock_kg": before_kg},
+                    {"stock_kg": info["expected_kg"], "delta_kg": delta, "avg_weight": info["avg_weight"],
+                     "stock_ekor": float(p.get("stock_ekor", 0) or 0), "reason": reason, "product_name": p["name"]})
+    await add_activity("adjust", "Sinkronisasi Stok Kg", f"{p['name']}: {'+' if delta > 0 else ''}{_num(delta)} kg", 0, user["name"])
+    return {"ok": True, "changed": True, "product_id": p["id"], "name": p["name"], "delta_kg": delta,
+            "before_kg": before_kg, "stock_kg": info["expected_kg"], "expected_kg": info["expected_kg"]}
+
+
+@api.post("/products/sync-kg-all")
+async def sync_kg_all(body: SyncKgBody, user: dict = Depends(require_roles("owner"))):
+    """Sinkronkan kg SEMUA ayam utuh aktif yang stoknya tidak sejalan, sekali jalan.
+
+    Tiap produk tetap dicatat terpisah di Pergerakan Stok & Audit Log.
+    """
+    prods = await db.products.find({"active": {"$ne": False}}).sort("name", 1).to_list(1000)
+    results = []
+    for p in prods:
+        info = stock_sync_info(p)
+        if not info or not info.get("out_of_sync"):
+            continue
+        results.append(await _sync_kg_one(p, user, body.reason))
+    changed = [r for r in results if r["changed"]]
+    if changed:
+        await rt_emit(["stock", "products", "dashboard"])
+    return {"ok": True, "count": len(changed), "total_delta_kg": round(sum(r["delta_kg"] for r in changed), 3),
+            "results": results}
+
+
+@api.post("/products/{pid}/sync-kg")
+async def sync_kg(pid: str, body: SyncKgBody, user: dict = Depends(require_roles("owner"))):
+    """Koreksi stok lama: set stok kg = ekor x berat rata-rata/ekor.
+
+    Dicatat sebagai pergerakan stok jenis "penyesuaian" sebesar SELISIHNYA (bukan
+    menimpa diam-diam) supaya jejaknya terlihat di Pergerakan Stok & Audit Log.
+    Hanya owner, selaras dengan aturan Penyesuaian Stok.
+    """
+    p = await db.products.find_one({"id": pid})
+    if not p:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    result = await _sync_kg_one(p, user, body.reason)
+    if result["changed"]:
+        await rt_emit(["stock", "products", "dashboard"], {"id": pid})
+    return result
 
 
 # ------------------------- Customers -------------------------
@@ -1118,16 +1313,22 @@ async def create_production(body: ProductionBody, user: dict = Depends(require_r
     total_output = sum(o.pcs for o in lines)
     # Nilai ayam yang dipotong. Tidak ada biaya tambahan, jadi total_cost = nilai ayam.
     material_value = round(body.input_ekor * float(source.get("hpp_ekor", 0) or 0), 2)
+    # SINKRON KG <-> EKOR: memotong N ekor juga mengurangi stok kg sebesar
+    # N x berat rata-rata/ekor (sama persis dengan aturan penjualan per ekor),
+    # supaya angka kg & ekor di halaman Stok selalu bergerak bersama.
+    avg_w = effective_avg_weight(source)
+    input_weight = production_input_weight(source, body.input_ekor)
     pid = new_id()
     doc = {
         "id": pid, "source_product_id": body.source_product_id, "source_name": source["name"],
         "date": body.date or today_str(), "input_ekor": body.input_ekor, "outputs": outputs_out,
+        "input_weight_kg": input_weight, "avg_weight_used": avg_w,
         "material_value": material_value, "total_cost": material_value,
         "operator": body.operator or user["name"], "notes": body.notes,
         "created_by": user["name"], "created_at": iso_now(),
     }
     await db.productions.insert_one(doc)
-    await apply_stock(source, -body.input_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+    await apply_stock(source, -body.input_ekor, -input_weight, "produksi", user["name"], pid, allow_negative=True)
     for o in lines:
         await apply_stock(products_cache[o.product_id], 0, 0, "produksi", user["name"], pid, delta_pcs=o.pcs)
     await add_activity("production", "Produksi Potong Selesai", f"{source['name']} {body.input_ekor} ekor -> {total_output} pcs", 0, doc["operator"])
@@ -1188,19 +1389,31 @@ async def update_production(pid: str, body: ProductionBody,
         raise HTTPException(404, "Data produksi tidak ditemukan")
     source, lines, outputs_out, cache = await _validate_production(body)
 
-    # ---- selisih stok EKOR di produk sumber ----
+    # ---- selisih stok EKOR (dan KG yang mengikutinya) di produk sumber ----
     old_src_id = old.get("source_product_id")
     old_ekor = float(old.get("input_ekor", 0) or 0)
     new_ekor = float(body.input_ekor)
+    # Berat kg yang dulu benar-benar dipotong dari stok. Data lama (sebelum fitur
+    # sinkron kg) tidak menyimpannya -> dianggap ekor lama x berat rata-rata saat
+    # ini, sehingga koreksi hanya menggeser kg sebesar SELISIH ekor, bukan
+    # tiba-tiba memotong kg penuh dari stok.
+    old_weight = old.get("input_weight_kg")
+    new_weight = production_input_weight(source, new_ekor)
+    new_avg = effective_avg_weight(source)
     if old_src_id == body.source_product_id:
+        if old_weight is None:
+            old_weight = production_input_weight(source, old_ekor)
         d_ekor = round(old_ekor - new_ekor, 3)   # input dikurangi -> stok kembali
-        if abs(d_ekor) > 0.0001:
-            await apply_stock(source, d_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+        d_kg = round(float(old_weight) - new_weight, 3)
+        if abs(d_ekor) > 0.0001 or abs(d_kg) > 0.0001:
+            await apply_stock(source, d_ekor, d_kg, "produksi", user["name"], pid, allow_negative=True)
     else:
         old_src = await db.products.find_one({"id": old_src_id}) if old_src_id else None
         if old_src and old_ekor:
-            await apply_stock(old_src, old_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
-        await apply_stock(source, -new_ekor, 0, "produksi", user["name"], pid, allow_negative=True)
+            if old_weight is None:
+                old_weight = production_input_weight(old_src, old_ekor)
+            await apply_stock(old_src, old_ekor, float(old_weight), "produksi", user["name"], pid, allow_negative=True)
+        await apply_stock(source, -new_ekor, -new_weight, "produksi", user["name"], pid, allow_negative=True)
 
     # ---- selisih stok PCS tiap bagian (termasuk bagian yang dihapus/ditambah) ----
     before_pcs, after_pcs = _pcs_map(old.get("outputs")), _pcs_map(lines)
@@ -1219,6 +1432,7 @@ async def update_production(pid: str, body: ProductionBody,
         "source_product_id": body.source_product_id, "source_name": source["name"],
         "date": body.date or old.get("date") or today_str(),
         "input_ekor": body.input_ekor, "outputs": outputs_out,
+        "input_weight_kg": new_weight, "avg_weight_used": new_avg,
         "material_value": material_value, "total_cost": material_value,
         "operator": body.operator or old.get("operator") or user["name"],
         "notes": body.notes or old.get("notes", ""),
@@ -1725,6 +1939,85 @@ async def read_all_notifications(user: dict = Depends(get_current_user)):
 async def list_audit(user: dict = Depends(require_roles("owner", "admin"))):
     a = await db.audit_logs.find().sort("created_at", -1).to_list(500)
     return [clean(x) for x in a]
+
+
+@api.get("/audit-logs/deleted-products")
+async def list_deleted_products(user: dict = Depends(require_roles("owner", "admin"))):
+    """Riwayat produk yang DIHAPUS PERMANEN: kapan, oleh siapa, stok & riwayat saat itu.
+
+    Sumbernya audit log (action "delete_permanent"), yang menyimpan salinan penuh
+    dokumen produk di kolom `before`, jadi tetap terbaca walau produknya sudah
+    tidak ada di koleksi products.
+    """
+    rows = await db.audit_logs.find({"action": "delete_permanent", "entity": "product"}) \
+        .sort("created_at", -1).to_list(500)
+    # Produk yang saat ini ada (mungkin sudah dipulihkan / dibuat ulang dengan id sama).
+    current = await db.products.find({}, {"id": 1, "name": 1, "active": 1}).to_list(2000)
+    existing_ids = {p["id"] for p in current}
+    active_names = {(p.get("name") or "").strip().lower() for p in current if p.get("active", True) is not False}
+    out = []
+    for r in rows:
+        b = r.get("before") or {}
+        usage = (r.get("after") or {}).get("usage") or {}
+        name_taken = (b.get("name") or "").strip().lower() in active_names
+        out.append({
+            "id": r.get("id"), "product_id": r.get("entity_id"),
+            "name": b.get("name") or "(tanpa nama)", "category": b.get("category"),
+            "units": b.get("units") or [],
+            "stock_kg": float(b.get("stock_kg", 0) or 0), "stock_ekor": float(b.get("stock_ekor", 0) or 0),
+            "stock_pcs": float(b.get("stock_pcs", 0) or 0),
+            "price_kg": float(b.get("price_kg", 0) or 0), "hpp_kg": float(b.get("hpp_kg", 0) or 0),
+            "was_active": b.get("active", True),
+            "usage": usage, "deleted_by": r.get("user"), "deleted_by_role": r.get("role"),
+            "deleted_at": r.get("created_at"),
+            # Sudah dipulihkan lewat tombol "Pulihkan"?
+            "restored_at": r.get("restored_at"), "restored_by": r.get("restored_by"),
+            # Bisa dipulihkan hanya bila belum ada produk dengan id yang sama & salinan lengkap,
+            # dan tidak ada produk AKTIF lain dengan nama yang sama.
+            "can_restore": bool(b.get("name")) and r.get("entity_id") not in existing_ids
+                           and not r.get("restored_at") and not name_taken,
+            "blocked_reason": ("nama sudah dipakai produk aktif" if name_taken and not r.get("restored_at")
+                               else ("produk masih ada" if r.get("entity_id") in existing_ids and not r.get("restored_at") else None)),
+        })
+    return out
+
+
+@api.post("/audit-logs/deleted-products/{audit_id}/restore")
+async def restore_deleted_product(audit_id: str, user: dict = Depends(require_roles("owner"))):
+    """Buat ulang produk yang terhapus permanen dari salinan di audit log.
+
+    Produk dibuat dengan ID YANG SAMA supaya riwayat lama (penjualan, pembelian,
+    produksi, pergerakan stok) otomatis tersambung kembali. Stok saat dihapus
+    ikut dipulihkan apa adanya. Hanya owner, selaras dengan aturan hapus permanen.
+    """
+    row = await db.audit_logs.find_one({"id": audit_id, "action": "delete_permanent", "entity": "product"})
+    if not row:
+        raise HTTPException(404, "Catatan penghapusan tidak ditemukan")
+    if row.get("restored_at"):
+        raise HTTPException(400, "Produk ini sudah pernah dipulihkan")
+    snapshot = dict(row.get("before") or {})
+    pid = row.get("entity_id") or snapshot.get("id")
+    if not snapshot.get("name") or not pid:
+        raise HTTPException(400, "Salinan produk di audit log tidak lengkap, tidak bisa dipulihkan")
+    if await db.products.find_one({"id": pid}):
+        raise HTTPException(409, f"Produk '{snapshot['name']}' sudah ada (mungkin sudah dipulihkan)")
+    if await db.products.find_one({"name": snapshot["name"], "active": {"$ne": False}}):
+        raise HTTPException(409, f"Sudah ada produk aktif bernama '{snapshot['name']}'. Ganti nama produk itu dulu.")
+    snapshot.pop("_id", None)
+    snapshot["id"] = pid
+    snapshot["active"] = True
+    snapshot["restored_at"] = iso_now()
+    snapshot["restored_from_audit"] = audit_id
+    await db.products.insert_one(snapshot)
+    await recompute_avg_weight(pid)
+    await db.audit_logs.update_one({"id": audit_id}, {"$set": {"restored_at": iso_now(), "restored_by": user["name"]}})
+    await log_audit(user, "restore_deleted", "product", pid, None,
+                    {"name": snapshot["name"], "from_audit": audit_id,
+                     "stock_kg": snapshot.get("stock_kg", 0), "stock_ekor": snapshot.get("stock_ekor", 0),
+                     "stock_pcs": snapshot.get("stock_pcs", 0)})
+    await add_activity("adjust", "Produk Dipulihkan", f"{snapshot['name']} dipulihkan dari riwayat hapus", 0, user["name"])
+    await rt_emit(["products", "stock", "dashboard"], {"product_id": pid})
+    return clean(await db.products.find_one({"id": pid}))
 
 
 @api.get("/price-history")

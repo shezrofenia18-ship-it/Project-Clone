@@ -1,723 +1,476 @@
-#!/usr/bin/env python3
 """
-Backend API Test for Fillet Product Detection Feature
-Tests the revised fillet detection logic in purchases.
+Backend API Testing for Berkah Ayam Mili - KG-EKOR Sync & Product Deletion Features
+Tests the two new features:
+1. KG-EKOR synchronization in production (cutting chickens)
+2. Permanent product deletion with soft delete/restore
 """
 import requests
 import sys
-import json
+import os
 from datetime import datetime
 
-BASE_URL = "https://clone-deploy-51.preview.emergentagent.com/api"
+# Get backend URL from frontend .env
+BACKEND_URL = "https://repo-sync-128.preview.emergentagent.com/api"
 
-class FilletPurchaseAPITester:
+class TestRunner:
     def __init__(self):
-        self.token = None
         self.tests_run = 0
         self.tests_passed = 0
-        self.test_products_created = []
-        self.test_purchases_created = []
-        self.baseline_stocks = {}
+        self.tests_failed = 0
+        self.token = None
+        self.failures = []
 
     def log(self, msg, level="INFO"):
-        print(f"[{level}] {msg}")
+        """Log with timestamp"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {level}: {msg}")
 
-    def run_test(self, name, method, endpoint, expected_status, data=None, params=None):
-        """Run a single API test"""
-        url = f"{BASE_URL}{endpoint}"
-        headers = {'Content-Type': 'application/json'}
-        if self.token:
-            headers['Authorization'] = f'Bearer {self.token}'
-
+    def test(self, name, func):
+        """Run a single test"""
         self.tests_run += 1
-        self.log(f"Testing {name}...")
-        
+        self.log(f"Testing: {name}")
         try:
-            if method == 'GET':
-                response = requests.get(url, headers=headers, params=params)
-            elif method == 'POST':
-                response = requests.post(url, json=data, headers=headers)
-            elif method == 'PUT':
-                response = requests.put(url, json=data, headers=headers)
-            elif method == 'DELETE':
-                response = requests.delete(url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-
-            success = response.status_code == expected_status
-            if success:
-                self.tests_passed += 1
-                self.log(f"✅ PASSED - {name} (Status: {response.status_code})", "PASS")
-            else:
-                self.log(f"❌ FAILED - {name} - Expected {expected_status}, got {response.status_code}", "FAIL")
-                self.log(f"Response: {response.text[:500]}", "FAIL")
-
-            try:
-                response_data = response.json() if response.text else {}
-            except:
-                response_data = {}
-            
-            return success, response_data, response.status_code
-
+            func()
+            self.tests_passed += 1
+            self.log(f"✅ PASSED: {name}", "PASS")
+            return True
+        except AssertionError as e:
+            self.tests_failed += 1
+            self.failures.append({"test": name, "error": str(e)})
+            self.log(f"❌ FAILED: {name} - {str(e)}", "FAIL")
+            return False
         except Exception as e:
-            self.log(f"❌ FAILED - {name} - Error: {str(e)}", "FAIL")
-            return False, {}, 0
+            self.tests_failed += 1
+            self.failures.append({"test": name, "error": f"Exception: {str(e)}"})
+            self.log(f"❌ ERROR: {name} - {str(e)}", "ERROR")
+            return False
 
-    def test_login(self):
-        """Test login with owner credentials"""
-        self.log("\n=== TEST 1: Authentication ===")
-        success, response, _ = self.run_test(
-            "Login as owner",
-            "POST",
-            "/auth/login",
-            200,
-            data={"username": "owner", "password": "admin123"}
-        )
-        if success and 'token' in response:
-            self.token = response['token']
-            self.log(f"Token obtained: {self.token[:20]}...", "INFO")
-            return True
-        return False
+    def api_call(self, method, endpoint, **kwargs):
+        """Make API call with auth"""
+        url = f"{BACKEND_URL}{endpoint}"
+        headers = kwargs.pop("headers", {})
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        headers.setdefault("Content-Type", "application/json")
+        
+        response = requests.request(method, url, headers=headers, **kwargs)
+        return response
 
-    def test_get_products_with_new_fields(self):
-        """Test GET /api/products returns new fields: is_fillet, is_purchasable, purchase_unit"""
-        self.log("\n=== TEST 2: GET /api/products - New Fields ===")
-        success, products, _ = self.run_test(
-            "GET /api/products",
-            "GET",
-            "/products",
-            200
-        )
-        
-        if not success or not products:
-            return False
-        
-        # Find specific products and verify their fields
-        ayam_fillet = next((p for p in products if p.get('name') == 'Ayam Fillet'), None)
-        dada_fillet = next((p for p in products if p.get('name') == 'Dada Fillet'), None)
-        ayam_broiler = next((p for p in products if p.get('name') == 'Ayam Broiler'), None)
-        ceker = next((p for p in products if 'Ceker' in p.get('name', '')), None)
-        dada_ayam = next((p for p in products if p.get('name') == 'Dada Ayam'), None)
-        
-        all_passed = True
-        
-        # Test Ayam Fillet
-        if ayam_fillet:
-            self.log(f"Ayam Fillet: is_fillet={ayam_fillet.get('is_fillet')}, is_purchasable={ayam_fillet.get('is_purchasable')}, purchase_unit={ayam_fillet.get('purchase_unit')}")
-            if ayam_fillet.get('is_fillet') == True and ayam_fillet.get('is_purchasable') == True and ayam_fillet.get('purchase_unit') == 'pcs':
-                self.log("✅ Ayam Fillet fields correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Ayam Fillet fields incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Test Dada Fillet
-        if dada_fillet:
-            self.log(f"Dada Fillet: is_fillet={dada_fillet.get('is_fillet')}, is_purchasable={dada_fillet.get('is_purchasable')}, purchase_unit={dada_fillet.get('purchase_unit')}")
-            if dada_fillet.get('is_fillet') == True and dada_fillet.get('is_purchasable') == True and dada_fillet.get('purchase_unit') == 'pcs':
-                self.log("✅ Dada Fillet fields correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Dada Fillet fields incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Test Ayam Broiler
-        if ayam_broiler:
-            self.log(f"Ayam Broiler: is_fillet={ayam_broiler.get('is_fillet')}, is_purchasable={ayam_broiler.get('is_purchasable')}, purchase_unit={ayam_broiler.get('purchase_unit')}")
-            if ayam_broiler.get('is_fillet') == False and ayam_broiler.get('is_purchasable') == True and ayam_broiler.get('purchase_unit') == 'ekor':
-                self.log("✅ Ayam Broiler fields correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Ayam Broiler fields incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Test Ceker Ayam (non-purchasable)
-        if ceker:
-            self.log(f"Ceker Ayam: is_fillet={ceker.get('is_fillet')}, is_purchasable={ceker.get('is_purchasable')}, purchase_unit={ceker.get('purchase_unit')}")
-            if ceker.get('is_purchasable') == False and ceker.get('purchase_unit') is None:
-                self.log("✅ Ceker Ayam fields correct (not purchasable)", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Ceker Ayam should not be purchasable", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Test Dada Ayam (non-purchasable)
-        if dada_ayam:
-            self.log(f"Dada Ayam: is_fillet={dada_ayam.get('is_fillet')}, is_purchasable={dada_ayam.get('is_purchasable')}, purchase_unit={dada_ayam.get('purchase_unit')}")
-            if dada_ayam.get('is_purchasable') == False and dada_ayam.get('purchase_unit') is None:
-                self.log("✅ Dada Ayam fields correct (not purchasable)", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Dada Ayam should not be purchasable", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        return all_passed
-
-    def test_create_fillet_products(self):
-        """Create test fillet products with name and category matching"""
-        self.log("\n=== TEST 3: Create Test Fillet Products ===")
-        
-        # Test 1: Product with 'fillet' in name but non-fillet category
-        success1, product1, _ = self.run_test(
-            "Create 'Paha FILLET Test' (name match)",
-            "POST",
-            "/products",
-            200,
-            data={
-                "name": "Paha FILLET Test",
-                "category": "potongan",
-                "units": ["kg"],
-                "buy_price_kg": 50000,
-                "hpp_kg": 50000,
-                "price_kg": 60000
-            }
-        )
-        if success1:
-            self.test_products_created.append(product1.get('id'))
-            self.log(f"Created product ID: {product1.get('id')}")
-        
-        # Test 2: Product with category 'fillet' but name without 'fillet'
-        success2, product2, _ = self.run_test(
-            "Create 'Tenderloin Test' (category match)",
-            "POST",
-            "/products",
-            200,
-            data={
-                "name": "Tenderloin Test",
-                "category": "fillet",
-                "units": ["kg"],
-                "buy_price_kg": 55000,
-                "hpp_kg": 55000,
-                "price_kg": 65000
-            }
-        )
-        if success2:
-            self.test_products_created.append(product2.get('id'))
-            self.log(f"Created product ID: {product2.get('id')}")
-        
-        # Verify both products are detected as fillet
-        if success1 and success2:
-            success, products, _ = self.run_test(
-                "Verify test products are fillet",
-                "GET",
-                "/products",
-                200
-            )
-            if success:
-                paha = next((p for p in products if p.get('id') == product1.get('id')), None)
-                tender = next((p for p in products if p.get('id') == product2.get('id')), None)
-                
-                if paha and paha.get('is_fillet') == True:
-                    self.log("✅ Paha FILLET Test detected as fillet (name match)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Paha FILLET Test not detected as fillet", "FAIL")
-                self.tests_run += 1
-                
-                if tender and tender.get('is_fillet') == True:
-                    self.log("✅ Tenderloin Test detected as fillet (category match)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Tenderloin Test not detected as fillet", "FAIL")
-                self.tests_run += 1
-        
-        return success1 and success2
-
-    def capture_baseline_stocks(self):
-        """Capture current stock levels before purchase tests"""
-        self.log("\n=== Capturing Baseline Stocks ===")
-        success, products, _ = self.run_test(
-            "Get products for baseline",
-            "GET",
-            "/products",
-            200
-        )
-        if success:
-            for p in products:
-                self.baseline_stocks[p['id']] = {
-                    'stock_kg': p.get('stock_kg', 0),
-                    'stock_pcs': p.get('stock_pcs', 0),
-                    'stock_ekor': p.get('stock_ekor', 0),
-                    'name': p.get('name')
-                }
-            self.log(f"Captured baseline for {len(self.baseline_stocks)} products")
-            return True
-        return False
-
-    def test_create_multi_fillet_purchase(self):
-        """Test POST /api/purchases with multiple fillet lines + whole chicken"""
-        self.log("\n=== TEST 4: Create Purchase with Multiple Fillet Lines ===")
-        
-        # Get supplier
-        success, suppliers, _ = self.run_test(
-            "Get suppliers",
-            "GET",
-            "/suppliers",
-            200
-        )
-        if not success or not suppliers:
-            self.log("❌ No suppliers found", "FAIL")
-            return False
-        
-        supplier_id = suppliers[0]['id']
-        self.log(f"Using supplier: {suppliers[0]['name']}")
-        
-        # Get products
-        success, products, _ = self.run_test(
-            "Get products for purchase",
-            "GET",
-            "/products",
-            200
-        )
-        if not success:
-            return False
-        
-        dada_fillet = next((p for p in products if p.get('name') == 'Dada Fillet'), None)
-        ayam_fillet = next((p for p in products if p.get('name') == 'Ayam Fillet'), None)
-        ayam_broiler = next((p for p in products if p.get('name') == 'Ayam Broiler'), None)
-        
-        if not all([dada_fillet, ayam_fillet, ayam_broiler]):
-            self.log("❌ Required products not found", "FAIL")
-            return False
-        
-        # Create purchase with 2 fillet lines + 1 whole chicken
-        purchase_data = {
-            "supplier_id": supplier_id,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "items": [
-                {
-                    "product_id": dada_fillet['id'],
-                    "ekor": 5,  # 5 pcs from supplier
-                    "pcs_after": 10,  # 10 pcs after cutting
-                    "total_weight": 4,
-                    "total_price": 200000
-                },
-                {
-                    "product_id": ayam_fillet['id'],
-                    "ekor": 3,  # 3 pcs from supplier
-                    "pcs_after": None,  # no additional cutting
-                    "total_weight": 2.4,
-                    "total_price": 100000
-                },
-                {
-                    "product_id": ayam_broiler['id'],
-                    "ekor": 10,
-                    "total_weight": 20,
-                    "total_price": 400000
-                }
-            ],
-            "paid": 700000
-        }
-        
-        success, purchase, _ = self.run_test(
-            "Create multi-fillet purchase",
-            "POST",
-            "/purchases",
-            200,
-            data=purchase_data
-        )
-        
-        if not success:
-            return False
-        
-        self.test_purchases_created.append(purchase['id'])
-        self.log(f"Created purchase ID: {purchase['id']}")
-        
-        # Verify response items
-        items = purchase.get('items', [])
-        all_passed = True
-        
-        # Check Dada Fillet item
-        dada_item = next((i for i in items if i['product_id'] == dada_fillet['id']), None)
-        if dada_item:
-            self.log(f"Dada Fillet item: qty_unit={dada_item.get('qty_unit')}, pcs_supplier={dada_item.get('pcs_supplier')}, pcs={dada_item.get('pcs')}, buy_price_pcs={dada_item.get('buy_price_pcs')}")
-            if (dada_item.get('qty_unit') == 'pcs' and 
-                dada_item.get('pcs_supplier') == 5 and 
-                dada_item.get('pcs') == 10 and
-                abs(dada_item.get('buy_price_pcs', 0) - 20000) < 1):
-                self.log("✅ Dada Fillet item correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Dada Fillet item incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Check Ayam Fillet item
-        ayam_item = next((i for i in items if i['product_id'] == ayam_fillet['id']), None)
-        if ayam_item:
-            self.log(f"Ayam Fillet item: qty_unit={ayam_item.get('qty_unit')}, pcs_supplier={ayam_item.get('pcs_supplier')}, pcs={ayam_item.get('pcs')}, buy_price_pcs={ayam_item.get('buy_price_pcs')}")
-            if (ayam_item.get('qty_unit') == 'pcs' and 
-                ayam_item.get('pcs_supplier') == 3 and 
-                ayam_item.get('pcs') == 3 and
-                abs(ayam_item.get('buy_price_pcs', 0) - 33333.33) < 1):
-                self.log("✅ Ayam Fillet item correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Ayam Fillet item incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Check Ayam Broiler item
-        broiler_item = next((i for i in items if i['product_id'] == ayam_broiler['id']), None)
-        if broiler_item:
-            self.log(f"Ayam Broiler item: qty_unit={broiler_item.get('qty_unit')}, ekor={broiler_item.get('ekor')}")
-            if broiler_item.get('qty_unit') == 'ekor' and broiler_item.get('ekor') == 10:
-                self.log("✅ Ayam Broiler item correct", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log("❌ Ayam Broiler item incorrect", "FAIL")
-                all_passed = False
-            self.tests_run += 1
-        
-        # Verify stock changes
-        success, products_after, _ = self.run_test(
-            "Get products after purchase",
-            "GET",
-            "/products",
-            200
-        )
-        
-        if success:
-            dada_after = next((p for p in products_after if p['id'] == dada_fillet['id']), None)
-            ayam_after = next((p for p in products_after if p['id'] == ayam_fillet['id']), None)
-            broiler_after = next((p for p in products_after if p['id'] == ayam_broiler['id']), None)
-            
-            # Check Dada Fillet stock
-            if dada_after:
-                baseline = self.baseline_stocks.get(dada_fillet['id'], {})
-                kg_increase = dada_after.get('stock_kg', 0) - baseline.get('stock_kg', 0)
-                pcs_increase = dada_after.get('stock_pcs', 0) - baseline.get('stock_pcs', 0)
-                ekor_change = dada_after.get('stock_ekor', 0) - baseline.get('stock_ekor', 0)
-                
-                self.log(f"Dada Fillet stock: kg +{kg_increase}, pcs +{pcs_increase}, ekor +{ekor_change}")
-                if abs(kg_increase - 4) < 0.01 and abs(pcs_increase - 10) < 0.01 and abs(ekor_change) < 0.01:
-                    self.log("✅ Dada Fillet stock correct (+4 kg, +10 pcs, ekor unchanged)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Dada Fillet stock incorrect", "FAIL")
-                    all_passed = False
-                self.tests_run += 1
-            
-            # Check Ayam Fillet stock
-            if ayam_after:
-                baseline = self.baseline_stocks.get(ayam_fillet['id'], {})
-                kg_increase = ayam_after.get('stock_kg', 0) - baseline.get('stock_kg', 0)
-                pcs_increase = ayam_after.get('stock_pcs', 0) - baseline.get('stock_pcs', 0)
-                ekor_change = ayam_after.get('stock_ekor', 0) - baseline.get('stock_ekor', 0)
-                
-                self.log(f"Ayam Fillet stock: kg +{kg_increase}, pcs +{pcs_increase}, ekor +{ekor_change}")
-                if abs(kg_increase - 2.4) < 0.01 and abs(pcs_increase - 3) < 0.01 and abs(ekor_change) < 0.01:
-                    self.log("✅ Ayam Fillet stock correct (+2.4 kg, +3 pcs, ekor unchanged)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Ayam Fillet stock incorrect", "FAIL")
-                    all_passed = False
-                self.tests_run += 1
-            
-            # Check Ayam Broiler stock
-            if broiler_after:
-                baseline = self.baseline_stocks.get(ayam_broiler['id'], {})
-                kg_increase = broiler_after.get('stock_kg', 0) - baseline.get('stock_kg', 0)
-                ekor_increase = broiler_after.get('stock_ekor', 0) - baseline.get('stock_ekor', 0)
-                
-                self.log(f"Ayam Broiler stock: kg +{kg_increase}, ekor +{ekor_increase}")
-                if abs(kg_increase - 20) < 0.01 and abs(ekor_increase - 10) < 0.01:
-                    self.log("✅ Ayam Broiler stock correct (+20 kg, +10 ekor)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Ayam Broiler stock incorrect", "FAIL")
-                    all_passed = False
-                self.tests_run += 1
-        
-        return all_passed
-
-    def test_update_purchase(self):
-        """Test PUT /api/purchases/{id} (Koreksi)"""
-        self.log("\n=== TEST 5: Update Purchase (Koreksi) ===")
-        
-        if not self.test_purchases_created:
-            self.log("❌ No test purchase to update", "FAIL")
-            return False
-        
-        purchase_id = self.test_purchases_created[0]
-        
-        # Get current purchase
-        success, purchases, _ = self.run_test(
-            "Get purchases",
-            "GET",
-            "/purchases",
-            200
-        )
-        if not success:
-            return False
-        
-        purchase = next((p for p in purchases if p['id'] == purchase_id), None)
-        if not purchase:
-            self.log("❌ Purchase not found", "FAIL")
-            return False
-        
-        # Get products
-        success, products, _ = self.run_test(
-            "Get products",
-            "GET",
-            "/products",
-            200
-        )
-        if not success:
-            return False
-        
-        dada_fillet = next((p for p in products if p.get('name') == 'Dada Fillet'), None)
-        
-        # Capture stock before update
-        stock_before = {
-            'kg': dada_fillet.get('stock_kg', 0),
-            'pcs': dada_fillet.get('stock_pcs', 0)
-        }
-        
-        # Update purchase - change Dada Fillet to ekor=5, pcs_after=12, total_weight=4.5
-        update_data = {
-            "supplier_id": purchase['supplier_id'],
-            "date": purchase['date'],
-            "items": [
-                {
-                    "product_id": dada_fillet['id'],
-                    "ekor": 5,
-                    "pcs_after": 12,  # Changed from 10 to 12
-                    "total_weight": 4.5,  # Changed from 4 to 4.5
-                    "total_price": 200000
-                }
-            ] + [item for item in purchase['items'] if item['product_id'] != dada_fillet['id']],
-            "paid": purchase['paid']
-        }
-        
-        success, updated, _ = self.run_test(
-            "Update purchase (Koreksi)",
-            "PUT",
-            f"/purchases/{purchase_id}",
-            200,
-            data=update_data
-        )
-        
-        if not success:
-            return False
-        
-        # Verify stock adjustment
-        success, products_after, _ = self.run_test(
-            "Get products after update",
-            "GET",
-            "/products",
-            200
-        )
-        
-        if success:
-            dada_after = next((p for p in products_after if p['id'] == dada_fillet['id']), None)
-            if dada_after:
-                # Net change should be +0.5 kg and +2 pcs from original baseline
-                baseline = self.baseline_stocks.get(dada_fillet['id'], {})
-                kg_total = dada_after.get('stock_kg', 0) - baseline.get('stock_kg', 0)
-                pcs_total = dada_after.get('stock_pcs', 0) - baseline.get('stock_pcs', 0)
-                
-                self.log(f"Dada Fillet stock after update: kg +{kg_total}, pcs +{pcs_total} (from baseline)")
-                if abs(kg_total - 4.5) < 0.01 and abs(pcs_total - 12) < 0.01:
-                    self.log("✅ Stock adjusted correctly (+4.5 kg, +12 pcs from baseline)", "PASS")
-                    self.tests_passed += 1
-                else:
-                    self.log("❌ Stock adjustment incorrect", "FAIL")
-                self.tests_run += 1
-        
-        return success
-
-    def test_delete_purchase(self):
-        """Test DELETE /api/purchases/{id}"""
-        self.log("\n=== TEST 6: Delete Purchase ===")
-        
-        if not self.test_purchases_created:
-            self.log("❌ No test purchase to delete", "FAIL")
-            return False
-        
-        purchase_id = self.test_purchases_created[0]
-        
-        success, _, _ = self.run_test(
-            "Delete purchase",
-            "DELETE",
-            f"/purchases/{purchase_id}",
-            200
-        )
-        
-        if not success:
-            return False
-        
-        # Verify stocks returned to baseline
-        success, products, _ = self.run_test(
-            "Get products after delete",
-            "GET",
-            "/products",
-            200
-        )
-        
-        if success:
-            all_passed = True
-            for product_id, baseline in self.baseline_stocks.items():
-                product = next((p for p in products if p['id'] == product_id), None)
-                if product and baseline.get('name') in ['Dada Fillet', 'Ayam Fillet', 'Ayam Broiler']:
-                    kg_diff = abs(product.get('stock_kg', 0) - baseline.get('stock_kg', 0))
-                    pcs_diff = abs(product.get('stock_pcs', 0) - baseline.get('stock_pcs', 0))
-                    ekor_diff = abs(product.get('stock_ekor', 0) - baseline.get('stock_ekor', 0))
-                    
-                    if kg_diff < 0.01 and pcs_diff < 0.01 and ekor_diff < 0.01:
-                        self.log(f"✅ {baseline['name']} stock restored to baseline", "PASS")
-                    else:
-                        self.log(f"❌ {baseline['name']} stock not restored (kg diff: {kg_diff}, pcs diff: {pcs_diff}, ekor diff: {ekor_diff})", "FAIL")
-                        all_passed = False
-            
-            if all_passed:
-                self.tests_passed += 1
-            self.tests_run += 1
-            
-            return all_passed
-        
-        return False
-
-    def test_non_purchasable_rejection(self):
-        """Test POST /api/purchases with non-purchasable product returns 400"""
-        self.log("\n=== TEST 7: Non-Purchasable Product Rejection ===")
-        
-        # Get supplier
-        success, suppliers, _ = self.run_test(
-            "Get suppliers",
-            "GET",
-            "/suppliers",
-            200
-        )
-        if not success or not suppliers:
-            return False
-        
-        supplier_id = suppliers[0]['id']
-        
-        # Get products
-        success, products, _ = self.run_test(
-            "Get products",
-            "GET",
-            "/products",
-            200
-        )
-        if not success:
-            return False
-        
-        # Find non-purchasable product (Ceker Ayam or Dada Ayam)
-        non_purchasable = next((p for p in products if 'Ceker' in p.get('name', '') or p.get('name') == 'Dada Ayam'), None)
-        
-        if not non_purchasable:
-            self.log("⚠️ No non-purchasable product found to test", "WARN")
-            return True
-        
-        self.log(f"Testing with non-purchasable product: {non_purchasable['name']}")
-        
-        # Try to create purchase with non-purchasable product
-        purchase_data = {
-            "supplier_id": supplier_id,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "items": [
-                {
-                    "product_id": non_purchasable['id'],
-                    "ekor": 5,
-                    "total_weight": 2,
-                    "total_price": 50000
-                }
-            ],
-            "paid": 50000
-        }
-        
-        success, response, status = self.run_test(
-            f"Create purchase with {non_purchasable['name']} (should fail)",
-            "POST",
-            "/purchases",
-            400,
-            data=purchase_data
-        )
-        
-        if success:
-            # Check if error message mentions fillet in Indonesian
-            error_msg = response.get('detail', '')
-            if 'fillet' in error_msg.lower() or 'tidak bisa dicatat' in error_msg.lower():
-                self.log(f"✅ Correct error message: {error_msg}", "PASS")
-                self.tests_passed += 1
-            else:
-                self.log(f"⚠️ Error message doesn't mention fillet: {error_msg}", "WARN")
-            self.tests_run += 1
-        
-        return success
-
-    def cleanup(self):
-        """Clean up test data"""
-        self.log("\n=== Cleanup ===")
-        
-        # Delete test purchases (already done in test_delete_purchase)
-        for purchase_id in self.test_purchases_created[1:]:  # Skip first one as it's already deleted
-            self.run_test(
-                f"Delete test purchase {purchase_id}",
-                "DELETE",
-                f"/purchases/{purchase_id}",
-                200
-            )
-        
-        # Delete test products
-        for product_id in self.test_products_created:
-            self.run_test(
-                f"Delete test product {product_id}",
-                "DELETE",
-                f"/products/{product_id}",
-                200
-            )
-        
-        self.log("Cleanup completed")
-
-    def print_summary(self):
+    def summary(self):
         """Print test summary"""
-        self.log("\n" + "="*60)
-        self.log("TEST SUMMARY")
-        self.log("="*60)
-        self.log(f"Total Tests Run: {self.tests_run}")
-        self.log(f"Tests Passed: {self.tests_passed}")
-        self.log(f"Tests Failed: {self.tests_run - self.tests_passed}")
-        self.log(f"Success Rate: {(self.tests_passed/self.tests_run*100):.1f}%" if self.tests_run > 0 else "N/A")
-        self.log("="*60)
+        print("\n" + "="*60)
+        print(f"TEST SUMMARY")
+        print("="*60)
+        print(f"Total Tests: {self.tests_run}")
+        print(f"Passed: {self.tests_passed} ✅")
+        print(f"Failed: {self.tests_failed} ❌")
+        print(f"Success Rate: {(self.tests_passed/self.tests_run*100):.1f}%")
         
-        return 0 if self.tests_passed == self.tests_run else 1
+        if self.failures:
+            print("\n" + "="*60)
+            print("FAILED TESTS:")
+            print("="*60)
+            for f in self.failures:
+                print(f"❌ {f['test']}")
+                print(f"   Error: {f['error']}")
+        
+        return self.tests_failed == 0
+
 
 def main():
-    tester = FilletPurchaseAPITester()
+    runner = TestRunner()
     
-    try:
-        # Run tests in sequence
-        if not tester.test_login():
-            print("❌ Login failed, stopping tests")
-            return 1
+    # Store test data
+    test_data = {
+        "broiler_id": None,
+        "broiler_stock_kg_before": 0,
+        "broiler_stock_ekor_before": 0,
+        "broiler_avg_weight": 0,
+        "production_id": None,
+        "output_product_id": None,
+        "test_product_id": None,
+        "admin_token": None
+    }
+
+    # ==================== AUTHENTICATION ====================
+    def test_login_owner():
+        """Test login as owner"""
+        response = runner.api_call("POST", "/auth/login", json={
+            "username": "owner",
+            "password": "admin123"
+        })
+        assert response.status_code == 200, f"Login failed: {response.status_code} - {response.text}"
+        data = response.json()
+        assert "token" in data, "No token in response"
+        assert "user" in data, "No user in response"
+        assert data["user"]["role"] == "owner", f"Expected owner role, got {data['user']['role']}"
+        runner.token = data["token"]
+        runner.log(f"Logged in as owner: {data['user']['name']}")
+
+    runner.test("BACKEND: Login as owner", test_login_owner)
+
+    # ==================== GET PRODUCTS & PREPARE ====================
+    def test_get_products():
+        """Get products and find Ayam Broiler"""
+        response = runner.api_call("GET", "/products")
+        assert response.status_code == 200, f"Failed to get products: {response.status_code}"
+        products = response.json()
+        assert isinstance(products, list), "Products should be a list"
         
-        tester.test_get_products_with_new_fields()
-        tester.test_create_fillet_products()
-        tester.capture_baseline_stocks()
-        tester.test_create_multi_fillet_purchase()
-        tester.test_update_purchase()
-        tester.test_delete_purchase()
-        tester.test_non_purchasable_rejection()
+        # Find Ayam Broiler
+        broiler = next((p for p in products if "Broiler" in p["name"]), None)
+        assert broiler is not None, "Ayam Broiler not found in products"
         
-        # Cleanup
-        tester.cleanup()
+        # Check required fields
+        assert "kg" in broiler.get("units", []), "Broiler should have kg unit"
+        assert "ekor" in broiler.get("units", []), "Broiler should have ekor unit"
         
-        # Print summary
-        return tester.print_summary()
+        # Store data
+        test_data["broiler_id"] = broiler["id"]
+        test_data["broiler_stock_kg_before"] = float(broiler.get("stock_kg", 0))
+        test_data["broiler_stock_ekor_before"] = float(broiler.get("stock_ekor", 0))
+        test_data["broiler_avg_weight"] = float(broiler.get("avg_weight_used", 0))
         
-    except Exception as e:
-        print(f"❌ Test execution failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return 1
+        runner.log(f"Found Ayam Broiler: {broiler['name']}")
+        runner.log(f"  Stock: {test_data['broiler_stock_kg_before']} kg, {test_data['broiler_stock_ekor_before']} ekor")
+        runner.log(f"  Avg weight: {test_data['broiler_avg_weight']} kg/ekor")
+        
+        assert test_data["broiler_avg_weight"] > 0, "Broiler avg_weight_used should be > 0"
+        
+        # Find an output product (potongan/sampingan category)
+        output = next((p for p in products if p.get("category") in ["potongan", "sampingan"] and "pcs" in p.get("units", [])), None)
+        assert output is not None, "No output product found for production"
+        test_data["output_product_id"] = output["id"]
+        runner.log(f"Found output product: {output['name']}")
+
+    runner.test("BACKEND: GET /api/products - Get Ayam Broiler", test_get_products)
+
+    # ==================== PRODUCTION WITH KG SYNC ====================
+    def test_create_production():
+        """Test POST /api/productions with kg sync"""
+        input_ekor = 2
+        expected_kg = round(input_ekor * test_data["broiler_avg_weight"], 3)
+        
+        response = runner.api_call("POST", "/productions", json={
+            "source_product_id": test_data["broiler_id"],
+            "input_ekor": input_ekor,
+            "outputs": [
+                {"product_id": test_data["output_product_id"], "pcs": 4}
+            ]
+        })
+        
+        assert response.status_code == 200, f"Failed to create production: {response.status_code} - {response.text}"
+        data = response.json()
+        
+        # Check response has input_weight_kg
+        assert "input_weight_kg" in data, "Response should have input_weight_kg"
+        assert "avg_weight_used" in data, "Response should have avg_weight_used"
+        
+        actual_kg = float(data["input_weight_kg"])
+        runner.log(f"Production created: {input_ekor} ekor → {actual_kg} kg")
+        
+        # Verify kg calculation (tolerance 0.001)
+        assert abs(actual_kg - expected_kg) < 0.001, f"Expected {expected_kg} kg, got {actual_kg} kg"
+        
+        test_data["production_id"] = data["id"]
+        
+        # Verify stock changes
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        broiler = next((p for p in products if p["id"] == test_data["broiler_id"]), None)
+        
+        new_stock_kg = float(broiler.get("stock_kg", 0))
+        new_stock_ekor = float(broiler.get("stock_ekor", 0))
+        
+        expected_stock_kg = test_data["broiler_stock_kg_before"] - expected_kg
+        expected_stock_ekor = test_data["broiler_stock_ekor_before"] - input_ekor
+        
+        runner.log(f"Stock after production:")
+        runner.log(f"  Kg: {test_data['broiler_stock_kg_before']} → {new_stock_kg} (expected {expected_stock_kg})")
+        runner.log(f"  Ekor: {test_data['broiler_stock_ekor_before']} → {new_stock_ekor} (expected {expected_stock_ekor})")
+        
+        assert abs(new_stock_kg - expected_stock_kg) < 0.001, f"Stock kg mismatch: expected {expected_stock_kg}, got {new_stock_kg}"
+        assert abs(new_stock_ekor - expected_stock_ekor) < 0.001, f"Stock ekor mismatch: expected {expected_stock_ekor}, got {new_stock_ekor}"
+        
+        # Update stored values for next test
+        test_data["broiler_stock_kg_after_create"] = new_stock_kg
+        test_data["broiler_stock_ekor_after_create"] = new_stock_ekor
+
+    runner.test("BACKEND: POST /api/productions - Create with kg sync", test_create_production)
+
+    # ==================== UPDATE PRODUCTION ====================
+    def test_update_production():
+        """Test PUT /api/productions - Update and verify stock adjustment"""
+        new_input_ekor = 1
+        new_pcs = 2
+        expected_kg = round(new_input_ekor * test_data["broiler_avg_weight"], 3)
+        
+        response = runner.api_call("PUT", f"/productions/{test_data['production_id']}", json={
+            "source_product_id": test_data["broiler_id"],
+            "input_ekor": new_input_ekor,
+            "outputs": [
+                {"product_id": test_data["output_product_id"], "pcs": new_pcs}
+            ]
+        })
+        
+        assert response.status_code == 200, f"Failed to update production: {response.status_code} - {response.text}"
+        data = response.json()
+        
+        actual_kg = float(data["input_weight_kg"])
+        runner.log(f"Production updated: {new_input_ekor} ekor → {actual_kg} kg")
+        
+        assert abs(actual_kg - expected_kg) < 0.001, f"Expected {expected_kg} kg, got {actual_kg} kg"
+        
+        # Verify stock adjustment (should return +1 ekor and +1.85 kg from after_create)
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        broiler = next((p for p in products if p["id"] == test_data["broiler_id"]), None)
+        
+        new_stock_kg = float(broiler.get("stock_kg", 0))
+        new_stock_ekor = float(broiler.get("stock_ekor", 0))
+        
+        # Net change from original: -1 ekor, -1.85 kg (reduced from -2 ekor, -3.7 kg)
+        expected_stock_kg = test_data["broiler_stock_kg_before"] - expected_kg
+        expected_stock_ekor = test_data["broiler_stock_ekor_before"] - new_input_ekor
+        
+        runner.log(f"Stock after update:")
+        runner.log(f"  Kg: {test_data['broiler_stock_kg_after_create']} → {new_stock_kg} (expected {expected_stock_kg})")
+        runner.log(f"  Ekor: {test_data['broiler_stock_ekor_after_create']} → {new_stock_ekor} (expected {expected_stock_ekor})")
+        
+        assert abs(new_stock_kg - expected_stock_kg) < 0.001, f"Stock kg mismatch: expected {expected_stock_kg}, got {new_stock_kg}"
+        assert abs(new_stock_ekor - expected_stock_ekor) < 0.001, f"Stock ekor mismatch: expected {expected_stock_ekor}, got {new_stock_ekor}"
+
+    runner.test("BACKEND: PUT /api/productions - Update with stock adjustment", test_update_production)
+
+    # ==================== STOCK MOVEMENTS ====================
+    def test_stock_movements():
+        """Test GET /api/stock-movements - Verify production movements"""
+        response = runner.api_call("GET", "/stock-movements", params={
+            "product_id": test_data["broiler_id"]
+        })
+        
+        assert response.status_code == 200, f"Failed to get stock movements: {response.status_code}"
+        movements = response.json()
+        
+        # Find production movements
+        prod_movements = [m for m in movements if m.get("type") == "produksi" and m.get("ref") == test_data["production_id"]]
+        
+        runner.log(f"Found {len(prod_movements)} production movements for broiler")
+        
+        # Should have at least one movement with negative qty_ekor and qty_kg
+        assert len(prod_movements) > 0, "No production movements found"
+        
+        # Check the movements have qty_kg recorded
+        for m in prod_movements:
+            runner.log(f"  Movement: {m.get('qty_ekor')} ekor, {m.get('qty_kg')} kg")
+            if m.get("qty_ekor") and m.get("qty_ekor") < 0:
+                assert m.get("qty_kg") is not None, "Movement should have qty_kg"
+                assert m.get("qty_kg") < 0, "qty_kg should be negative for production"
+
+    runner.test("BACKEND: GET /api/stock-movements - Verify production movements", test_stock_movements)
+
+    # ==================== PRODUCT DELETION TESTS ====================
+    def test_create_test_product():
+        """Create a test product for deletion"""
+        response = runner.api_call("POST", "/products", json={
+            "name": "Produk Uji Hapus",
+            "category": "sampingan",
+            "units": ["kg"],
+            "price_kg": 1000
+        })
+        
+        assert response.status_code == 200, f"Failed to create test product: {response.status_code} - {response.text}"
+        data = response.json()
+        test_data["test_product_id"] = data["id"]
+        runner.log(f"Created test product: {data['name']} (ID: {data['id']})")
+
+    runner.test("BACKEND: POST /api/products - Create test product", test_create_test_product)
+
+    def test_product_usage():
+        """Test GET /api/products/{id}/usage"""
+        response = runner.api_call("GET", f"/products/{test_data['test_product_id']}/usage")
+        
+        assert response.status_code == 200, f"Failed to get product usage: {response.status_code}"
+        data = response.json()
+        
+        assert "has_stock" in data, "Response should have has_stock"
+        assert "has_history" in data, "Response should have has_history"
+        assert "usage" in data, "Response should have usage"
+        
+        assert data["has_stock"] == False, "New product should have no stock"
+        assert data["has_history"] == False, "New product should have no history"
+        
+        usage = data["usage"]
+        assert usage["sales"] == 0, "Should have 0 sales"
+        assert usage["purchases"] == 0, "Should have 0 purchases"
+        assert usage["productions"] == 0, "Should have 0 productions"
+        assert usage["movements"] == 0, "Should have 0 movements"
+        
+        runner.log(f"Product usage verified: no stock, no history")
+
+    runner.test("BACKEND: GET /api/products/{id}/usage - Check usage info", test_product_usage)
+
+    def test_soft_delete():
+        """Test DELETE /api/products/{id} - Soft delete"""
+        response = runner.api_call("DELETE", f"/products/{test_data['test_product_id']}")
+        
+        assert response.status_code == 200, f"Failed to soft delete: {response.status_code} - {response.text}"
+        data = response.json()
+        
+        assert data["ok"] == True, "Response should have ok=true"
+        assert data["permanent"] == False, "Should be soft delete (permanent=false)"
+        
+        # Verify product is inactive
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        product = next((p for p in products if p["id"] == test_data["test_product_id"]), None)
+        
+        assert product is not None, "Product should still exist"
+        assert product["active"] == False, "Product should be inactive"
+        
+        runner.log(f"Product soft deleted (active=false)")
+
+    runner.test("BACKEND: DELETE /api/products/{id} - Soft delete", test_soft_delete)
+
+    def test_restore_product():
+        """Test POST /api/products/{id}/restore"""
+        response = runner.api_call("POST", f"/products/{test_data['test_product_id']}/restore")
+        
+        assert response.status_code == 200, f"Failed to restore: {response.status_code} - {response.text}"
+        data = response.json()
+        
+        assert data["active"] == True, "Product should be active after restore"
+        
+        runner.log(f"Product restored (active=true)")
+
+    runner.test("BACKEND: POST /api/products/{id}/restore - Restore product", test_restore_product)
+
+    def test_login_admin():
+        """Login as admin for permission test"""
+        response = runner.api_call("POST", "/auth/login", json={
+            "username": "admin",
+            "password": "admin123"
+        })
+        
+        # If admin doesn't exist, skip this test
+        if response.status_code != 200:
+            runner.log("Admin account not found, skipping admin permission test", "WARN")
+            return
+        
+        data = response.json()
+        test_data["admin_token"] = data["token"]
+        runner.log(f"Logged in as admin: {data['user']['name']}")
+
+    runner.test("BACKEND: Login as admin", test_login_admin)
+
+    def test_permanent_delete_as_admin():
+        """Test DELETE /api/products/{id}?permanent=true as admin - Should return 403"""
+        if not test_data.get("admin_token"):
+            runner.log("Skipping admin permission test (no admin token)", "SKIP")
+            return
+        
+        # Temporarily use admin token
+        original_token = runner.token
+        runner.token = test_data["admin_token"]
+        
+        response = runner.api_call("DELETE", f"/products/{test_data['test_product_id']}", params={"permanent": "true"})
+        
+        # Restore owner token
+        runner.token = original_token
+        
+        assert response.status_code == 403, f"Admin should get 403, got {response.status_code}"
+        runner.log(f"Admin correctly denied permanent delete (403)")
+
+    runner.test("BACKEND: DELETE permanent as admin - Should return 403", test_permanent_delete_as_admin)
+
+    def test_permanent_delete_as_owner():
+        """Test DELETE /api/products/{id}?permanent=true as owner"""
+        response = runner.api_call("DELETE", f"/products/{test_data['test_product_id']}", params={"permanent": "true"})
+        
+        assert response.status_code == 200, f"Failed to permanently delete: {response.status_code} - {response.text}"
+        data = response.json()
+        
+        assert data["ok"] == True, "Response should have ok=true"
+        assert data["permanent"] == True, "Should be permanent delete"
+        
+        # Verify product is gone
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        product = next((p for p in products if p["id"] == test_data["test_product_id"]), None)
+        
+        assert product is None, "Product should not exist after permanent delete"
+        
+        # Verify usage endpoint returns 404
+        response = runner.api_call("GET", f"/products/{test_data['test_product_id']}/usage")
+        assert response.status_code == 404, "Usage endpoint should return 404 for deleted product"
+        
+        runner.log(f"Product permanently deleted")
+
+    runner.test("BACKEND: DELETE permanent as owner - Delete permanently", test_permanent_delete_as_owner)
+
+    def test_delete_nonexistent():
+        """Test DELETE /api/products/tidak-ada - Should return 404"""
+        response = runner.api_call("DELETE", "/products/tidak-ada-product-id-123")
+        
+        assert response.status_code == 404, f"Should return 404, got {response.status_code}"
+        runner.log(f"Correctly returned 404 for nonexistent product")
+
+    runner.test("BACKEND: DELETE nonexistent product - Should return 404", test_delete_nonexistent)
+
+    # ==================== SALES REGRESSION TEST ====================
+    def test_sales_regression():
+        """Test POST /api/sales - Verify ekor sale reduces both ekor and kg"""
+        # Get current stock
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        broiler = next((p for p in products if p["id"] == test_data["broiler_id"]), None)
+        
+        stock_kg_before = float(broiler.get("stock_kg", 0))
+        stock_ekor_before = float(broiler.get("stock_ekor", 0))
+        avg_weight = float(broiler.get("avg_weight_used", 0))
+        
+        # Create a sale
+        import uuid
+        response = runner.api_call("POST", "/sales", json={
+            "txn_id": str(uuid.uuid4()),
+            "items": [
+                {
+                    "product_id": test_data["broiler_id"],
+                    "unit": "ekor",
+                    "qty": 1,
+                    "price": 34000
+                }
+            ],
+            "payment_method": "cash",
+            "paid": 34000
+        })
+        
+        assert response.status_code == 200, f"Failed to create sale: {response.status_code} - {response.text}"
+        
+        # Verify stock changes
+        response = runner.api_call("GET", "/products")
+        products = response.json()
+        broiler = next((p for p in products if p["id"] == test_data["broiler_id"]), None)
+        
+        stock_kg_after = float(broiler.get("stock_kg", 0))
+        stock_ekor_after = float(broiler.get("stock_ekor", 0))
+        
+        expected_kg = stock_kg_before - avg_weight
+        expected_ekor = stock_ekor_before - 1
+        
+        runner.log(f"Sale regression test:")
+        runner.log(f"  Kg: {stock_kg_before} → {stock_kg_after} (expected {expected_kg})")
+        runner.log(f"  Ekor: {stock_ekor_before} → {stock_ekor_after} (expected {expected_ekor})")
+        
+        assert abs(stock_kg_after - expected_kg) < 0.001, f"Stock kg mismatch: expected {expected_kg}, got {stock_kg_after}"
+        assert abs(stock_ekor_after - expected_ekor) < 0.001, f"Stock ekor mismatch: expected {expected_ekor}, got {stock_ekor_after}"
+
+    runner.test("BACKEND: POST /api/sales - Sales regression (ekor reduces kg)", test_sales_regression)
+
+    # Print summary
+    success = runner.summary()
+    return 0 if success else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

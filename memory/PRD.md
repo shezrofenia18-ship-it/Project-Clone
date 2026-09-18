@@ -546,3 +546,22 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
 - `POS.js`: grid produk default (Sedang) = 2 kolom HP / 3 tablet (md) / 4 laptop (xl) / 5 PC lebar (2xl); Kecil 3/4/6/7, Besar 2/3/3/4. Kartu `w-full min-w-0`, gambar `block w-full h-full object-cover` + lazy. Kontainer produk `min-w-0 overflow-x-hidden`, scroll vertikal saja. Deretan kategori `flex-nowrap overflow-x-auto no-scrollbar touch-pan-x snap-x` (testid `pos-category-scroller`), tombol `shrink-0`.
 - ROOT CAUSE overflow horizontal di HP/tablet: wrapper `Layout.js` (`flex-1` tanpa `min-w-0`) & `<main>` membiarkan konten mendorong lebar halaman (docScrollWidth 937px di layar 390px). Ditambah `min-w-0` pada keduanya. Tidak ada perubahan state/logic/backend.
 - Diverifikasi Playwright: HP 390 → 2 kolom, docScrollW 390 = innerW, kategori bisa digeser (scrollLeft 298); tablet 820 → 3 kolom; 1366 → 4; 1920 → 5; 0 kartu meluber, lebar gambar = lebar kartu.
+
+## Implemented (2026-09-18 — Sinkron KG<->EKOR di Produksi Potong & Hapus Produk Permanen)
+- **Produksi Potong ikut mengurangi kg**: `create_production`/`update_production` kini memotong stok kg sumber = ekor x berat rata-rata/ekor (helper `production_input_weight`), aturan sama dengan penjualan per ekor. Dokumen produksi menyimpan `input_weight_kg` & `avg_weight_used`; edit menggeser stok sebesar selisih ekor DAN kg (data lama tanpa `input_weight_kg` -> hanya selisih ekor yang memengaruhi kg).
+- **Hapus produk**: `DELETE /api/products/{id}` = nonaktifkan (soft); `?permanent=true` = hapus permanen (owner saja, admin 403; price_history ikut dihapus, riwayat transaksi tetap karena menyimpan nama produk). Baru: `GET /api/products/{id}/usage` (stok + jumlah riwayat) & `POST /api/products/{id}/restore`.
+- Frontend: Products.js filter Aktif/Nonaktif/Semua, dialog `RemoveProductDialog` (Nonaktifkan saja vs Hapus permanen + checkbox persetujuan), tombol Aktifkan kembali. Production.js hanya produk aktif + estimasi kg (`prod-kg-estimate`) + kartu menampilkan ≈ kg. Stock.js penyesuaian: kolom Kg auto = ekor x berat rata-rata untuk ayam utuh (bisa manual, "Ikuti ekor lagi").
+- Testing iterasi 16: backend 14/14 PASS; frontend filter/dialog PASS; auto-isi kg & estimasi kg diverifikasi manual via screenshot.
+
+## Implemented (2026-09-18 sore — Koreksi Stok Lama, Peringatan Selisih, Riwayat Produk Terhapus)
+- `stock_sync_info()` di backend: bandingkan stok kg dengan ekor x berat rata-rata untuk ayam utuh; disertakan sebagai `stock_sync` di GET /api/products (toleransi: |selisih| > 0,5 kg DAN > 15%).
+- `GET/POST /api/products/{id}/sync-kg` (POST owner saja): set kg = ekor x berat rata-rata, dicatat sebagai pergerakan stok "penyesuaian" sebesar selisih + audit `sync_kg` + aktivitas.
+- `GET /api/audit-logs/deleted-products`: riwayat produk yang dihapus permanen (dari audit `delete_permanent`, dokumen produk tersimpan di `before`).
+- Frontend Stock.js: banner `sync-warning-banner`, kotak `sync-gap-<id>` per kartu (seharusnya ≈ kg, selisih, alasan), tombol `sync-kg-<id>` (owner) -> `SyncKgDialog`. AuditLog.js: tab "Produk Dihapus (N)" + label aksi Indonesia (hapus permanen, sinkron kg, aktifkan kembali).
+- Testing iterasi 17: backend 17/17 PASS, frontend 100% PASS.
+
+## Implemented (2026-09-18 malam — Pulihkan Produk Terhapus & Sinkron Semua Sekaligus)
+- `POST /api/audit-logs/deleted-products/{audit_id}/restore` (owner): buat ulang produk dari salinan `before` di audit dengan ID SAMA (riwayat lama tersambung), stok saat dihapus ikut kembali, `active=true`; audit row ditandai `restored_at/restored_by`; audit baru `restore_deleted`. Guard: 400 sudah dipulihkan, 409 produk/ nama aktif sudah ada. List deleted-products kini punya `can_restore`, `restored_at`, `restored_by`, `blocked_reason`.
+- `POST /api/products/sync-kg-all` (owner): sinkron kg semua ayam utuh aktif yang out_of_sync; helper `_sync_kg_one` dipakai bersama endpoint tunggal. Tiap produk tetap tercatat terpisah di movements & audit.
+- Frontend: Stock.js tombol `sync-kg-all` di banner -> `SyncAllDialog` (tabel per produk: ekor, kg sekarang, kg target, perubahan, total). AuditLog.js tombol `restore-deleted-<id>` -> `RestoreDeletedDialog`; badge "dipulihkan"; alasan blokir bila tidak bisa dipulihkan.
+- Testing iterasi 18: backend 24/24 PASS, frontend 100% PASS (RBAC admin diverifikasi).

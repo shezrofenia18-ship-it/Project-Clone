@@ -1,0 +1,65 @@
+{
+  "summary": "Completed comprehensive testing of two new features: (1) RESTORE DELETED PRODUCTS - owner can restore permanently deleted products from audit log with same ID, stock, and history reconnection; admin blocked (403). (2) SYNC KG ALL - owner can sync all out-of-sync whole chicken products at once; admin blocked (403). Both features fully functional in backend and frontend with correct RBAC enforcement.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: Owner login with username/password authentication",
+    "Backend: Admin login with username/password authentication",
+    "Backend: Create stock discrepancies for Ayam Kampung and Ayam Pejantan (+25 kg each)",
+    "Backend: Products marked as out_of_sync after discrepancy creation",
+    "Backend: Admin cannot access POST /api/products/sync-kg-all (403 forbidden)",
+    "Backend: Owner successfully syncs all out-of-sync products (count=2, total_delta_kg=-50.0)",
+    "Backend: Products marked as in-sync after sync-kg-all",
+    "Backend: Second sync-kg-all returns count=0 (no products to sync)",
+    "Backend: Stock movements recorded with type 'penyesuaian' and reason 'rapikan massal'",
+    "Backend: Audit logs contain 'sync_kg' action entries",
+    "Backend: Create test product 'Uji Pulihkan' with stock (kg=3, pcs=10)",
+    "Backend: Delete product permanently",
+    "Backend: Product removed from products list",
+    "Backend: GET /api/audit-logs/deleted-products returns deleted product with can_restore=true",
+    "Backend: Admin cannot restore deleted product (403 forbidden)",
+    "Backend: Owner successfully restores deleted product with same ID",
+    "Backend: Restored product has active=true and original stock values",
+    "Backend: Restored product appears in products list",
+    "Backend: Deleted product entry updated with restored_at and restored_by",
+    "Backend: Second restore attempt blocked (400 already restored)",
+    "Backend: Audit log contains 'restore_deleted' action entry",
+    "Backend: Name conflict scenario - can_restore=false when active product with same name exists",
+    "Backend: Restore with name conflict blocked (409 conflict)",
+    "Backend: Non-existent audit_id returns 404",
+    "Frontend: Owner login successful",
+    "Frontend: /stok page loads correctly",
+    "Frontend: Sync warning banner displays when products are out-of-sync",
+    "Frontend: Sync-kg-all button visible to owner with correct count",
+    "Frontend: Sync-all dialog opens with product rows, total delta, reason input, and confirm button",
+    "Frontend: Individual sync-kg buttons and dialogs functional",
+    "Frontend: /audit page loads with 'Produk Dihapus' tab",
+    "Frontend: Restore buttons visible to owner (5 buttons found)",
+    "Frontend: Restore dialog opens with product details and confirm button",
+    "Frontend: 'dipulihkan' badges visible for previously restored products (3 badges found)",
+    "Frontend: Audit log 'Semua Aktivitas' tab shows 'pulihkan produk' and 'sinkron kg' action badges",
+    "Frontend: Admin login successful",
+    "Frontend: Admin cannot see sync-kg-all button (correct RBAC)",
+    "Frontend: Admin cannot see restore buttons (correct RBAC)"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_percentage": {
+    "backend": "100% (all 24 test scenarios passed)",
+    "frontend": "100% (all UI elements present and RBAC correctly enforced)"
+  },
+  "action_item_for_main_agent": "",
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_test_itself": false
+}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import api, { apiError } from "@/lib/api";
 import { useFetch, useRealtimeReload } from "@/lib/hooks";
 import { PageHeader } from "@/components/PageHeader";
@@ -155,19 +155,48 @@ export default function Products() {
   const { user } = useAuth();
   const isOwner = user.role === "owner";
   const [edit, setEdit] = useState(null);
+  // Produk yang sedang dikonfirmasi untuk dihapus / dinonaktifkan.
+  const [removing, setRemoving] = useState(null);
+  // Filter daftar: default hanya produk AKTIF supaya produk lama yang sudah
+  // tidak terpakai tidak memenuhi tabel.
+  const [filter, setFilter] = useState("aktif");
   useRealtimeReload(["products", "stock"], reload);
 
-  const del = async (p) => {
-    if (!window.confirm(`Nonaktifkan produk "${p.name}"? Produk tidak akan muncul di POS.`)) return;
-    try { await api.delete(`/products/${p.id}`); toast.success("Produk dinonaktifkan"); reload(); }
+  const all = data || [];
+  const inactiveCount = all.filter((p) => p.active === false).length;
+  const rows = all.filter((p) => {
+    if (filter === "aktif") return p.active !== false;
+    if (filter === "nonaktif") return p.active === false;
+    return true;
+  });
+
+  const restore = async (p) => {
+    try { await api.post(`/products/${p.id}/restore`); toast.success(`"${p.name}" diaktifkan kembali`); reload(); }
     catch (e) { toast.error(apiError(e)); }
   };
+
+  const FILTERS = [
+    { key: "aktif", label: "Aktif" },
+    { key: "nonaktif", label: `Nonaktif${inactiveCount ? ` (${inactiveCount})` : ""}` },
+    { key: "semua", label: "Semua" },
+  ];
 
   return (
     <div className="bam-fade">
       <PageHeader title="Produk & Harga" subtitle="Master produk, harga beli, HPP & harga jual"
         actions={<Button data-testid="add-product" onClick={() => setEdit(EMPTY)}><Plus className="w-4 h-4 mr-1" /> Tambah Produk</Button>} />
       <WeightGuidance onChanged={reload} />
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <div className="inline-flex rounded-lg border border-border bg-card p-0.5" data-testid="product-filter">
+          {FILTERS.map((f) => (
+            <button key={f.key} type="button" data-testid={`product-filter-${f.key}`} onClick={() => setFilter(f.key)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${filter === f.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground tabular">{rows.length} produk</p>
+      </div>
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -185,7 +214,12 @@ export default function Products() {
               </tr>
             </thead>
             <tbody>
-              {(data || []).map((p) => {
+              {rows.length === 0 && (
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground text-sm">
+                  {filter === "nonaktif" ? "Tidak ada produk nonaktif." : "Belum ada produk."}
+                </td></tr>
+              )}
+              {rows.map((p) => {
                 const margin = p.price_kg ? ((p.price_kg - p.hpp_kg) / p.price_kg) * 100 : 0;
                 const berat = usedWeight(p);
                 const sellsEkor = (p.units || []).includes("ekor");
@@ -219,9 +253,14 @@ export default function Products() {
                     <td className="px-4 py-3 text-right tabular">{formatRupiah(p.hpp_ekor)}</td>
                     <td className="px-4 py-3 text-right tabular font-semibold">{formatRupiah(p.price_kg)}</td>
                     <td className="px-4 py-3 text-right tabular text-success">{formatPct(margin)}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
                       <Button data-testid={`edit-product-${p.id}`} variant="ghost" size="sm" onClick={() => setEdit(p)}><Pencil className="w-4 h-4" /></Button>
-                      {isOwner && <Button data-testid={`delete-product-${p.id}`} variant="ghost" size="sm" onClick={() => del(p)}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
+                      {p.active === false && (
+                        <Button data-testid={`restore-product-${p.id}`} variant="ghost" size="sm" title="Aktifkan kembali" onClick={() => restore(p)}>
+                          <RotateCcw className="w-4 h-4 text-success" />
+                        </Button>
+                      )}
+                      {isOwner && <Button data-testid={`delete-product-${p.id}`} variant="ghost" size="sm" title="Nonaktifkan / hapus" onClick={() => setRemoving(p)}><Trash2 className="w-4 h-4 text-destructive" /></Button>}
                     </td>
                   </tr>
                 );
@@ -231,7 +270,103 @@ export default function Products() {
         </div>
       </Card>
       {edit && <ProductDialog init={edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); reload(); }} />}
+      {removing && <RemoveProductDialog product={removing} onClose={() => setRemoving(null)} onDone={() => { setRemoving(null); reload(); }} />}
     </div>
+  );
+}
+
+// Dialog konfirmasi: NONAKTIFKAN (aman, bisa dikembalikan) atau HAPUS PERMANEN
+// (menghilangkan produk dari database supaya daftar pilihan tidak penuh produk
+// yang sudah tidak terpakai). Menampilkan stok tersisa & jumlah riwayat sebagai
+// peringatan sebelum owner memutuskan.
+function RemoveProductDialog({ product, onClose, onDone }) {
+  const [info, setInfo] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [agree, setAgree] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.get(`/products/${product.id}/usage`)
+      .then(({ data }) => { if (alive) setInfo(data); })
+      .catch((e) => { toast.error(apiError(e)); onClose(); });
+    return () => { alive = false; };
+  }, [product.id, onClose]);
+
+  const run = async (permanent) => {
+    setBusy(permanent ? "permanent" : "soft");
+    try {
+      await api.delete(`/products/${product.id}`, { params: permanent ? { permanent: true } : {} });
+      toast.success(permanent ? `"${product.name}" dihapus permanen` : `"${product.name}" dinonaktifkan`);
+      onDone();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(""); }
+  };
+
+  const u = info?.usage || {};
+  const totalHistory = (u.sales || 0) + (u.purchases || 0) + (u.productions || 0) + (u.movements || 0);
+  const isInactive = product.active === false;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent data-testid="remove-product-dialog" className="bg-popover max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Trash2 className="w-4 h-4 text-destructive" /> Hapus "{product.name}"?</DialogTitle>
+        </DialogHeader>
+        {!info ? (
+          <p className="text-sm text-muted-foreground py-4">Memeriksa riwayat produk...</p>
+        ) : (
+          <div className="space-y-3 text-sm">
+            {info.has_stock && (
+              <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs" data-testid="remove-stock-warning">
+                <p className="font-semibold text-warning flex items-center gap-1"><AlertTriangle className="w-3.5 h-3.5" /> Produk masih punya stok</p>
+                <p className="mt-1 tabular">
+                  {info.stock.kg ? `${formatWeight(info.stock.kg)} ` : ""}
+                  {info.stock.ekor ? `· ${formatNumber(info.stock.ekor)} ekor ` : ""}
+                  {info.stock.pcs ? `· ${formatNumber(info.stock.pcs)} pcs` : ""}
+                </p>
+                <p className="mt-1 text-muted-foreground">Jika dihapus permanen, sisa stok ini hilang dari perhitungan nilai stok.</p>
+              </div>
+            )}
+            <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
+              <p className="font-semibold mb-1">Riwayat yang merujuk produk ini</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 tabular text-muted-foreground">
+                <span>Penjualan</span><span className="text-right text-foreground">{formatNumber(u.sales || 0)}</span>
+                <span>Pembelian</span><span className="text-right text-foreground">{formatNumber(u.purchases || 0)}</span>
+                <span>Produksi potong</span><span className="text-right text-foreground">{formatNumber(u.productions || 0)}</span>
+                <span>Pergerakan stok</span><span className="text-right text-foreground">{formatNumber(u.movements || 0)}</span>
+              </div>
+              <p className="mt-2 text-muted-foreground leading-relaxed">
+                {totalHistory > 0
+                  ? "Riwayat & laporan lama tetap tersimpan (nama produk ikut tercatat di setiap transaksi). Hanya produk ini yang hilang dari daftar pilihan."
+                  : "Produk ini belum pernah dipakai di transaksi apa pun — aman dihapus."}
+              </p>
+            </div>
+
+            <div className="grid gap-2">
+              {!isInactive && (
+                <button type="button" data-testid="remove-soft" disabled={!!busy} onClick={() => run(false)}
+                  className="w-full text-left rounded-lg border border-border p-3 hover:bg-accent transition-colors disabled:opacity-50">
+                  <p className="font-semibold text-sm">Nonaktifkan saja</p>
+                  <p className="text-xs text-muted-foreground">Disembunyikan dari POS, Stok, Pembelian & Produksi. Bisa diaktifkan kembali kapan saja.</p>
+                </button>
+              )}
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+                <p className="font-semibold text-sm text-destructive">Hapus permanen</p>
+                <p className="text-xs text-muted-foreground">Produk dihapus dari database dan tidak bisa dikembalikan.</p>
+                <label className="flex items-start gap-2 mt-2 text-xs cursor-pointer select-none">
+                  <input type="checkbox" data-testid="remove-agree" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 accent-destructive" />
+                  <span>Saya mengerti produk ini akan hilang permanen{info.has_stock ? " beserta sisa stoknya" : ""}.</span>
+                </label>
+                <Button data-testid="remove-permanent" variant="destructive" size="sm" className="mt-2 w-full"
+                  disabled={!agree || !!busy} onClick={() => run(true)}>
+                  {busy === "permanent" ? "Menghapus..." : "Hapus Permanen"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        <DialogFooter><Button variant="outline" onClick={onClose} disabled={!!busy}>Batal</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

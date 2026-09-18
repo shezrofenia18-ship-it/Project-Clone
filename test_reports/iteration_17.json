@@ -1,0 +1,70 @@
+{
+  "summary": "Completed comprehensive testing of three new features: (1) SINKRONKAN KG - stock synchronization for whole chicken products with stock_sync field, preview, and sync endpoints; (2) PERINGATAN SELISIH - gap warning banner and sync UI on /stok page; (3) RIWAYAT PRODUK TERHAPUS - deleted products history on /audit page. All backend APIs (17/17) and frontend UI tests passed successfully.",
+  
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": [
+    "BACKEND: Login as owner (owner/admin123)",
+    "BACKEND: GET /api/products returns stock_sync field with all required properties (avg_weight, expected_kg, diff_kg, diff_pct, implied_avg, out_of_sync, reason)",
+    "BACKEND: Ayam Kampung has stock_sync non-null, Ati Ampela has stock_sync null (correct)",
+    "BACKEND: Created +20 kg gap via POST /api/stock-adjustments",
+    "BACKEND: Verified out_of_sync=true after gap creation (diff_kg=20, diff_pct=41.7%, reason='kg lebih besar dari perkiraan')",
+    "BACKEND: GET /api/products/{id}/sync-kg preview returns expected_kg=48.0 (40 ekor × 1.2 kg)",
+    "BACKEND: Admin gets 403 when trying POST /api/products/{id}/sync-kg (RBAC working)",
+    "BACKEND: Owner successfully POST /api/products/{id}/sync-kg (delta_kg=-20.0, stock_kg synced to 48.0)",
+    "BACKEND: Verified out_of_sync=false after sync, stock_kg equals expected_kg",
+    "BACKEND: Second sync returns changed=false, delta_kg=0 (idempotent)",
+    "BACKEND: Stock movement created with type='penyesuaian', qty_kg=-20.0, ref contains 'Sinkronisasi'",
+    "BACKEND: Audit log has action='sync_kg', entity='stock'",
+    "BACKEND: POST sync-kg on non-whole chicken (Ati Ampela) returns 400",
+    "BACKEND: POST sync-kg on non-existent product returns 404",
+    "BACKEND: Created test product 'Uji Riwayat Hapus' and deleted permanently",
+    "BACKEND: GET /api/audit-logs/deleted-products returns deleted products with correct fields (deleted_by, deleted_by_role='owner', deleted_at, price_kg=5000)",
+    "BACKEND: Admin can GET deleted products (200)",
+    "FRONTEND: Owner login successful via manual form",
+    "FRONTEND: sync-warning-banner visible on /stok page mentioning 'Ayam Kampung'",
+    "FRONTEND: sync-gap-{id} box visible on Ayam Kampung card showing 'Kg & ekor tidak sejalan' and expected kg",
+    "FRONTEND: sync-kg-{id} button visible for owner",
+    "FRONTEND: sync-kg-dialog appears after clicking sync button",
+    "FRONTEND: sync-kg-target shows '48 kg' (correct expected value)",
+    "FRONTEND: After confirming sync, banner disappeared and stock updated to 48 kg",
+    "FRONTEND: Pergerakan Stok tab shows Penyesuaian movements for Ayam Kampung",
+    "FRONTEND: Audit Log page has tab-audit-deleted showing 'Produk Dihapus (3)'",
+    "FRONTEND: Found 3 deleted product rows including 'Uji Riwayat Hapus'",
+    "FRONTEND: Semua Aktivitas tab shows 'sinkron kg' and 'hapus permanen' badges",
+    "FRONTEND: Penyesuaian Stok button still visible (regression OK)"
+  ],
+  
+  "test_report_links": [
+    "/app/backend_test_sync_features.py",
+    ".screenshots/stok_page.png",
+    ".screenshots/sync_dialog.png",
+    ".screenshots/stok_after_sync.png",
+    ".screenshots/pergerakan_stok.png",
+    ".screenshots/audit_deleted_products.png",
+    ".screenshots/audit_all_activities.png"
+  ],
+  
+  "success_percentage": {
+    "backend": "100% (17/17 tests passed)",
+    "frontend": "100% (all UI tests passed)"
+  },
+  
+  "updated_files": [
+    "/app/backend_test_sync_features.py"
+  ],
+  
+  "action_item_for_main_agent": "",
+  
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_test_itself": false
+}
