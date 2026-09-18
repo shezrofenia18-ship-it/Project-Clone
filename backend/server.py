@@ -1387,6 +1387,8 @@ async def update_production(pid: str, body: ProductionBody,
     old = await db.productions.find_one({"id": pid})
     if not old:
         raise HTTPException(404, "Data produksi tidak ditemukan")
+    if old.get("status") == "batal":
+        raise HTTPException(400, "Produksi ini sudah dibatalkan, tidak bisa diubah lagi")
     source, lines, outputs_out, cache = await _validate_production(body)
 
     # ---- selisih stok EKOR (dan KG yang mengikutinya) di produk sumber ----
@@ -1449,6 +1451,64 @@ async def update_production(pid: str, body: ProductionBody,
                      "outputs": outputs_out})
     await rt_emit(["productions", "stock", "products", "dashboard"], {"id": pid})
     return clean(doc)
+
+
+class CancelProductionBody(BaseModel):
+    reason: str = ""
+
+
+@api.post("/productions/{pid}/cancel")
+async def cancel_production(pid: str, body: CancelProductionBody,
+                            user: dict = Depends(require_roles("owner", "admin", "kasir"))):
+    """Batalkan produksi potong yang keliru / tidak jadi dipotong.
+
+    Stok DIKEMBALIKAN ke keadaan sebelum produksi: ekor + kg ayam sumber kembali
+    (sebesar yang dulu dipotong), pcs hasil potong ditarik. Data produksi TIDAK
+    dihapus: tetap tersimpan dengan status "batal" + tanggal, alasan, dan siapa
+    yang membatalkan, sehingga jejaknya tetap terbaca di riwayat & audit log.
+    """
+    reason = (body.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(400, "Isi alasan pembatalan (minimal 3 karakter)")
+    old = await db.productions.find_one({"id": pid})
+    if not old:
+        raise HTTPException(404, "Data produksi tidak ditemukan")
+    if old.get("status") == "batal":
+        raise HTTPException(400, "Produksi ini sudah dibatalkan sebelumnya")
+
+    ekor = float(old.get("input_ekor", 0) or 0)
+    source = await db.products.find_one({"id": old.get("source_product_id")})
+    restored = {"ekor": 0.0, "kg": 0.0, "pcs": {}}
+    if source and ekor:
+        # Data lama (sebelum fitur sinkron kg) tidak pernah memotong kg -> jangan
+        # mengembalikan kg yang tidak pernah dikurangi.
+        weight = old.get("input_weight_kg")
+        weight = float(weight) if weight is not None else 0.0
+        await apply_stock(source, ekor, weight, "produksi", user["name"], pid, allow_negative=True)
+        restored["ekor"], restored["kg"] = ekor, weight
+    for prod_id, pcs in _pcs_map(old.get("outputs")).items():
+        if not pcs:
+            continue
+        p = await db.products.find_one({"id": prod_id})
+        if not p:
+            continue
+        await apply_stock(p, 0, 0, "produksi", user["name"], pid, allow_negative=True, delta_pcs=-pcs)
+        restored["pcs"][p["name"]] = pcs
+
+    upd = {"status": "batal", "cancelled_at": iso_now(), "cancelled_by": user["name"],
+           "cancelled_by_id": user.get("id"), "cancel_reason": reason, "stock_restored": restored}
+    await db.productions.update_one({"id": pid}, {"$set": upd})
+    total_pcs = sum(restored["pcs"].values())
+    await add_activity("cancel", "Produksi Potong Dibatalkan",
+                       f"{old.get('source_name')} {_num(ekor)} ekor / {_num(total_pcs)} pcs dikembalikan — {reason}",
+                       0, user["name"])
+    await add_notification("cancel", "Produksi Potong Dibatalkan",
+                           f"{old.get('source_name')} {_num(ekor)} ekor oleh {user['name']}: {reason}", "warning")
+    await log_audit(user, "cancel", "production", pid,
+                    {"status": old.get("status", "selesai"), "input_ekor": ekor, "outputs": old.get("outputs")},
+                    {"status": "batal", "reason": reason, "stock_restored": restored})
+    await rt_emit(["productions", "stock", "products", "dashboard"], {"id": pid})
+    return clean(await db.productions.find_one({"id": pid}))
 
 
 # ------------------------- Sales -------------------------

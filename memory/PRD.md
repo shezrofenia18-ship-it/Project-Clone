@@ -565,3 +565,8 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
 - `POST /api/products/sync-kg-all` (owner): sinkron kg semua ayam utuh aktif yang out_of_sync; helper `_sync_kg_one` dipakai bersama endpoint tunggal. Tiap produk tetap tercatat terpisah di movements & audit.
 - Frontend: Stock.js tombol `sync-kg-all` di banner -> `SyncAllDialog` (tabel per produk: ekor, kg sekarang, kg target, perubahan, total). AuditLog.js tombol `restore-deleted-<id>` -> `RestoreDeletedDialog`; badge "dipulihkan"; alasan blokir bila tidak bisa dipulihkan.
 - Testing iterasi 18: backend 24/24 PASS, frontend 100% PASS (RBAC admin diverifikasi).
+
+## Implemented (2026-09-18 — Pembatalan Produksi Potong)
+- `POST /api/productions/{id}/cancel {reason}` (owner/admin/kasir, alasan >= 3 karakter): kembalikan stok ekor + kg sumber (sebesar `input_weight_kg`; data lama tanpa field itu -> kg 0), tarik pcs hasil. Dokumen dipertahankan dengan `status="batal"`, `cancelled_at/by/by_id`, `cancel_reason`, `stock_restored`. Cancel ganda & PUT pada produksi batal -> 400. Audit `cancel/production`, activity + notifikasi "Produksi Potong Dibatalkan".
+- Frontend Production.js: tombol `cancel-production-<id>` -> `CancelProductionDialog` (ringkasan efek stok, alasan wajib). Kartu batal disembunyikan default, `toggle-cancelled` untuk menampilkan; badge DIBATALKAN, teks dicoret, kotak `cancel-log-<id>` (tanggal+jam, pembatal, alasan, stok dikembalikan); tanpa tombol Edit/Batalkan. AuditLog label 'batalkan'.
+- Testing iterasi 19: backend 11/11 PASS, frontend 100% PASS.

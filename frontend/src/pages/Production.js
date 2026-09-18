@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { formatRupiah, formatNumber, formatDate } from "@/lib/format";
-import { Plus, Pencil } from "lucide-react";
+import { formatRupiah, formatNumber, formatDate, formatTime } from "@/lib/format";
+import { Plus, Pencil, XCircle } from "lucide-react";
 
 export default function Production() {
   const { data, reload } = useFetch("/productions");
@@ -27,47 +28,151 @@ export default function Production() {
   const outs = (products || []).filter((p) => ["fillet", "potongan", "sampingan"].includes(p.category) && visible(p));
 
   const afterSave = () => { setOpen(false); setEdit(null); reload(); reloadProducts(); };
+  // Produksi yang sedang dikonfirmasi untuk dibatalkan.
+  const [cancelling, setCancelling] = useState(null);
+  // Filter: sembunyikan yang dibatalkan secara default supaya daftar tetap rapi,
+  // tapi log pembatalan tetap bisa dilihat kapan saja.
+  const [showCancelled, setShowCancelled] = useState(false);
+  const all = data || [];
+  const cancelledCount = all.filter((p) => p.status === "batal").length;
+  const rows = showCancelled ? all : all.filter((p) => p.status !== "batal");
 
   return (
     <div className="bam-fade">
       <PageHeader title="Produksi Potong" subtitle="Potong ayam (ekor) menjadi produk per pcs"
         actions={<Button data-testid="add-production" onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-1" /> Produksi Baru</Button>} />
+      {cancelledCount > 0 && (
+        <div className="flex items-center justify-end mb-3">
+          <button type="button" data-testid="toggle-cancelled" onClick={() => setShowCancelled((v) => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">
+            {showCancelled ? "Sembunyikan yang dibatalkan" : `Tampilkan ${cancelledCount} produksi dibatalkan`}
+          </button>
+        </div>
+      )}
       <div className="grid gap-3">
-        {(data || []).map((p) => (
-          <Card key={p.id} data-testid={`production-${p.id}`} className="p-4">
+        {rows.map((p) => {
+          const isCancelled = p.status === "batal";
+          return (
+          <Card key={p.id} data-testid={`production-${p.id}`} className={`p-4 ${isCancelled ? "border-destructive/40 bg-destructive/[0.03]" : ""}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="font-semibold">
+                <p className={`font-semibold ${isCancelled ? "line-through text-muted-foreground" : ""}`}>
                   {p.source_name} · Input {formatNumber(p.input_ekor)} ekor
                   {Number(p.input_weight_kg) > 0 && (
                     <span className="text-muted-foreground font-normal tabular" data-testid={`production-kg-${p.id}`}>
                       {" "}· ≈ {formatNumber(p.input_weight_kg, 2)} kg
                     </span>
                   )}
+                  {isCancelled && <Badge data-testid={`cancelled-badge-${p.id}`} className="ml-2 no-underline bg-destructive text-destructive-foreground text-[10px] align-middle">DIBATALKAN</Badge>}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {formatDate(p.date)} · Operator {p.operator}
-                  {p.updated_at && <span className="text-warning"> · sudah dikoreksi</span>}
+                  {p.updated_at && !isCancelled && <span className="text-warning"> · sudah dikoreksi</span>}
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <div className="text-right"><p className="text-xs text-muted-foreground">Nilai Ayam</p><p className="font-bold tabular">{formatRupiah(p.material_value ?? p.total_cost)}</p></div>
-                <Button variant="outline" size="sm" data-testid={`edit-production-${p.id}`}
-                  onClick={() => setEdit(p)}>
-                  <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
-                </Button>
+                <div className="text-right"><p className="text-xs text-muted-foreground">Nilai Ayam</p><p className={`font-bold tabular ${isCancelled ? "line-through text-muted-foreground" : ""}`}>{formatRupiah(p.material_value ?? p.total_cost)}</p></div>
+                {!isCancelled && (
+                  <>
+                    <Button variant="outline" size="sm" data-testid={`edit-production-${p.id}`}
+                      onClick={() => setEdit(p)}>
+                      <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                    </Button>
+                    <Button variant="outline" size="sm" data-testid={`cancel-production-${p.id}`}
+                      className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      onClick={() => setCancelling(p)}>
+                      <XCircle className="w-3.5 h-3.5 mr-1" /> Batalkan
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap gap-2 mt-3">
-              {(p.outputs || []).map((o, i) => <span key={`${o.product_id}-${i}`} className="text-xs px-2.5 py-1 rounded-full bg-accent tabular">{o.name}: {formatNumber(o.pcs)} pcs</span>)}
+              {(p.outputs || []).map((o, i) => <span key={`${o.product_id}-${i}`} className={`text-xs px-2.5 py-1 rounded-full tabular ${isCancelled ? "bg-muted text-muted-foreground line-through" : "bg-accent"}`}>{o.name}: {formatNumber(o.pcs)} pcs</span>)}
             </div>
+            {isCancelled && (
+              <div data-testid={`cancel-log-${p.id}`} className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-2.5 text-[11px] leading-relaxed">
+                <p className="font-semibold text-destructive flex items-center gap-1"><XCircle className="w-3.5 h-3.5" /> Log pembatalan</p>
+                <p className="mt-0.5">
+                  <b>{formatDate(p.cancelled_at)} {formatTime(p.cancelled_at)}</b> oleh <b>{p.cancelled_by}</b>
+                  {p.cancel_reason && <> — alasan: <i>"{p.cancel_reason}"</i></>}
+                </p>
+                {p.stock_restored && (
+                  <p className="text-muted-foreground tabular mt-0.5">
+                    Stok dikembalikan: {formatNumber(p.stock_restored.ekor)} ekor
+                    {Number(p.stock_restored.kg) > 0 && <> · {formatNumber(p.stock_restored.kg, 2)} kg</>} {p.source_name}
+                    {Object.keys(p.stock_restored.pcs || {}).length > 0 && (
+                      <> · ditarik: {Object.entries(p.stock_restored.pcs).map(([n, v]) => `${n} ${formatNumber(v)} pcs`).join(", ")}</>
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
           </Card>
-        ))}
-        {(data || []).length === 0 && <Card className="p-8 text-center text-muted-foreground">Belum ada produksi.</Card>}
+          );
+        })}
+        {rows.length === 0 && (
+          <Card className="p-8 text-center text-muted-foreground">
+            {all.length === 0 ? "Belum ada produksi." : "Semua produksi dibatalkan. Klik \"Tampilkan\" di atas untuk melihat lognya."}
+          </Card>
+        )}
       </div>
       {open && <ProductionDialog source={source} outs={outs} onClose={() => setOpen(false)} onSaved={afterSave} />}
       {edit && <ProductionDialog initial={edit} source={source} outs={outs} onClose={() => setEdit(null)} onSaved={afterSave} />}
+      {cancelling && <CancelProductionDialog production={cancelling} onClose={() => setCancelling(null)} onDone={() => { setCancelling(null); reload(); reloadProducts(); }} />}
     </div>
+  );
+}
+
+// Konfirmasi pembatalan: wajib alasan. Server mengembalikan stok ekor + kg ayam
+// sumber dan menarik pcs hasil, lalu menyimpan log (tanggal, alasan, siapa).
+function CancelProductionDialog({ production: p, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const totalPcs = (p.outputs || []).reduce((s, o) => s + Number(o.pcs || 0), 0);
+  const run = async () => {
+    if (reason.trim().length < 3) return toast.error("Isi alasan pembatalan (minimal 3 karakter)");
+    setBusy(true);
+    try {
+      await api.post(`/productions/${p.id}/cancel`, { reason: reason.trim() });
+      toast.success("Produksi dibatalkan, stok dikembalikan");
+      onDone();
+    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent data-testid="cancel-production-dialog" className="bg-popover max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-destructive"><XCircle className="w-4 h-4" /> Batalkan produksi ini?</DialogTitle>
+          <DialogDescription className="text-xs">
+            Untuk produksi yang salah input atau tidak jadi dipotong. Data tetap tersimpan sebagai log pembatalan.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs space-y-1 tabular">
+            <p className="font-semibold text-sm">{p.source_name} · {formatNumber(p.input_ekor)} ekor{Number(p.input_weight_kg) > 0 ? ` · ≈ ${formatNumber(p.input_weight_kg, 2)} kg` : ""}</p>
+            <p className="text-muted-foreground">{formatDate(p.date)} · Operator {p.operator}</p>
+            <p className="pt-1">Hasil: {(p.outputs || []).map((o) => `${o.name} ${formatNumber(o.pcs)} pcs`).join(", ") || "-"}</p>
+          </div>
+          <div className="rounded-lg border border-success/40 bg-success/10 p-2.5 text-[11px] leading-relaxed">
+            <p className="font-semibold text-success">Yang akan terjadi pada stok</p>
+            <p>Stok <b>{p.source_name}</b> kembali <b>+{formatNumber(p.input_ekor)} ekor</b>{Number(p.input_weight_kg) > 0 && <> dan <b>+{formatNumber(p.input_weight_kg, 2)} kg</b></>}.
+              Stok hasil potong ditarik <b>−{formatNumber(totalPcs)} pcs</b>.</p>
+          </div>
+          <div>
+            <Label className="text-xs">Alasan pembatalan <span className="text-destructive">*</span></Label>
+            <Input data-testid="cancel-reason" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus
+              placeholder="mis. salah input jumlah / tidak jadi dipotong" className="mt-1" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Kembali</Button>
+          <Button data-testid="cancel-confirm" variant="destructive" onClick={run} disabled={busy || reason.trim().length < 3}>
+            {busy ? "Membatalkan..." : "Ya, Batalkan Produksi"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

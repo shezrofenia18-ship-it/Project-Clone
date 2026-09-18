@@ -20,7 +20,7 @@ const ACTION_TONE = {
 };
 const ACTION_LABELS = {
   delete: "nonaktifkan", delete_permanent: "hapus permanen", restore: "aktifkan kembali",
-  restore_deleted: "pulihkan produk", sync_kg: "sinkron kg",
+  restore_deleted: "pulihkan produk", sync_kg: "sinkron kg", cancel: "batalkan",
 };
 
 export default function AuditLog() {
