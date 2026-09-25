@@ -95,7 +95,7 @@ export default function Reports() {
   useEffect(() => { loadMonthly(); }, [loadMonthly]);
 
   // Laporan ikut segar begitu ada penjualan/pembelian/pengeluaran baru.
-  useRealtimeReload(["sales", "expenses", "incomes", "purchases", "stock", "dashboard"],
+  useRealtimeReload(["sales", "expenses", "incomes", "purchases", "stock", "dashboard", "payables", "receivables"],
     useCallback(() => { load(); loadMonthly(); }, [load, loadMonthly]));
 
   return (
@@ -174,6 +174,11 @@ export default function Reports() {
                       <p className="text-[11px] text-muted-foreground mt-2">
                         Modal ayam bulan ini {formatRupiah(monthly.modal_value)} · piutang baru {formatRupiah(monthly.piutang_baru)}.
                       </p>
+                      <div className="mt-3 pt-3 border-t border-dashed border-border" data-testid="monthly-debt-paid">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Hutang & Piutang Sudah Terbayar</p>
+                        <Row label="Piutang terbayar (uang masuk)" value={formatRupiah(monthly.bayar_piutang_masuk)} tone="text-success" />
+                        <Row label="Hutang terbayar (uang keluar)" value={formatRupiah(monthly.bayar_hutang_keluar)} tone="text-destructive" />
+                      </div>
                     </div>
                   </div>
                 </Card>
@@ -277,6 +282,11 @@ export default function Reports() {
                       Modal ayam periode ini {formatRupiah(pl.modal_value)} · dibayar tunai {formatRupiah(pl.modal_cash)}.
                       Biaya ayam sudah termasuk di HPP, jadi tidak dikurangi lagi dari laba.
                     </p>
+                    <div className="mt-3 pt-3 border-t border-dashed border-border" data-testid="pl-debt-paid">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Hutang & Piutang Sudah Terbayar</p>
+                      <Row label="Piutang terbayar (uang masuk)" value={formatRupiah(pl.bayar_piutang_masuk)} tone="text-success" />
+                      <Row label="Hutang terbayar (uang keluar)" value={formatRupiah(pl.bayar_hutang_keluar)} tone="text-destructive" />
+                    </div>
                   </div>
                 </div>
               </Card>

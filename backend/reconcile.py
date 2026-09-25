@@ -156,6 +156,29 @@ async def _check_orphan_debt_payment(a: _Audit):
             await a.db.expenses.delete_one({"id": e["id"]})
 
 
+# ------------------------- 3b. tagihan hutang -> pembelian -------------------------
+async def _check_purchase_payment_sync(a: _Audit):
+    """Dibayar/sisa/status pembelian harus sama dengan tagihan hutangnya."""
+    for pay in a.payables:
+        pid = pay.get("purchase_id")
+        if not pid or pay.get("status") == "batal":
+            continue
+        pur = next((p for p in a.purchases if p.get("id") == pid), None)
+        if pur is None:
+            continue
+        remaining = max(num(pay.get("remaining")), 0)
+        status = "lunas" if remaining <= 0 else "kredit"
+        if (_eq(pur.get("paid"), pay.get("paid")) and _eq(pur.get("payable"), remaining)
+                and pur.get("payment_status") == status):
+            continue
+        a.note("pembelian_belum_sinkron_hutang", "Status bayar pembelian tidak cocok dengan hutang",
+               f"{pur.get('date')} \u00b7 {pur.get('supplier_name', '-')}", num(pay.get("paid")))
+        if a.counted():
+            await a.db.purchases.update_one({"id": pid}, {"$set": {
+                "paid": round(num(pay.get("paid")), 2), "payable": round(remaining, 2),
+                "payment_status": status}})
+
+
 # ------------------------- 4. tagihan piutang vs penjualan -------------------------
 async def _void_receivable_of_cancelled_sale(a: _Audit, r: dict):
     if r.get("status") == "batal" or num(r.get("remaining")) <= 0:
@@ -333,6 +356,7 @@ CHECKS = (
     _check_purchase_expense,
     _check_debt_cash_flag,
     _check_orphan_debt_payment,
+    _check_purchase_payment_sync,
     _check_receivable_vs_sale,
     _check_sale_without_receivable,
     _check_incomes,

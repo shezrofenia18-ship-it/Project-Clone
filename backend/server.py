@@ -1943,6 +1943,14 @@ async def pay_payable(pid: str, body: PayBody, user: dict = Depends(require_role
         "$inc": {"paid": amount},
         "$push": {"payments": entry}})
     await db.suppliers.update_one({"id": p["supplier_id"]}, {"$inc": {"payable": -amount}})
+    # Pembelian aslinya ikut diperbarui supaya halaman Pembelian & laporan tidak
+    # lagi menampilkan status "kredit" untuk hutang yang sebetulnya sudah dibayar.
+    if p.get("purchase_id"):
+        await db.purchases.update_one({"id": p["purchase_id"]}, {
+            "$inc": {"paid": amount},
+            "$set": {"payable": max(0, remaining),
+                     "payment_status": "lunas" if remaining <= 0 else "kredit",
+                     "last_payment_at": iso_now()}})
     await db.expenses.insert_one({"id": new_id(), "date": today_str(), "category": "Pembayaran Hutang",
                                   "amount": amount, "cash_amount": amount, "method": method,
                                   "description": f"Bayar ke {p['supplier_name']} via {PAY_LABELS[method]}",
@@ -2338,6 +2346,7 @@ async def report_pl(start: Optional[str] = None, end: Optional[str] = None,
             "expense_total": fin["expense_total"],
             "modal_value": fin["modal_value"], "modal_cash": fin["modal_cash"],
             "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
+            "bayar_piutang_masuk": fin["bayar_piutang_masuk"], "bayar_hutang_keluar": fin["bayar_hutang_keluar"],
             "txn_count": fin["txn_count"], "weight": fin["weight"], "ekor": fin["ekor"],
             "expenses_by_category": fin["expenses_by_category"]}
 
@@ -2481,6 +2490,7 @@ async def report_monthly(month: Optional[str] = None,
         "cash_in": fin["cash_in"], "cash_out": fin["cash_out"], "net_cash": fin["net_cash"],
         "txn_count": fin["txn_count"], "weight": fin["weight"], "ekor": fin["ekor"],
         "piutang_baru": fin["piutang_baru"],
+        "bayar_piutang_masuk": fin["bayar_piutang_masuk"], "bayar_hutang_keluar": fin["bayar_hutang_keluar"],
         "active_days": active_days,
         "avg_omzet_per_day": round(fin["omzet"] / active_days, 2) if active_days else 0,
         "daily": daily, "products": products[:30],

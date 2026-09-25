@@ -76,7 +76,8 @@ export default function Purchases() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50"><tr className="text-left text-xs text-muted-foreground">
             <th className="px-4 py-3">Tanggal</th><th className="px-4 py-3">Supplier</th><th className="px-4 py-3 text-right">Berat</th>
-            <th className="px-4 py-3 text-right">Modal Efektif/kg</th><th className="px-4 py-3 text-right">Total Modal</th><th className="px-4 py-3">Status</th>
+            <th className="px-4 py-3 text-right">Modal Efektif/kg</th><th className="px-4 py-3 text-right">Total Modal</th>
+            <th className="px-4 py-3 text-right">Dibayar</th><th className="px-4 py-3 text-right">Sisa Hutang</th><th className="px-4 py-3">Status</th>
             {canEdit && <th className="px-4 py-3 text-right">Aksi</th>}
           </tr></thead>
           <tbody>
@@ -94,7 +95,9 @@ export default function Purchases() {
                 <td className="px-4 py-3 text-right tabular">{formatWeight(p.total_weight)}</td>
                 <td className="px-4 py-3 text-right tabular">{formatRupiah(p.effective_cost_kg)}</td>
                 <td className="px-4 py-3 text-right tabular font-semibold">{formatRupiah(p.total_modal)}</td>
-                <td className="px-4 py-3"><Badge className={p.payment_status === "lunas" ? "bg-success text-white" : "bg-warning text-warning-foreground"}>{p.payment_status}</Badge></td>
+                <td className="px-4 py-3 text-right tabular text-success" data-testid={`purchase-paid-${p.id}`}>{formatRupiah(p.paid)}</td>
+                <td className={`px-4 py-3 text-right tabular font-semibold ${p.payable > 0 ? "text-warning" : "text-muted-foreground"}`} data-testid={`purchase-payable-${p.id}`}>{formatRupiah(p.payable)}</td>
+                <td className="px-4 py-3"><Badge data-testid={`purchase-status-${p.id}`} className={p.payment_status === "lunas" ? "bg-success text-white" : "bg-warning text-warning-foreground"}>{p.payment_status}</Badge></td>
                 {canEdit && (
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
@@ -111,7 +114,7 @@ export default function Purchases() {
                 )}
               </tr>
             ))}
-            {(data || []).length === 0 && <tr><td colSpan={canEdit ? 7 : 6} className="px-4 py-8 text-center text-muted-foreground">Belum ada pembelian.</td></tr>}
+            {(data || []).length === 0 && <tr><td colSpan={canEdit ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">Belum ada pembelian.</td></tr>}
           </tbody>
         </table>
       </Card>

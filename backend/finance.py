@@ -61,6 +61,7 @@ def expense_split(expenses: Iterable[dict]) -> Dict:
     opex = 0.0
     modal_value = 0.0
     modal_cash = 0.0
+    bayar_hutang = 0.0
     by_cat: Dict[str, float] = {}
     for e in expenses:
         amt = num(e.get("amount"))
@@ -70,12 +71,15 @@ def expense_split(expenses: Iterable[dict]) -> Dict:
             modal_value += amt
             cash = e.get("cash_amount")
             modal_cash += num(cash) if cash is not None else amt
+            if cat == "Pembayaran Hutang":
+                bayar_hutang += amt
         else:
             opex += amt
     return {
         "opex": round(opex, 2),
         "modal_value": round(modal_value, 2),
         "modal_cash": round(modal_cash, 2),
+        "bayar_hutang_keluar": round(bayar_hutang, 2),
         "expense_total": round(opex + modal_value, 2),
         "cash_out": round(opex + modal_cash, 2),
         "expenses_by_category": [{"category": k, "amount": round(v, 2)}

@@ -240,6 +240,21 @@ def profit_loss_pdf(data, store, start=None, end=None, printed_by=""):
     else:
         story.append(Paragraph("Tidak ada beban tercatat pada periode ini.", S_SMALL))
 
+    story.append(Paragraph("Arus Kas & Pembayaran Hutang-Piutang", S_SEC))
+    krows = [["Uraian", "Nilai"],
+             ["Uang Masuk", rp(data.get("cash_in"))],
+             ["Uang Keluar (termasuk beli ayam)", "(" + rp(data.get("cash_out")) + ")"],
+             ["UANG BERSIH (KAS)", rp(data.get("net_cash"))],
+             ["Piutang sudah terbayar (masuk)", rp(data.get("bayar_piutang_masuk"))],
+             ["Hutang sudah terbayar (keluar)", rp(data.get("bayar_hutang_keluar"))]]
+    kt = Table(krows, colWidths=[W * 0.7, W * 0.3])
+    kst = _table_style(2)
+    kst.add("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold")
+    kst.add("BACKGROUND", (0, 3), (-1, 3), colors.HexColor("#EEF3EF"))
+    kst.add("LINEABOVE", (0, 3), (-1, 3), 0.9, INK)
+    kt.setStyle(kst)
+    story.append(kt)
+
     story.append(Paragraph(
         "Catatan: Laba Kotor = Omzet − HPP. Beban Operasional tidak memasukkan "
         "\"Pembelian Ayam\" dan \"Pembayaran Hutang\" karena keduanya sudah diperhitungkan "
@@ -514,7 +529,9 @@ def _m_expenses(data, W):
              ["Uang Keluar (termasuk beli ayam)", "(" + rp(data.get("cash_out")) + ")"],
              ["UANG BERSIH (KAS)", rp(data.get("net_cash"))],
              ["Modal ayam bulan ini", rp(data.get("modal_value"))],
-             ["Piutang baru bulan ini", rp(data.get("piutang_baru"))]]
+             ["Piutang baru bulan ini", rp(data.get("piutang_baru"))],
+             ["Piutang sudah terbayar (masuk)", rp(data.get("bayar_piutang_masuk"))],
+             ["Hutang sudah terbayar (keluar)", rp(data.get("bayar_hutang_keluar"))]]
     kt = Table(krows, colWidths=[half * 0.62, half * 0.38])
     kst = _table_style(2)
     kst.add("FONTNAME", (0, 3), (-1, 3), "Helvetica-Bold")
