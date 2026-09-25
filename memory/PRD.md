@@ -570,3 +570,10 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
 - `POST /api/productions/{id}/cancel {reason}` (owner/admin/kasir, alasan >= 3 karakter): kembalikan stok ekor + kg sumber (sebesar `input_weight_kg`; data lama tanpa field itu -> kg 0), tarik pcs hasil. Dokumen dipertahankan dengan `status="batal"`, `cancelled_at/by/by_id`, `cancel_reason`, `stock_restored`. Cancel ganda & PUT pada produksi batal -> 400. Audit `cancel/production`, activity + notifikasi "Produksi Potong Dibatalkan".
 - Frontend Production.js: tombol `cancel-production-<id>` -> `CancelProductionDialog` (ringkasan efek stok, alasan wajib). Kartu batal disembunyikan default, `toggle-cancelled` untuk menampilkan; badge DIBATALKAN, teks dicoret, kotak `cancel-log-<id>` (tanggal+jam, pembatal, alasan, stok dikembalikan); tanpa tombol Edit/Batalkan. AuditLog label 'batalkan'.
 - Testing iterasi 19: backend 11/11 PASS, frontend 100% PASS.
+
+## Implemented (2026-06 — Migrasi ke Emergent / Clone Repo)
+- Repo `shezrofenia18-ship-it/Project-Clone` (main, f22cb37) di-clone penuh ke `/app` dengan riwayat git dipertahankan. Dependensi pip (`requirements.txt` + freeze) dan yarn dipasang ulang.
+- `backend/.env` dibuat ulang: MONGO_URL/DB_NAME Emergent, JWT_SECRET acak baru, ADMIN_USERNAME=owner, ADMIN_PASSWORD=berkahayam1, CORS_ORIGINS=*, PUBLIC_BASE_URL preview; R2_* dan META_*/WA_* kosong (upload foto ditolak, WhatsApp mode manual). `frontend/.env` bawaan Emergent dipakai.
+- DB kosong → auto-seed data demo aktif. Kredensial di `memory/test_credentials.md`.
+- Testing iterasi 20: backend 24/24 PASS (auth 4 role, GET utama, POS tunai, PDF laba-rugi, RBAC kasir, upload ditolak 4xx), frontend semua halaman + ONLINE/LIVE badge PASS.
+- Backlog: Fase 2 sambungkan MongoDB Atlas / restore `berkah-ayam-mili-backup.gz` (+ set `DISABLE_SEED=true`); Fase 3 isi kredensial Cloudflare R2 & Meta WhatsApp Cloud API.
