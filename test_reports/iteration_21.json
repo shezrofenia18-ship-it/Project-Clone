@@ -1,0 +1,25 @@
+{
+  "summary": "Verified the hutang/piutang sync bug fix end-to-end. Backend: 7/7 pytest passed in /app/backend/tests/test_hutang_piutang_sync.py — POST /api/purchases with paid=40000 creates purchase (paid=40000, payable=60000, kredit) and a linked payable; POST /api/payables/{id}/pay 25000 → GET /api/purchases now shows paid=65000, payable=35000, still kredit; second pay 35000 → paid=100000, payable=0, payment_status='lunas'; supplier.payable decreased by 60000; 'Pembayaran Hutang' expense rows created (Keuangan sync intact); /api/reports/profit-loss and /api/reports/monthly return new fields bayar_piutang_masuk and bayar_hutang_keluar; bayar_hutang_keluar increased by ≥60000 after payments; both PDF endpoints return application/pdf with %PDF header; receivable regression (piutang sale → POST /api/receivables/{id}/pay 50000) still marks sale lunas and bumps bayar_piutang_masuk; POST /api/maintenance/reconcile responds 200. Frontend (owner): Pembelian page shows 'Dibayar' and 'Sisa Hutang' columns with data-testid purchase-paid-{id}, purchase-payable-{id}, purchase-status-{id}; all test purchases from backend flow display status 'lunas' after Keuangan payment (realtime sync works). Laporan → Laba Rugi tab has [data-testid='pl-debt-paid'] section 'HUTANG & PIUTANG SUDAH TERBAYAR' showing 'Piutang terbayar (uang masuk) Rp 50.000' and 'Hutang terbayar (uang keluar) Rp 120.000'. Laporan → Bulanan (Arsip) tab has [data-testid='monthly-debt-paid'] with same non-zero values. Keuangan → tab-hutang loads and shows all now-paid supplier debts as 'Lunas'. Bug is fully fixed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_hutang_piutang_sync.py",
+    "/app/test_reports/pytest/hutang_piutang.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "pay_payable (server.py L1921) correctly updates db.purchases atomically when p.purchase_id present — good. Only concern: no transactional guard between payables update and purchases update; a crash between the two calls could still leave the docs desynced. Existing reconcile._check_purchase_payment_sync running at startup mitigates this. Acceptable for MVP.",
+    "server.py still exceeds 3600 lines; consider extracting purchases/payables/receivables/reports into routers (recurring finding from iteration_20)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_hutang_piutang_sync.py",
+    "/app/test_reports/iteration_21.json"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (all 6 UI checks: Pembelian columns, lunas rows, pl-debt-paid, monthly-debt-paid, tab-hutang, values match backend)"},
+  "test_credentials": "owner/berkahayam1 used.",
+  "seed_data_creation": "Created supplier 'TEST_Supplier_Sync' plus 2 purchases (Rp 100.000 kredit paid off, Rp 30.000 lunas) and 1 piutang sale to existing customer paid off — total Rp 50.000 piutang + Rp 120.000 hutang cleared. Values are reflected in current-month reports.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "The hutang/piutang sync fix is verified. Regression suite lives at /app/backend/tests/test_hutang_piutang_sync.py. Run with `pytest backend/tests/test_hutang_piutang_sync.py -v -o addopts=''` (pytest.ini enables xdist which currently misconfigures via config-only workers so pass addopts='' if needed). Frontend selectors used: [data-testid='pl-debt-paid'], [data-testid='monthly-debt-paid'], [data-testid='tab-hutang'], [data-testid='tab-monthly'], [data-testid^='purchase-paid-'], [data-testid^='purchase-payable-'], [data-testid^='purchase-status-']. All confirmed present.",
+  "rca of the issue": "Original bug: POST /api/payables/{id}/pay only updated db.payables + db.suppliers + inserted expense; it never wrote back to the parent db.purchases doc. Fix at server.py:1948-1953 now also does db.purchases.update_one($inc paid, $set payable/payment_status/last_payment_at) when payable has purchase_id. Also, reconcile._check_purchase_payment_sync runs on startup to heal pre-existing rows, and reports/PDFs now include bayar_piutang_masuk / bayar_hutang_keluar."
+}
