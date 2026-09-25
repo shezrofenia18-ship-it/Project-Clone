@@ -577,3 +577,9 @@ kinggacau & kingolive (staf NYATA milik owner, sandi ditentukan owner — JANGAN
 - DB kosong → auto-seed data demo aktif. Kredensial di `memory/test_credentials.md`.
 - Testing iterasi 20: backend 24/24 PASS (auth 4 role, GET utama, POS tunai, PDF laba-rugi, RBAC kasir, upload ditolak 4xx), frontend semua halaman + ONLINE/LIVE badge PASS.
 - Backlog: Fase 2 sambungkan MongoDB Atlas / restore `berkah-ayam-mili-backup.gz` (+ set `DISABLE_SEED=true`); Fase 3 isi kredensial Cloudflare R2 & Meta WhatsApp Cloud API.
+
+## Implemented (2026-06 — Sinkron Pembayaran Hutang ke Pembelian & Total Terbayar di Laporan)
+- Bug: bayar hutang di Keuangan tidak mengubah status/dibayar pembelian; laporan tidak punya total hutang/piutang terbayar.
+- Fix: `pay_payable` memperbarui `purchases` (paid, payable, payment_status); `reconcile._check_purchase_payment_sync` merapikan data lama saat startup; `finance.expense_split` → `bayar_hutang_keluar`; `/reports/profit-loss` & `/reports/monthly` (+PDF) memuat `bayar_piutang_masuk` & `bayar_hutang_keluar`.
+- Frontend: Pembelian kolom Dibayar & Sisa Hutang (`purchase-paid-*`, `purchase-payable-*`, `purchase-status-*`); Laporan bagian "Hutang & Piutang Sudah Terbayar" (`pl-debt-paid`, `monthly-debt-paid`).
+- Testing iterasi 21: backend 7/7 PASS, frontend PASS. Commit lokal `98e1af5`; push ke GitHub harus lewat tombol Save → Save to GitHub (pod tidak punya kredensial GitHub).
